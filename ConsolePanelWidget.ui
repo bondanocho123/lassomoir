@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>ConsolePanelWidget</class>
+ <widget class="QWidget" name="ConsolePanelWidget">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>400</width>
+    <height>300</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Form</string>
+  </property>
+  <property name="styleSheet">
+   <string notr="true">#ConsolePanelWidget {
+    background-color: #ffffff;
+    border-left: 1px solid #d3d8d5;
+}
+
+#labelConsoleHeader {
+    font-size: 11px;
+    font-weight: bold;
+    color: #374151;
+    letter-spacing: 0.8px;
+}
+
+#textBrowserLog {
+    background-color: #fafbfb;
+    border: 1px solid #e5e7eb;
+    border-radius: 4px;
+    font-family: &quot;Cascadia Code&quot;, &quot;Consolas&quot;, &quot;Courier New&quot;, monospace;
+    font-size: 11px;
+    color: #1f2937;
+    line-height: 1.4;
+}
+
+#lineEditPrompt {
+    background-color: #ffffff;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-size: 11px;
+    color: #111827;
+}
+
+#lineEditPrompt:focus {
+    border: 1px solid #059669;
+}</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QWidget" name="headerLayout" native="true">
+     <layout class="QHBoxLayout" name="horizontalLayout">
+      <property name="spacing">
+       <number>8</number>
+      </property>
+      <item>
+       <widget class="QLabel" name="label">
+        <property name="text">
+         <string>[LIEUTENANT]</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <spacer name="horizontalSpacer">
+        <property name="orientation">
+         <enum>Qt::Orientation::Horizontal</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>40</width>
+          <height>20</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+      <item>
+       <widget class="QLabel" name="label_2">
+        <property name="text">
+         <string>[Live]</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QPlainTextEdit" name="textBrowserLog"/>
+   </item>
+   <item>
+    <widget class="QLineEdit" name="lineEditPrompt"/>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>
