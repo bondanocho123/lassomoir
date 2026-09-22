@@ -23,7 +23,7 @@ QScrollArea {
 KanbanCardWidget {
     background-color: #ffffff;
     border: 1px solid #e7ddcd;
-    border-radius: 6px;
+    border-radius: 10px;
 }
 
 KanbanCardWidget:hover {
@@ -177,7 +177,6 @@ QListWidget#projectList {
 QListWidget#projectList::item {
     padding: 0px;
     border-radius: 5px;
-    margin-bottom: 2px;
 }
 
 QListWidget#projectList::item:hover {
@@ -203,36 +202,15 @@ QLabel#projectRowLabel {
 
 QPushButton#btnProjectNewTask {
     background-color: transparent;
-    color: #a9743f;
-    border: 1px solid #a9743f;
-    border-radius: 9px;
+    border: none;
     padding: 0;
-    font-size: 12px;
-    font-weight: bold;
-}
-
-QPushButton#btnProjectNewTask:hover {
-    background-color: #a9743f;
-    color: #ffffff;
-}
-
-QPushButton#btnProjectNewTask:pressed {
-    background-color: #8f5f31;
-    border-color: #8f5f31;
-    color: #ffffff;
 }
 
 /* Tombol hamburger pengendali sidebar di top bar */
 QPushButton#btnToggleSidebar {
     background: transparent;
     border: none;
-    color: #3d3730;
-    font-size: 16px;
     padding: 2px 4px;
-}
-
-QPushButton#btnToggleSidebar:hover {
-    color: #a9743f;
 }
 
 /* Pesan saat belum ada project yang dipilih */

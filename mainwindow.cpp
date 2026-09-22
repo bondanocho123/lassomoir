@@ -12,11 +12,13 @@
 #include <QAbstractAnimation>
 #include <QEasingCurve>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QLabel>
 #include <QListWidget>
 #include <QListWidgetItem>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QSize>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QTimer>
@@ -32,6 +34,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     // Simpan lebar minimum asli sidebar (dari .ui) sebelum animasi bisa mengubahnya
     m_sidebarMinWidth = ui->sidebarPanel->minimumWidth();
+    m_sidebarMaxWidth = ui->sidebarPanel->maximumWidth();
 
     // Logo menggantikan teks aplikasi di header
     QPixmap logo(":/logo.png");
@@ -49,6 +52,10 @@ MainWindow::MainWindow(QWidget *parent)
     // Sambungkan input teks dari panel konsol kanan
     connect(ui->consolePanel, &ConsolePanelWidget::commandSubmitted,
             this, &MainWindow::handleCommandSubmitted);
+
+    // Jarak antar baris project di sidebar (spacing murni, bukan margin item,
+    // supaya kotak hover/selected tetap pas dengan tinggi widget-nya)
+    ui->projectList->setSpacing(4);
 
     // Pemilihan project di sidebar menentukan apa yang tampil di board
     connect(ui->projectList, &QListWidget::currentItemChanged,
@@ -161,8 +168,10 @@ QWidget *MainWindow::createProjectRowWidget(const QString &projectId) {
     auto *label = new QLabel(projectId, row);
     label->setObjectName("projectRowLabel");
 
-    auto *btnNewTask = new QPushButton("+", row);
+    auto *btnNewTask = new QPushButton(row);
     btnNewTask->setObjectName("btnProjectNewTask");
+    btnNewTask->setIcon(QIcon(":/icons/plus.svg"));
+    btnNewTask->setIconSize(QSize(12, 12));
     btnNewTask->setFixedSize(18, 18);
     btnNewTask->setCursor(Qt::PointingHandCursor);
     btnNewTask->setToolTip("New Task untuk " + projectId);
@@ -181,6 +190,26 @@ QWidget *MainWindow::createProjectRowWidget(const QString &projectId) {
     return row;
 }
 
+void MainWindow::refreshProjectRowStyles() {
+    QListWidgetItem *current = ui->projectList->currentItem();
+
+    for (int row = 0; row < ui->projectList->count(); ++row) {
+        QListWidgetItem *item = ui->projectList->item(row);
+        QWidget *rowWidget = ui->projectList->itemWidget(item);
+        if (!rowWidget) {
+            continue;
+        }
+
+        const bool selected = (item == current);
+        if (auto *label = rowWidget->findChild<QLabel*>("projectRowLabel")) {
+            label->setStyleSheet(selected ? "color: #ffffff;" : "");
+        }
+        if (auto *btn = rowWidget->findChild<QPushButton*>("btnProjectNewTask")) {
+            btn->setIcon(QIcon(selected ? ":/icons/plus-white.svg" : ":/icons/plus.svg"));
+        }
+    }
+}
+
 int MainWindow::findProjectRow(const QString &projectId) const {
     for (int row = 0; row < ui->projectList->count(); ++row) {
         if (ui->projectList->item(row)->data(Qt::UserRole).toString() == projectId) {
@@ -195,6 +224,7 @@ void MainWindow::setActiveProject(const QString &projectId) {
     if (!swimlane) {
         m_activeProjectId.clear();
         ui->boardStack->setCurrentIndex(0);
+        refreshProjectRowStyles();
         return;
     }
 
@@ -207,6 +237,8 @@ void MainWindow::setActiveProject(const QString &projectId) {
         QSignalBlocker blocker(ui->projectList);
         ui->projectList->setCurrentRow(row);
     }
+
+    refreshProjectRowStyles();
 }
 
 void MainWindow::handleProjectSelected(QListWidgetItem *current, QListWidgetItem *previous) {
@@ -215,6 +247,7 @@ void MainWindow::handleProjectSelected(QListWidgetItem *current, QListWidgetItem
     if (!current) {
         m_activeProjectId.clear();
         ui->boardStack->setCurrentIndex(0);
+        refreshProjectRowStyles();
         return;
     }
 
@@ -239,25 +272,27 @@ void MainWindow::animateSidebar(bool opening) {
     const int sidebarBoardWidth = sizes.at(0) + sizes.at(1);
     const int consoleWidth = sizes.at(2);
 
-    int startWidth;
+    // Selalu mulai dari lebar sidebar saat ini agar animasi yang diinterupsi
+    // melanjutkan geseran, bukan melompat balik ke 0
+    const int startWidth = sizes.at(0);
     int endWidth;
 
+    // Lebar digiring lewat maximumWidth, bukan cuma minimumWidth: QSplitter
+    // tetap menahan panel di minimumSizeHint layout-nya (~118px) sehingga sidebar
+    // mentok di situ lalu melompat ke 0 saat disembunyikan (terlihat seperti resize 2x)
+    ui->sidebarPanel->setMinimumWidth(0);
+
     if (opening) {
-        if (m_savedSplitterSizes.size() != ui->mainSplitter->count()) {
-            m_savedSplitterSizes = {m_sidebarMinWidth + 40, sizes.at(1), sizes.at(2)};
-        }
-        startWidth = 0;
-        endWidth = qBound(m_sidebarMinWidth, m_savedSplitterSizes.at(0), ui->sidebarPanel->maximumWidth());
+        endWidth = qBound(m_sidebarMinWidth, m_savedSidebarWidth, m_sidebarMaxWidth);
 
-        // Sementara lepas batas minimum agar splitter bisa mulai dari 0
-        ui->sidebarPanel->setMinimumWidth(0);
+        // Kunci ke lebar awal sebelum panel di-show, kalau tidak splitter sempat
+        // memberinya lebar penuh dulu lalu animasi membukanya lagi
+        ui->sidebarPanel->setMaximumWidth(startWidth);
         ui->sidebarPanel->setVisible(true);
+        ui->mainSplitter->setSizes({startWidth, qMax(0, sidebarBoardWidth - startWidth), consoleWidth});
     } else {
-        m_savedSplitterSizes = sizes;
-        startWidth = sizes.at(0);
+        m_savedSidebarWidth = startWidth;
         endWidth = 0;
-
-        ui->sidebarPanel->setMinimumWidth(0);
     }
 
     auto *animation = new QVariantAnimation(this);
@@ -270,20 +305,18 @@ void MainWindow::animateSidebar(bool opening) {
             [this, sidebarBoardWidth, consoleWidth](const QVariant &value) {
         const int sidebarWidth = value.toInt();
         const int boardWidth = qMax(0, sidebarBoardWidth - sidebarWidth);
+        ui->sidebarPanel->setMaximumWidth(sidebarWidth);
         ui->mainSplitter->setSizes({sidebarWidth, boardWidth, consoleWidth});
     });
 
     connect(animation, &QVariantAnimation::finished, this, [this, opening]() {
-        // Kembalikan batas minimum asli setelah animasi selesai
-        ui->sidebarPanel->setMinimumWidth(m_sidebarMinWidth);
-
-        if (opening) {
-            if (m_savedSplitterSizes.size() == ui->mainSplitter->count()) {
-                ui->mainSplitter->setSizes(m_savedSplitterSizes);
-            }
-        } else {
+        // Sembunyikan dulu baru kembalikan batasan lebar; urutan sebaliknya
+        // membuat splitter melebarkan sidebar sesaat sebelum panel hilang
+        if (!opening) {
             ui->sidebarPanel->setVisible(false);
         }
+        ui->sidebarPanel->setMinimumWidth(m_sidebarMinWidth);
+        ui->sidebarPanel->setMaximumWidth(m_sidebarMaxWidth);
     });
 
     m_sidebarAnimation = animation;

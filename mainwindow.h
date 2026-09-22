@@ -63,13 +63,16 @@ private:
     QMap<QString, SwimlaneWidget*> m_swimlanes;
     // Project yang sedang ditampilkan di board; kosong bila belum ada
     QString m_activeProjectId;
-    // Ukuran splitter terakhir sebelum sidebar diciutkan
-    QList<int> m_savedSplitterSizes;
+    // Lebar sidebar terakhir sebelum diciutkan, dipakai saat dibuka kembali
+    int m_savedSidebarWidth = 0;
     // Animasi geser lebar sidebar saat dibuka/ditutup
     QPointer<QVariantAnimation> m_sidebarAnimation;
     // Lebar minimum asli sidebarPanel (dari file .ui), disimpan karena
     // animasi sempat menurunkannya ke 0 agar splitter bisa menciutkannya penuh
     int m_sidebarMinWidth = 180;
+    // Batas maksimum asli sidebarPanel; maximumWidth dipakai untuk menggiring
+    // lebar selama animasi sehingga nilainya harus disimpan dulu
+    int m_sidebarMaxWidth = 240;
 
     // Helper untuk memuat data awal saat aplikasi baru dibuka
     void loadInitialMockData();
@@ -82,6 +85,9 @@ private:
     void animateSidebar(bool opening);
     // Baris item sidebar kustom: label nama project (kiri) + tombol "+" New Task (kanan)
     QWidget *createProjectRowWidget(const QString &projectId);
+    // Samakan warna label + icon "+" tiap baris sidebar dengan status seleksinya
+    // (putih saat aktif/terpilih, warna default saat tidak)
+    void refreshProjectRowStyles();
 };
 
 #endif // MAINWINDOW_H

@@ -72,7 +72,17 @@ border-bottom: 1px solid #d3d8d5;
           <string>Tampilkan / sembunyikan daftar project</string>
          </property>
          <property name="text">
-          <string>&#9776;</string>
+          <string/>
+         </property>
+         <property name="icon">
+          <iconset resource="Resources/resources.qrc">
+           <normaloff>:/icons/sidebar.svg</normaloff>:/icons/sidebar.svg</iconset>
+         </property>
+         <property name="iconSize">
+          <size>
+           <width>16</width>
+           <height>16</height>
+          </size>
          </property>
         </widget>
        </item>
@@ -242,6 +252,8 @@ Pilih salah satu dari sidebar, atau buat lewat &quot;New Project&quot;.</string>
    <container>1</container>
   </customwidget>
  </customwidgets>
- <resources/>
+ <resources>
+  <include location="Resources/resources.qrc"/>
+ </resources>
  <connections/>
 </ui>

@@ -11,6 +11,10 @@
 KanbanCardWidget::KanbanCardWidget(QWidget *parent) : QWidget(parent), ui(new Ui::KanbanCardWidget){
     ui->setupUi(this);
 
+    // WA_StyledBackground wajib agar background/border-radius dari styles.qss
+    // ikut dilukis; tanpa ini QWidget biasa mengabaikannya dan sudut tetap kotak
+    setAttribute(Qt::WA_StyledBackground, true);
+
     // Pastikan widget kartu menangkap event hover/klik dengan baik
     setAttribute(Qt::WA_Hover, true);
 }
