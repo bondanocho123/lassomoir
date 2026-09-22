@@ -6,6 +6,7 @@
 #include <QList>
 #include <QMainWindow>
 #include <QMap>
+#include <QPointer>
 #include <QString>
 
 QT_BEGIN_NAMESPACE
@@ -19,6 +20,7 @@ class SwimlaneWidget;
 class KanbanCardWidget;
 class FileManager;
 class QListWidgetItem;
+class QVariantAnimation;
 struct TaskItem;
 
 class MainWindow : public QMainWindow
@@ -63,6 +65,11 @@ private:
     QString m_activeProjectId;
     // Ukuran splitter terakhir sebelum sidebar diciutkan
     QList<int> m_savedSplitterSizes;
+    // Animasi geser lebar sidebar saat dibuka/ditutup
+    QPointer<QVariantAnimation> m_sidebarAnimation;
+    // Lebar minimum asli sidebarPanel (dari file .ui), disimpan karena
+    // animasi sempat menurunkannya ke 0 agar splitter bisa menciutkannya penuh
+    int m_sidebarMinWidth = 180;
 
     // Helper untuk memuat data awal saat aplikasi baru dibuka
     void loadInitialMockData();
@@ -71,6 +78,8 @@ private:
     QMap<QString, TaskItem> collectTasksForProject(const QString &projectId) const;
     // Cari baris sidebar milik projectId; -1 bila tidak ada
     int findProjectRow(const QString &projectId) const;
+    // Jalankan animasi geser: opening=true melebarkan sidebar, false menciutkannya
+    void animateSidebar(bool opening);
 };
 
 #endif // MAINWINDOW_H
