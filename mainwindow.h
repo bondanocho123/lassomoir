@@ -47,6 +47,10 @@ private slots:
     // Slot saat tombol "Close" di header swimlane diklik
     void handleCloseProjectRequested(const QString &projectId);
 
+    // Slot saat konfirmasi "Ya" pada popup hapus project ditekan:
+    // project dibuang dari UI sekaligus dihapus permanen dari disk
+    void handleDeleteProjectRequested(const QString &projectId);
+
     // Slot saat baris project di sidebar dipilih
     void handleProjectSelected(QListWidgetItem *current, QListWidgetItem *previous);
 
@@ -83,11 +87,21 @@ private:
     int findProjectRow(const QString &projectId) const;
     // Jalankan animasi geser: opening=true melebarkan sidebar, false menciutkannya
     void animateSidebar(bool opening);
-    // Baris item sidebar kustom: label nama project (kiri) + tombol "+" New Task (kanan)
+    // Baris item sidebar kustom: label nama project (kiri) + tombol hapus & "+" New Task (kanan)
     QWidget *createProjectRowWidget(const QString &projectId);
-    // Samakan warna label + icon "+" tiap baris sidebar dengan status seleksinya
+    // Samakan warna label + icon tombol tiap baris sidebar dengan status seleksinya
     // (putih saat aktif/terpilih, warna default saat tidak)
     void refreshProjectRowStyles();
+    // Popup kecil berisi pertanyaan konfirmasi + tombol "Ya" / "Batal",
+    // ditempelkan tepat di bawah tombol hapus yang diklik
+    void showDeleteConfirmPopup(const QString &projectId, QWidget *anchor);
+    // Buang project dari sidebar + board (dipakai "Close" maupun "Hapus")
+    void removeProjectFromUi(const QString &projectId);
+
+protected:
+    // Tukar icon tombol baris sidebar jadi putih selama kursor berada di atasnya,
+    // supaya tetap terbaca di atas background hover yang gelap
+    bool eventFilter(QObject *watched, QEvent *event) override;
 };
 
 #endif // MAINWINDOW_H

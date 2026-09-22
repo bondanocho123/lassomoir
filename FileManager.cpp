@@ -180,3 +180,25 @@ void FileManager::scheduleSave(const QString &projectId, const QMap<QString, Tas
     m_pendingProjects.insert(projectId);
     m_saveTimer->start(kSaveDebounceMs);
 }
+
+bool FileManager::deleteProject(const QString &projectId, QString *error){
+    // Batalkan dulu save tertunda: tanpa ini timer debounce bisa menulis ulang
+    // session.json beberapa ratus milidetik setelah foldernya dihapus.
+    m_pendingSaves.remove(projectId);
+    m_pendingProjects.remove(projectId);
+
+    QDir projectDir(QStringLiteral("%1/projects/%2").arg(m_basePath, projectId));
+    if (!projectDir.exists()) {
+        // Project yang belum pernah tersimpan ke disk dianggap sudah bersih
+        return true;
+    }
+
+    if (!projectDir.removeRecursively()) {
+        if (error) {
+            *error = QStringLiteral("Gagal menghapus folder %1").arg(projectDir.absolutePath());
+        }
+        return false;
+    }
+
+    return true;
+}

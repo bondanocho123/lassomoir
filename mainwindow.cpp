@@ -6,11 +6,16 @@
 #include "TaskItem.h"
 #include "ConsolePanelWidget.h"
 #include "FileManager.h"
+#include "NewTaskDialog.h"
 
 #include <QInputDialog>
 #include <QDateTime>
 #include <QAbstractAnimation>
 #include <QEasingCurve>
+#include <QEvent>
+#include <QFont>
+#include <QFrame>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
@@ -19,12 +24,13 @@
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSize>
+#include <QScreen>
 #include <QSplitter>
 #include <QStackedWidget>
+#include <QVBoxLayout>
 #include <QTimer>
 #include <QVariantAnimation>
 #include <QDir>
-#include <QPixmap>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent),
@@ -36,13 +42,17 @@ MainWindow::MainWindow(QWidget *parent)
     m_sidebarMinWidth = ui->sidebarPanel->minimumWidth();
     m_sidebarMaxWidth = ui->sidebarPanel->maximumWidth();
 
-    // Logo menggantikan teks aplikasi di header
-    QPixmap logo(":/logo.png");
-    if (!logo.isNull()) {
-        ui->labelAppName->setPixmap(
-            logo.scaledToHeight(32, Qt::SmoothTransformation));
-        ui->labelAppName->setToolTip("L'Assomoir");
-    }
+    // Wordmark aplikasi di header: teks bergaya Latin/serif menggantikan logo gambar
+    ui->labelAppName->setText("L'Assommoir");
+    QFont brandFont("Garamond");
+    brandFont.setStyleHint(QFont::Serif);
+    brandFont.setItalic(true);
+    brandFont.setPointSize(19);
+    brandFont.setWeight(QFont::DemiBold);
+    brandFont.setLetterSpacing(QFont::AbsoluteSpacing, 0.5);
+    ui->labelAppName->setFont(brandFont);
+    ui->labelAppName->setStyleSheet("color: #a9743f;");
+    ui->labelAppName->setToolTip("L'Assommoir");
     ui->rootVerticalLayout->setStretch(1,1);
     QTimer::singleShot(0, this, [this]() {
         // sidebar : board : console, boleh disesuaikan
@@ -168,6 +178,19 @@ QWidget *MainWindow::createProjectRowWidget(const QString &projectId) {
     auto *label = new QLabel(projectId, row);
     label->setObjectName("projectRowLabel");
 
+    auto *btnDelete = new QPushButton(row);
+    btnDelete->setObjectName("btnProjectDelete");
+    btnDelete->setIcon(QIcon(":/icons/trash.svg"));
+    btnDelete->setIconSize(QSize(12, 12));
+    btnDelete->setFixedSize(18, 18);
+    btnDelete->setCursor(Qt::PointingHandCursor);
+    btnDelete->setToolTip("Hapus project " + projectId);
+    // Event filter dipakai untuk memutihkan icon selama hover (lihat eventFilter())
+    btnDelete->installEventFilter(this);
+    connect(btnDelete, &QPushButton::clicked, this, [this, projectId, btnDelete]() {
+        showDeleteConfirmPopup(projectId, btnDelete);
+    });
+
     auto *btnNewTask = new QPushButton(row);
     btnNewTask->setObjectName("btnProjectNewTask");
     btnNewTask->setIcon(QIcon(":/icons/plus.svg"));
@@ -175,19 +198,100 @@ QWidget *MainWindow::createProjectRowWidget(const QString &projectId) {
     btnNewTask->setFixedSize(18, 18);
     btnNewTask->setCursor(Qt::PointingHandCursor);
     btnNewTask->setToolTip("New Task untuk " + projectId);
+    btnNewTask->installEventFilter(this);
     connect(btnNewTask, &QPushButton::clicked, this, [this, projectId]() {
         handleNewTaskRequested(projectId);
     });
 
-    // justify-between: label menempel kiri, tombol "+" menempel kanan
+    // justify-between: label menempel kiri, tombol hapus + "+" menempel kanan
     auto *rowLayout = new QHBoxLayout(row);
     rowLayout->setContentsMargins(6, 3, 4, 3);
-    rowLayout->setSpacing(4);
+    rowLayout->setSpacing(2);
     rowLayout->addWidget(label);
     rowLayout->addStretch(1);
+    rowLayout->addWidget(btnDelete);
     rowLayout->addWidget(btnNewTask);
 
     return row;
+}
+
+bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
+    auto *btn = qobject_cast<QPushButton*>(watched);
+    if (btn) {
+        const QString name = btn->objectName();
+        const bool isRowButton = (name == "btnProjectDelete" || name == "btnProjectNewTask");
+
+        if (isRowButton && event->type() == QEvent::Enter) {
+            // Background hover-nya gelap, jadi icon versi putih yang dipakai
+            btn->setIcon(QIcon(name == "btnProjectDelete" ? ":/icons/trash-white.svg"
+                                                          : ":/icons/plus-white.svg"));
+        } else if (isRowButton && event->type() == QEvent::Leave) {
+            // Kembalikan ke warna sesuai status seleksi barisnya
+            refreshProjectRowStyles();
+        }
+    }
+
+    return QMainWindow::eventFilter(watched, event);
+}
+
+void MainWindow::showDeleteConfirmPopup(const QString &projectId, QWidget *anchor) {
+    // Qt::Popup: otomatis tertutup saat klik di luar area-nya, persis tooltip
+    auto *popup = new QFrame(anchor, Qt::Popup);
+    popup->setObjectName("deleteConfirmPopup");
+    popup->setAttribute(Qt::WA_DeleteOnClose);
+
+    auto *question = new QLabel(QString("Hapus project \"%1\"?").arg(projectId), popup);
+    question->setObjectName("deleteConfirmLabel");
+
+    auto *btnCancel = new QPushButton("Batal", popup);
+    btnCancel->setObjectName("btnDeleteConfirmCancel");
+    btnCancel->setCursor(Qt::PointingHandCursor);
+
+    auto *btnYes = new QPushButton("Ya", popup);
+    btnYes->setObjectName("btnDeleteConfirmYes");
+    btnYes->setCursor(Qt::PointingHandCursor);
+
+    auto *actions = new QHBoxLayout();
+    actions->setContentsMargins(0, 0, 0, 0);
+    actions->setSpacing(6);
+    actions->addStretch(1);
+    actions->addWidget(btnCancel);
+    actions->addWidget(btnYes);
+
+    auto *popupLayout = new QVBoxLayout(popup);
+    popupLayout->setContentsMargins(10, 8, 10, 8);
+    popupLayout->setSpacing(8);
+    popupLayout->addWidget(question);
+    popupLayout->addLayout(actions);
+
+    connect(btnCancel, &QPushButton::clicked, popup, &QWidget::close);
+    connect(btnYes, &QPushButton::clicked, this, [this, popup, projectId]() {
+        popup->close();
+        // Dijadwalkan ke siklus event berikutnya: baris sidebar yang dibuang adalah
+        // induk popup ini, jadi menghapusnya selagi sinyal klik masih berjalan
+        // berarti membongkar widget yang sedang mengirim sinyal tersebut.
+        QTimer::singleShot(0, this, [this, projectId]() {
+            handleDeleteProjectRequested(projectId);
+        });
+    });
+
+    popup->adjustSize();
+
+    // Tepi kanan popup disejajarkan dengan tepi kanan tombol, menggantung di bawahnya
+    const QPoint anchorBottomRight = anchor->mapToGlobal(QPoint(anchor->width(), anchor->height()));
+    QPoint pos(anchorBottomRight.x() - popup->width(), anchorBottomRight.y() + 6);
+
+    // Jaga popup tetap di dalam layar bila baris berada di pinggir/bawah
+    if (QScreen *screen = QGuiApplication::screenAt(anchorBottomRight)) {
+        const QRect available = screen->availableGeometry();
+        pos.setX(qBound(available.left() + 4, pos.x(), available.right() - popup->width() - 4));
+        if (pos.y() + popup->height() > available.bottom()) {
+            pos.setY(anchor->mapToGlobal(QPoint(0, 0)).y() - popup->height() - 6);
+        }
+    }
+
+    popup->move(pos);
+    popup->show();
 }
 
 void MainWindow::refreshProjectRowStyles() {
@@ -205,7 +309,13 @@ void MainWindow::refreshProjectRowStyles() {
             label->setStyleSheet(selected ? "color: #ffffff;" : "");
         }
         if (auto *btn = rowWidget->findChild<QPushButton*>("btnProjectNewTask")) {
-            btn->setIcon(QIcon(selected ? ":/icons/plus-white.svg" : ":/icons/plus.svg"));
+            // Tombol yang sedang di-hover tetap putih: background hover-nya gelap
+            const bool white = selected || btn->underMouse();
+            btn->setIcon(QIcon(white ? ":/icons/plus-white.svg" : ":/icons/plus.svg"));
+        }
+        if (auto *btn = rowWidget->findChild<QPushButton*>("btnProjectDelete")) {
+            const bool white = selected || btn->underMouse();
+            btn->setIcon(QIcon(white ? ":/icons/trash-white.svg" : ":/icons/trash.svg"));
         }
     }
 }
@@ -334,31 +444,31 @@ void MainWindow::handleCardMoved(const QString &projectId, KanbanCardWidget *car
 }
 
 void MainWindow::handleNewTaskRequested(const QString &projectId) {
-    bool ok;
-    QString title = QInputDialog::getText(this, "New Task",
-                                          "Task Title for [" + projectId + "]:",
-                                          QLineEdit::Normal, "", &ok);
-    if (ok && !title.trimmed().isEmpty()) {
-        auto *swimlane = m_swimlanes.value(projectId, nullptr);
-        if (swimlane) {
-            auto *card = new KanbanCardWidget(swimlane);
-            QString taskId = QString::number(QDateTime::currentMSecsSinceEpoch());
-
-            // Atur metadata task default
-            card->setCardData(taskId, "component", title.trimmed(), "waiting in queue", "✓ 0");
-
-            // Masukkan ke kolom pertama: WAITING
-            swimlane->addCardToStage("WAITING", card);
-
-            // Task baru ikut dipersistenkan; tanpa ini kartu hilang saat aplikasi ditutup
-            m_fileManager->scheduleSave(projectId, collectTasksForProject(projectId));
-
-            ui->consolePanel->appendLog(QString("[TASK CREATED] %1 -> WAITING: '%2'").arg(projectId, title.trimmed()));
-        }
+    NewTaskDialog dialog(projectId, this);
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
     }
+
+    auto *swimlane = m_swimlanes.value(projectId, nullptr);
+    if (!swimlane) return;
+
+    const TaskItem item = dialog.resultTask();
+    if (!swimlane->column(item.stage)) {
+        ui->consolePanel->appendLog(QString("[TASK CREATE WARN] %1: stage '%2' tidak dikenal").arg(projectId, item.stage));
+        return;
+    }
+
+    auto *card = new KanbanCardWidget(swimlane);
+    card->setCardData(item.id, item.category, item.title, item.subtext, item.badge);
+    swimlane->addCardToStage(item.stage, card);
+
+    // Task baru ikut dipersistenkan; tanpa ini kartu hilang saat aplikasi ditutup
+    m_fileManager->scheduleSave(projectId, collectTasksForProject(projectId));
+
+    ui->consolePanel->appendLog(QString("[TASK CREATED] %1 -> %2: '%3'").arg(projectId, item.stage, item.title));
 }
 
-void MainWindow::handleCloseProjectRequested(const QString &projectId) {
+void MainWindow::removeProjectFromUi(const QString &projectId) {
     auto *widget = m_swimlanes.value(projectId, nullptr);
     if (!widget) return;
 
@@ -382,8 +492,30 @@ void MainWindow::handleCloseProjectRequested(const QString &projectId) {
             ui->boardStack->setCurrentIndex(0);
         }
     }
+}
+
+void MainWindow::handleCloseProjectRequested(const QString &projectId) {
+    if (!m_swimlanes.contains(projectId)) return;
+
+    removeProjectFromUi(projectId);
 
     ui->consolePanel->appendLog(QString("[SYSTEM] Swimlane '%1' ditutup.").arg(projectId));
+}
+
+void MainWindow::handleDeleteProjectRequested(const QString &projectId) {
+    if (!m_swimlanes.contains(projectId)) return;
+
+    removeProjectFromUi(projectId);
+
+    // Beda dengan "Close": data di disk ikut dibuang supaya project tidak
+    // muncul lagi saat aplikasi dibuka berikutnya.
+    QString error;
+    if (!m_fileManager->deleteProject(projectId, &error)) {
+        ui->consolePanel->appendLog(QString("[DELETE WARN] %1: %2").arg(projectId, error));
+        return;
+    }
+
+    ui->consolePanel->appendLog(QString("[SYSTEM] Project '%1' dihapus permanen.").arg(projectId));
 }
 
 void MainWindow::handleCommandSubmitted(const QString &command) {

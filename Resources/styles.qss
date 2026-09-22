@@ -7,6 +7,13 @@
      Krem latar     : #f8f4ee
    ============================================================ */
 
+/* Font Dasar Aplikasi: seluruh widget memakai gaya Garamond (serif).
+   #textBrowserLog (ConsolePanelWidget) sengaja dikecualikan lewat
+   selector ID-nya sendiri karena tetap butuh font monospace. */
+* {
+    font-family: "Garamond", "EB Garamond", "Times New Roman", serif;
+}
+
 /* Palet Dasar Aplikasi */
 QMainWindow, QWidget#centralwidget, QWidget#centralWidget {
     background-color: #f8f4ee;
@@ -200,10 +207,81 @@ QLabel#projectRowLabel {
     font-size: 12px;
 }
 
-QPushButton#btnProjectNewTask {
+/* Tombol ikon pada baris sidebar: hapus (kiri) + New Task (kanan).
+   Hover-nya kotak membulat berlatar gelap; icon-nya ditukar ke versi putih
+   lewat eventFilter() di mainwindow.cpp supaya tetap kebaca. */
+QPushButton#btnProjectNewTask,
+QPushButton#btnProjectDelete {
     background-color: transparent;
     border: none;
+    border-radius: 5px;
     padding: 0;
+}
+
+QPushButton#btnProjectNewTask:hover,
+QPushButton#btnProjectDelete:hover {
+    background-color: #3d3730;
+}
+
+QPushButton#btnProjectNewTask:pressed,
+QPushButton#btnProjectDelete:pressed {
+    background-color: #24201b;
+}
+
+/* ============ Popup konfirmasi hapus project ============ */
+
+QFrame#deleteConfirmPopup {
+    background-color: #ffffff;
+    border: 1px solid #e2d5c1;
+    border-radius: 8px;
+}
+
+QLabel#deleteConfirmLabel {
+    background: transparent;
+    color: #3d3730;
+    font-size: 11px;
+}
+
+QPushButton#btnDeleteConfirmYes,
+QPushButton#btnDeleteConfirmCancel {
+    border-radius: 5px;
+    padding: 4px 12px;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+QPushButton#btnDeleteConfirmYes {
+    background-color: #a9743f;
+    color: #ffffff;
+    border: 1px solid #a9743f;
+}
+
+QPushButton#btnDeleteConfirmYes:hover {
+    background-color: #3d3730;
+    border: 1px solid #3d3730;
+}
+
+QPushButton#btnDeleteConfirmYes:pressed {
+    background-color: #24201b;
+    border: 1px solid #24201b;
+}
+
+QPushButton#btnDeleteConfirmCancel {
+    background-color: #ffffff;
+    color: #3d3730;
+    border: 1px solid #e2d5c1;
+}
+
+QPushButton#btnDeleteConfirmCancel:hover {
+    background-color: #3d3730;
+    color: #ffffff;
+    border: 1px solid #3d3730;
+}
+
+QPushButton#btnDeleteConfirmCancel:pressed {
+    background-color: #24201b;
+    color: #ffffff;
+    border: 1px solid #24201b;
 }
 
 /* Tombol hamburger pengendali sidebar di top bar */
@@ -217,4 +295,156 @@ QPushButton#btnToggleSidebar {
 QLabel#labelEmptyState {
     color: #8a7f70;
     font-size: 12px;
+}
+
+/* ============ Dialog "New Task" (NewTaskDialog) ============ */
+
+QDialog#NewTaskDialog {
+    background-color: #ffffff;
+}
+
+QLabel#taskFormSubtitle {
+    color: #8a7f70;
+    font-size: 11px;
+}
+
+QFrame#taskFormDivider {
+    background-color: #e2d5c1;
+    border: none;
+}
+
+/* Label kecil di atas tiap input, gaya sama dengan judul stage kolom kanban */
+QLabel#taskFormFieldLabel {
+    font-size: 10px;
+    font-weight: bold;
+    color: #a9743f;
+    letter-spacing: 0.5px;
+}
+
+QLineEdit#taskFormInput {
+    background-color: #ffffff;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-size: 11px;
+    color: #111827;
+}
+
+QLineEdit#taskFormInput:focus {
+    border: 1px solid #a9743f;
+}
+
+QComboBox#taskFormCombo {
+    background-color: #ffffff;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-size: 11px;
+    color: #111827;
+}
+
+QComboBox#taskFormCombo:focus {
+    border: 1px solid #a9743f;
+}
+
+QComboBox#taskFormCombo::drop-down {
+    border: none;
+    width: 20px;
+}
+
+QComboBox#taskFormCombo::down-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+    margin-right: 8px;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid #8a7f70;
+}
+
+QComboBox#taskFormCombo QAbstractItemView {
+    background-color: #ffffff;
+    border: 1px solid #d1d5db;
+    outline: none;
+    selection-background-color: #f2e3d1;
+    selection-color: #3d3730;
+}
+
+/* Tombol -/+ jumlah approval yang dibutuhkan */
+QPushButton#btnTaskFormStepper {
+    background-color: #ffffff;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    font-weight: bold;
+    color: #3d3730;
+}
+
+QPushButton#btnTaskFormStepper:hover {
+    background-color: #f2e3d1;
+    border: 1px solid #a9743f;
+}
+
+QPushButton#btnTaskFormStepper:pressed {
+    background-color: #e7ddcd;
+}
+
+QLabel#taskFormApprovalsValue {
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: bold;
+    color: #3d3730;
+}
+
+QLabel#taskFormPreviewCaption {
+    color: #8a7f70;
+    font-size: 10px;
+}
+
+QPushButton#btnTaskFormCancel {
+    background-color: #ffffff;
+    color: #3d3730;
+    border: 1px solid #e2d5c1;
+    border-radius: 5px;
+    padding: 6px 16px;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+QPushButton#btnTaskFormCancel:hover {
+    background-color: #3d3730;
+    color: #ffffff;
+    border: 1px solid #3d3730;
+}
+
+QPushButton#btnTaskFormCancel:pressed {
+    background-color: #24201b;
+    color: #ffffff;
+    border: 1px solid #24201b;
+}
+
+QPushButton#btnTaskFormCreate {
+    background-color: #a9743f;
+    color: #ffffff;
+    border: 1px solid #a9743f;
+    border-radius: 5px;
+    padding: 6px 16px;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+QPushButton#btnTaskFormCreate:hover {
+    background-color: #3d3730;
+    border: 1px solid #3d3730;
+}
+
+QPushButton#btnTaskFormCreate:pressed {
+    background-color: #24201b;
+    border: 1px solid #24201b;
+}
+
+QPushButton#btnTaskFormCreate:disabled {
+    background-color: #d9c6ac;
+    border: 1px solid #d9c6ac;
+    color: #ffffff;
 }

@@ -31,6 +31,11 @@ public:
 
     void scheduleSave(const QString &projectId, const QMap<QString, TaskItem> &tasks);
 
+    // Hapus permanen folder <AppData>/projects/<projectId> beserta session.json-nya.
+    // Save yang masih tertunda untuk project itu ikut dibatalkan supaya folder
+    // tidak ditulis ulang sesaat setelah dihapus.
+    bool deleteProject(const QString &projectId, QString *error);
+
     void flushPendingSaves();
 
 signals:

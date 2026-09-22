@@ -2,6 +2,9 @@ QT += widgets svg
 
 CONFIG += c++17
 
+# Icon file .exe di Windows (Explorer, taskbar)
+win32: RC_ICONS = Resources/app.ico
+
 # You can make your code fail to compile if it uses deprecated APIs.
 # In order to do so, uncomment the following line.
 #DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
@@ -11,6 +14,7 @@ SOURCES += \
     FileManager.cpp \
     KanbanCardWidget.cpp \
     KanbanColumnWidget.cpp \
+    NewTaskDialog.cpp \
     StageProfile.cpp \
     SwimlaneWidget.cpp \
     TaskManager.cpp \
@@ -22,6 +26,7 @@ HEADERS += \
     FileManager.h \
     KanbanCardWidget.h \
     KanbanColumnWidget.h \
+    NewTaskDialog.h \
     StageProfile.h \
     SwimlaneWidget.h \
     TaskItem.h \
