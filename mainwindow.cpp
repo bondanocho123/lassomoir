@@ -11,8 +11,11 @@
 #include <QDateTime>
 #include <QAbstractAnimation>
 #include <QEasingCurve>
+#include <QHBoxLayout>
+#include <QLabel>
 #include <QListWidget>
 #include <QListWidgetItem>
+#include <QPushButton>
 #include <QSignalBlocker>
 #include <QSplitter>
 #include <QStackedWidget>
@@ -136,17 +139,46 @@ void MainWindow::addSwimlane(const QString &projectId) {
 
     // Tangkap interaksi dari swimlane
     connect(swimlane, &SwimlaneWidget::cardMoved, this, &MainWindow::handleCardMoved);
-    connect(swimlane, &SwimlaneWidget::newTaskRequested, this, &MainWindow::handleNewTaskRequested);
     connect(swimlane, &SwimlaneWidget::closeProjectRequested, this, &MainWindow::handleCloseProjectRequested);
 
     // Board hanya menampilkan satu project; sisanya menganggur di dalam stack
     ui->boardStack->addWidget(swimlane);
 
-    // Daftarkan project ke sidebar
-    auto *item = new QListWidgetItem(projectId, ui->projectList);
+    // Daftarkan project ke sidebar: nama project (kiri) sejajar dengan tombol "+" (kanan)
+    auto *item = new QListWidgetItem(ui->projectList);
     item->setData(Qt::UserRole, projectId);
+    QWidget *rowWidget = createProjectRowWidget(projectId);
+    item->setSizeHint(rowWidget->sizeHint());
+    ui->projectList->setItemWidget(item, rowWidget);
 
     m_swimlanes.insert(projectId, swimlane);
+}
+
+QWidget *MainWindow::createProjectRowWidget(const QString &projectId) {
+    auto *row = new QWidget();
+    row->setObjectName("projectRow");
+
+    auto *label = new QLabel(projectId, row);
+    label->setObjectName("projectRowLabel");
+
+    auto *btnNewTask = new QPushButton("+", row);
+    btnNewTask->setObjectName("btnProjectNewTask");
+    btnNewTask->setFixedSize(18, 18);
+    btnNewTask->setCursor(Qt::PointingHandCursor);
+    btnNewTask->setToolTip("New Task untuk " + projectId);
+    connect(btnNewTask, &QPushButton::clicked, this, [this, projectId]() {
+        handleNewTaskRequested(projectId);
+    });
+
+    // justify-between: label menempel kiri, tombol "+" menempel kanan
+    auto *rowLayout = new QHBoxLayout(row);
+    rowLayout->setContentsMargins(6, 3, 4, 3);
+    rowLayout->setSpacing(4);
+    rowLayout->addWidget(label);
+    rowLayout->addStretch(1);
+    rowLayout->addWidget(btnNewTask);
+
+    return row;
 }
 
 int MainWindow::findProjectRow(const QString &projectId) const {

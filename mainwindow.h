@@ -80,6 +80,8 @@ private:
     int findProjectRow(const QString &projectId) const;
     // Jalankan animasi geser: opening=true melebarkan sidebar, false menciutkannya
     void animateSidebar(bool opening);
+    // Baris item sidebar kustom: label nama project (kiri) + tombol "+" New Task (kanan)
+    QWidget *createProjectRowWidget(const QString &projectId);
 };
 
 #endif // MAINWINDOW_H
