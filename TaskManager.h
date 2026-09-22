@@ -35,6 +35,10 @@ signals:
     // Sinyal saat ada task baru yang ditambahkan
     void taskAdded(const TaskItem &item);
 
+    // Dipancarkan saat pindah stage ditolak oleh StageProfile (mis. gate belum di-approve).
+    // Widget kolom perlu dengar ini untuk mengembalikan kartu ke posisi semula.
+    void taskMoveRejected(const QString &taskId, const QString &fromStage, const QString &reason);
+
 private:
     // Penyimpanan internal state kartu (Key: taskId)
     QMap<QString, TaskItem> m_tasks;

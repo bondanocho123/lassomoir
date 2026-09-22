@@ -12,6 +12,7 @@ struct TaskItem {
     QString title;
     QString subtext;
     QString badge; // "✓ 1", "✓ 0"
+    int approvals = 0;
 };
 
 #endif // TASKITEM_H
