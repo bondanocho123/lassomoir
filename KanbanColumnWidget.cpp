@@ -7,7 +7,6 @@
 #include <QDragMoveEvent>
 #include <QDragLeaveEvent>
 #include <QDropEvent>
-#include <QMargins>
 #include <QMimeData>
 #include <QVBoxLayout>
 
@@ -28,11 +27,6 @@ KanbanColumnWidget::KanbanColumnWidget(QWidget *parent) : QWidget(parent), ui(ne
         m_cardListLayout->setSpacing(6);
         m_cardListLayout->addStretch(1);   // spacer bawah: kartu menumpuk ke atas
     }
-
-    // Sisakan ruang di dasar kolom supaya kartu terakhir tidak pernah tertutup
-    // tombol New Task yang mengambang di pojok kanan bawah swimlane.
-    const QMargins margins = m_cardListLayout->contentsMargins();
-    m_cardListLayout->setContentsMargins(margins.left(), margins.top(), margins.right(), 56);
 }
 
 KanbanColumnWidget::~KanbanColumnWidget() {
