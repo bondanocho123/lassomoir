@@ -1,4 +1,5 @@
 #include "TaskManager.h"
+#include "StageProfile.h"
 
 TaskManager::TaskManager(QObject *parent)
     : QObject(parent) {
@@ -16,6 +17,19 @@ void TaskManager::addTask(const TaskItem &item) {
 void TaskManager::updateTaskStage(const QString &taskId, const QString &newStage, int targetIndex) {
     if (!m_tasks.contains(taskId)) {
         return;
+    }
+
+    const TaskItem &task = m_tasks[taskId];
+    const QString fromStage = task.stage;
+
+    if (fromStage != newStage) {
+        if (auto profile = stageProfileFor(fromStage)) {
+            QString reason;
+            if (!profile->canLeave(task, &reason)) {
+                emit taskMoveRejected(taskId, fromStage, reason);
+                return;
+            }
+        }
     }
 
     m_tasks[taskId].stage = newStage;

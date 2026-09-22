@@ -11,6 +11,7 @@ SOURCES += \
     FileManager.cpp \
     KanbanCardWidget.cpp \
     KanbanColumnWidget.cpp \
+    StageProfile.cpp \
     SwimlaneWidget.cpp \
     TaskManager.cpp \
     main.cpp \
@@ -21,6 +22,7 @@ HEADERS += \
     FileManager.h \
     KanbanCardWidget.h \
     KanbanColumnWidget.h \
+    StageProfile.h \
     SwimlaneWidget.h \
     TaskItem.h \
     TaskManager.h \
