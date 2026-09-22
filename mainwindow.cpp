@@ -40,7 +40,7 @@ MainWindow::MainWindow(QWidget *parent)
     ui->rootVerticalLayout->setStretch(1,1);
     QTimer::singleShot(0, this, [this]() {
         // sidebar : board : console, boleh disesuaikan
-        ui->mainSplitter->setSizes({220, 780, 350});
+        ui->mainSplitter->setSizes({180, 820, 350});
     });
 
     // Sambungkan input teks dari panel konsol kanan

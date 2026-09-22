@@ -147,13 +147,13 @@ border-bottom: 1px solid #d3d8d5;
          <widget class="QWidget" name="sidebarPanel" native="true">
           <property name="minimumSize">
            <size>
-            <width>180</width>
+            <width>150</width>
             <height>0</height>
            </size>
           </property>
           <property name="maximumSize">
            <size>
-            <width>320</width>
+            <width>240</width>
             <height>16777215</height>
            </size>
           </property>

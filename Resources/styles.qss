@@ -196,9 +196,10 @@ QListWidget#projectList {
 
 QListWidget#projectList::item {
     color: #3d3730;
-    padding: 7px 10px;
+    padding: 5px 8px;
     border-radius: 5px;
     margin-bottom: 2px;
+    font-size: 12px;
 }
 
 QListWidget#projectList::item:hover {
