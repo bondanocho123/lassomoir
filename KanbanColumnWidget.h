@@ -9,6 +9,7 @@
 
 namespace Ui {
 class KanbanColumnWidget;
+class KanbanCardWidget;
 }
 
 class KanbanCardWidget;
@@ -32,6 +33,7 @@ public:
     void insertCard(int index, KanbanCardWidget *card);
     void removeCard(KanbanCardWidget *card);
     int cardCount() const;
+    QList<KanbanCardWidget *> cards() const;   // urutan atas -> bawah
 
 signals:
     // Dipancarkan saat kartu di-drop ke kolom ini
@@ -49,7 +51,7 @@ private:
     QVBoxLayout *m_cardListLayout;
 
     // Menghitung indeks baris kartu berdasarkan posisi vertikal mouse
-    int calculateInsertIndex(int dropY) const;
+    int calculateInsertIndex(int dropY, const KanbanCardWidget *exclude) const;
 };
 
 #endif // KANBANCOLUMNWIDGET_H

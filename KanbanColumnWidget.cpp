@@ -7,6 +7,7 @@
 #include <QDragMoveEvent>
 #include <QDragLeaveEvent>
 #include <QDropEvent>
+#include <QMargins>
 #include <QMimeData>
 #include <QVBoxLayout>
 
@@ -27,6 +28,11 @@ KanbanColumnWidget::KanbanColumnWidget(QWidget *parent) : QWidget(parent), ui(ne
         m_cardListLayout->setSpacing(6);
         m_cardListLayout->addStretch(1);   // spacer bawah: kartu menumpuk ke atas
     }
+
+    // Sisakan ruang di dasar kolom supaya kartu terakhir tidak pernah tertutup
+    // tombol New Task yang mengambang di pojok kanan bawah swimlane.
+    const QMargins margins = m_cardListLayout->contentsMargins();
+    m_cardListLayout->setContentsMargins(margins.left(), margins.top(), margins.right(), 56);
 }
 
 KanbanColumnWidget::~KanbanColumnWidget() {
@@ -70,24 +76,38 @@ int KanbanColumnWidget::cardCount() const {
     return count;
 }
 
-int KanbanColumnWidget::calculateInsertIndex(int dropY) const {
+QList<KanbanCardWidget *> KanbanColumnWidget::cards() const {
+    QList<KanbanCardWidget *> result;
+    if (!m_cardListLayout) return result;
+    for (int i = 0; i < m_cardListLayout->count(); i++){
+        if (auto *card = qobject_cast<KanbanCardWidget*>(m_cardListLayout->itemAt(i)->widget())){
+            result.append(card);
+        }
+    }
+    return result;
+}
+
+int KanbanColumnWidget::calculateInsertIndex(int dropY, const KanbanCardWidget *exclude) const {
     if (!m_cardListLayout) return 0;
 
     int insertIdx = 0;
     for (int i = 0; i < m_cardListLayout->count(); i++){
         QWidget *widget = m_cardListLayout->itemAt(i)->widget();
         auto *card = qobject_cast<KanbanCardWidget*>(widget);
-        if (!card) continue;
+        // if (!card) continue;
+        if (!card || card == exclude) continue;
 
         //Map posisi Y kartu ke koordinat lokal kolom
         QPoint cardPosInColumn = card->mapTo(this, QPoint(0,0));
         int cardMiddleY = cardPosInColumn.y() + (card->height() / 2);
 
         if (dropY < cardMiddleY) {
-            return i;
+            // return i;
+            return insertIdx;
         }
 
-        insertIdx = i + 1;
+        // insertIdx = i + 1;
+        insertIdx++;
     }
     return insertIdx;
 }
@@ -120,7 +140,7 @@ void KanbanColumnWidget::dropEvent(QDropEvent *event){
 
     auto *draggedCard = reinterpret_cast<KanbanCardWidget*>(ptr);
     if (draggedCard){
-        int targetIndex = calculateInsertIndex(event->position().toPoint().y());
+        int targetIndex = calculateInsertIndex(event->position().toPoint().y(), draggedCard);
 
         //Pindahkan kartu ke layout kolom ini
         insertCard(targetIndex, draggedCard);

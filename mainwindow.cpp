@@ -1,28 +1,53 @@
 #include "MainWindow.h"
 #include "ui_MainWindow.h"
 #include "SwimlaneWidget.h"
+#include "KanbanColumnWidget.h"
 #include "KanbanCardWidget.h"
+#include "TaskItem.h"
 #include "ConsolePanelWidget.h"
 #include "FileManager.h"
 
 #include <QInputDialog>
 #include <QDateTime>
-#include <QVBoxLayout>
+#include <QListWidget>
+#include <QListWidgetItem>
+#include <QSignalBlocker>
+#include <QSplitter>
+#include <QStackedWidget>
 #include <QTimer>
+#include <QDir>
+#include <QPixmap>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent),
     ui(new Ui::MainWindow) {
     m_fileManager = new FileManager(this);
     ui->setupUi(this);
+
+    // Logo menggantikan teks aplikasi di header
+    QPixmap logo(":/logo.png");
+    if (!logo.isNull()) {
+        ui->labelAppName->setPixmap(
+            logo.scaledToHeight(32, Qt::SmoothTransformation));
+        ui->labelAppName->setToolTip("L'Assomoir");
+    }
     ui->rootVerticalLayout->setStretch(1,1);
     QTimer::singleShot(0, this, [this]() {
-        ui->mainSplitter->setSizes({1000, 350}); // swimlanes : console, boleh disesuaikan
+        // sidebar : board : console, boleh disesuaikan
+        ui->mainSplitter->setSizes({220, 780, 350});
     });
 
     // Sambungkan input teks dari panel konsol kanan
     connect(ui->consolePanel, &ConsolePanelWidget::commandSubmitted,
             this, &MainWindow::handleCommandSubmitted);
+
+    // Pemilihan project di sidebar menentukan apa yang tampil di board
+    connect(ui->projectList, &QListWidget::currentItemChanged,
+            this, &MainWindow::handleProjectSelected);
+
+    // Tombol hamburger untuk menciutkan / melebarkan sidebar
+    connect(ui->btnToggleSidebar, &QPushButton::clicked,
+            this, &MainWindow::toggleSidebar);
 
     // Tombol global New Project di top bar
     connect(ui->btnGlobalNewProject, &QPushButton::clicked, this, [this]() {
@@ -31,12 +56,67 @@ MainWindow::MainWindow(QWidget *parent)
                                                     "Project Name / Target:",
                                                     QLineEdit::Normal, "", &ok);
         if (ok && !projectName.trimmed().isEmpty()) {
-            addSwimlane(projectName.trimmed());
-            ui->consolePanel->appendLog("[SYSTEM] Project swimlane baru dibuat: " + projectName.trimmed());
+            QString projectId = projectName.trimmed();
+
+            if (m_swimlanes.contains(projectId)){
+                ui->consolePanel->appendLog("[SYSTEM] Project '" + projectId + "' sudah ada.");
+                setActiveProject(projectId);
+                return;
+            }
+
+            addSwimlane(projectId);
+            m_fileManager->scheduleSave(projectId, collectTasksForProject(projectId));
+
+            // Project baru langsung ditampilkan di board
+            setActiveProject(projectId);
+            ui->consolePanel->appendLog("[SYSTEM] Project swimlane baru dibuat: " + projectId);
         }
     });
 
-    loadInitialMockData();
+    // Prioritaskan data tersimpan; mock hanya dipakai bila belum ada project di disk
+    if (loadProjectsFromDisk() == 0) {
+        loadInitialMockData();
+    }
+
+    // Fokus ke project pertama; bila belum ada project, tampilkan empty state
+    if (ui->projectList->count() > 0) {
+        ui->projectList->setCurrentRow(0);
+    } else {
+        ui->boardStack->setCurrentIndex(0);
+    }
+}
+
+int MainWindow::loadProjectsFromDisk() {
+    const QStringList projectIds = m_fileManager->listProjectIds();
+
+    for (const QString &projectId : projectIds) {
+        QString error;
+        const QList<TaskItem> tasks = m_fileManager->loadTasks(projectId, &error);
+        if (!error.isEmpty()) {
+            ui->consolePanel->appendLog(QString("[LOAD WARN] %1: %2").arg(projectId, error));
+        }
+
+        addSwimlane(projectId);
+        auto *swimlane = m_swimlanes.value(projectId, nullptr);
+        if (!swimlane) continue;
+
+        for (const TaskItem &task : tasks) {
+            if (!swimlane->column(task.stage)) {
+                ui->consolePanel->appendLog(QString("[LOAD WARN] %1: stage '%2' tidak dikenal, task '%3' dilewati")
+                                                .arg(projectId, task.stage, task.title));
+                continue;
+            }
+            auto *card = new KanbanCardWidget(swimlane);
+            card->setCardData(task.id, task.category, task.title, task.subtext, task.badge);
+            swimlane->addCardToStage(task.stage, card);
+        }
+    }
+
+    if (!projectIds.isEmpty()) {
+        ui->consolePanel->appendLog("--- SYSTEM INITIALIZED ---");
+        ui->consolePanel->appendLog("Projects loaded: " + projectIds.join(", "));
+    }
+    return projectIds.size();
 }
 
 MainWindow::~MainWindow() {
@@ -46,27 +126,75 @@ MainWindow::~MainWindow() {
 void MainWindow::addSwimlane(const QString &projectId) {
     if (m_swimlanes.contains(projectId)) return;
 
-    auto *swimlane = new SwimlaneWidget(projectId, ui->scrollAreaWidgetContents);
+    auto *swimlane = new SwimlaneWidget(projectId, this);
 
     // Tangkap interaksi dari swimlane
     connect(swimlane, &SwimlaneWidget::cardMoved, this, &MainWindow::handleCardMoved);
     connect(swimlane, &SwimlaneWidget::newTaskRequested, this, &MainWindow::handleNewTaskRequested);
-    connect(swimlane, &SwimlaneWidget::closeProjectRequested, this, [this](const QString &projId) {
-        if (m_swimlanes.contains(projId)) {
-            auto *widget = m_swimlanes.take(projId);
-            widget->deleteLater();
-            ui->consolePanel->appendLog(QString("[SYSTEM] Swimlane '%1' ditutup.").arg(projId));
-        }
-    });
+    connect(swimlane, &SwimlaneWidget::closeProjectRequested, this, &MainWindow::handleCloseProjectRequested);
 
-    // Sisipkan widget swimlane tepat di atas vertical spacer paling bawah
-    auto *layout = qobject_cast<QVBoxLayout*>(ui->scrollAreaWidgetContents->layout());
-    if (layout) {
-        int insertPos = qMax(0, layout->count() - 1);
-        layout->insertWidget(insertPos, swimlane);
-    }
+    // Board hanya menampilkan satu project; sisanya menganggur di dalam stack
+    ui->boardStack->addWidget(swimlane);
+
+    // Daftarkan project ke sidebar
+    auto *item = new QListWidgetItem(projectId, ui->projectList);
+    item->setData(Qt::UserRole, projectId);
 
     m_swimlanes.insert(projectId, swimlane);
+}
+
+int MainWindow::findProjectRow(const QString &projectId) const {
+    for (int row = 0; row < ui->projectList->count(); ++row) {
+        if (ui->projectList->item(row)->data(Qt::UserRole).toString() == projectId) {
+            return row;
+        }
+    }
+    return -1;
+}
+
+void MainWindow::setActiveProject(const QString &projectId) {
+    auto *swimlane = m_swimlanes.value(projectId, nullptr);
+    if (!swimlane) {
+        m_activeProjectId.clear();
+        ui->boardStack->setCurrentIndex(0);
+        return;
+    }
+
+    m_activeProjectId = projectId;
+    ui->boardStack->setCurrentWidget(swimlane);
+
+    // Jaga sidebar tetap sinkron bila pemanggilan datang dari luar daftar
+    const int row = findProjectRow(projectId);
+    if (row >= 0 && ui->projectList->currentRow() != row) {
+        QSignalBlocker blocker(ui->projectList);
+        ui->projectList->setCurrentRow(row);
+    }
+}
+
+void MainWindow::handleProjectSelected(QListWidgetItem *current, QListWidgetItem *previous) {
+    Q_UNUSED(previous)
+
+    if (!current) {
+        m_activeProjectId.clear();
+        ui->boardStack->setCurrentIndex(0);
+        return;
+    }
+
+    setActiveProject(current->data(Qt::UserRole).toString());
+}
+
+void MainWindow::toggleSidebar() {
+    if (ui->sidebarPanel->isVisible()) {
+        // Simpan lebar sebelum disembunyikan agar bisa dipulihkan persis
+        m_savedSplitterSizes = ui->mainSplitter->sizes();
+        ui->sidebarPanel->setVisible(false);
+        return;
+    }
+
+    ui->sidebarPanel->setVisible(true);
+    if (m_savedSplitterSizes.size() == ui->mainSplitter->count()) {
+        ui->mainSplitter->setSizes(m_savedSplitterSizes);
+    }
 }
 
 void MainWindow::handleCardMoved(const QString &projectId, KanbanCardWidget *card, const QString &targetStage, int targetIndex) {
@@ -74,6 +202,7 @@ void MainWindow::handleCardMoved(const QString &projectId, KanbanCardWidget *car
     QString logEntry = QString("[%1] [%2] '%3' moved to %4 (index %5)")
                            .arg(timeStr, projectId, card->title(), targetStage)
                            .arg(targetIndex);
+    m_fileManager->scheduleSave(projectId, collectTasksForProject(projectId));
 
     ui->consolePanel->appendLog(logEntry);
 }
@@ -95,9 +224,40 @@ void MainWindow::handleNewTaskRequested(const QString &projectId) {
             // Masukkan ke kolom pertama: WAITING
             swimlane->addCardToStage("WAITING", card);
 
+            // Task baru ikut dipersistenkan; tanpa ini kartu hilang saat aplikasi ditutup
+            m_fileManager->scheduleSave(projectId, collectTasksForProject(projectId));
+
             ui->consolePanel->appendLog(QString("[TASK CREATED] %1 -> WAITING: '%2'").arg(projectId, title.trimmed()));
         }
     }
+}
+
+void MainWindow::handleCloseProjectRequested(const QString &projectId) {
+    auto *widget = m_swimlanes.value(projectId, nullptr);
+    if (!widget) return;
+
+    // Hapus baris sidebar lebih dulu: QListWidget otomatis memindahkan seleksi
+    // ke baris tetangga, dan handleProjectSelected() yang menukar halaman board.
+    const int row = findProjectRow(projectId);
+    if (row >= 0) {
+        delete ui->projectList->takeItem(row);
+    }
+
+    m_swimlanes.remove(projectId);
+    ui->boardStack->removeWidget(widget);
+    widget->deleteLater();
+
+    // Pengaman bila seleksi tidak ikut berpindah (mis. yang ditutup bukan project aktif)
+    if (m_activeProjectId == projectId) {
+        if (ui->projectList->count() > 0) {
+            ui->projectList->setCurrentRow(0);
+        } else {
+            m_activeProjectId.clear();
+            ui->boardStack->setCurrentIndex(0);
+        }
+    }
+
+    ui->consolePanel->appendLog(QString("[SYSTEM] Swimlane '%1' ditutup.").arg(projectId));
 }
 
 void MainWindow::handleCommandSubmitted(const QString &command) {
@@ -109,47 +269,30 @@ void MainWindow::handleCommandSubmitted(const QString &command) {
 }
 
 void MainWindow::loadInitialMockData() {
-    // 1. Swimlane TTT
-    addSwimlane("TTT");
-    auto *card1 = new KanbanCardWidget(this);
-    card1->setCardData("task-1", "component", "unbeatable-ai", "12s 53ms | 107k", "✓ 1");
-    card1->setFixedWidth(250);
-    m_swimlanes["TTT"]->addCardToStage("CODER", card1);
-
-    auto *card2 = new KanbanCardWidget(this);
-    card2->setCardData("task-2", "component", "one-chance", "waiting in queue", "✓ 1");
-    m_swimlanes["TTT"]->addCardToStage("CODER", card2);
-
-    auto *card3 = new KanbanCardWidget(this);
-    card3->setCardData("task-3", "component", "game-core", "run CRAP, DRY, coverage, and tests.", "✓ 2");
-    m_swimlanes["TTT"]->addCardToStage("CLEANER", card3);
-
-    // 2. Swimlane spacewar
-    addSwimlane("spacewar");
-    auto *card4 = new KanbanCardWidget(this);
-    card4->setCardData("task-4", "utility", "geometry-epoc...", "waiting", "✓ 0");
-    m_swimlanes["spacewar"]->addCardToStage("WAITING", card4);
-
-    auto *card5 = new KanbanCardWidget(this);
-    card5->setCardData("task-5", "utility", "shot-acquisition", "waiting", "✓ 0");
-    m_swimlanes["spacewar"]->addCardToStage("WAITING", card5);
-
-    auto *card6 = new KanbanCardWidget(this);
-    card6->setCardData("task-6", "utility", "epoch-distance-memo", "02s 54ms | 354k", "✓ 0");
-    m_swimlanes["spacewar"]->addCardToStage("CODER", card6);
-
-    auto *card7 = new KanbanCardWidget(this);
-    card7->setCardData("task-7", "utility", "entity-identity", "completed", "✓ 2");
-    m_swimlanes["spacewar"]->addCardToStage("DONE", card7);
-
     // Log awal konsol
     ui->consolePanel->appendLog("--- SYSTEM INITIALIZED ---");
-    ui->consolePanel->appendLog("Projects loaded: TTT, spacewar");
+    ui->consolePanel->appendLog("Belum ada project. Klik \"New Project\" untuk memulai.");
     ui->consolePanel->appendLog("Ready for instructions.");
 }
 
-QMap<QString, TaskItem> MainWindow::collectTasksForProject(const QString &projectId){
-    QMap<QString, TaskItem> result;
+QMap<QString, TaskItem> MainWindow::collectTasksForProject(const QString &projectId) const {
+    QMap<QString, TaskItem> tasks;
+    auto *swimlane = m_swimlanes.value(projectId, nullptr);
+    if (!swimlane) return tasks;
 
-    return result;
+    for (KanbanColumnWidget *column : swimlane->columns()) {
+        for (KanbanCardWidget *card : column->cards()) {
+            TaskItem item;
+            item.id = card->id();
+            item.projectId = projectId;
+            item.stage = column->stageName();
+            item.category = card->category();
+            item.title = card->title();
+            item.subtext = card->subtext();
+            item.badge = card->badge();
+            tasks.insert(item.id, item);
+        }
+    }
+
+    return tasks;
 }

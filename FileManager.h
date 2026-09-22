@@ -5,6 +5,7 @@
 #include "TaskItem.h"
 
 #include <QString>
+#include <QStringList>
 #include <QList>
 #include <QMap>
 #include <QSet>
@@ -21,11 +22,14 @@ public:
 
     QString projectFilePath(const QString &projectId);
 
+    // Daftar projectId = nama subfolder di <AppData>/projects yang punya session.json
+    QStringList listProjectIds();
+
     QList<TaskItem> loadTasks(const QString &projectId, QString *error);
 
     bool saveTasks(const QString &projectId, const QMap<QString, TaskItem> tasks, QString *error);
 
-    void scheduleSave(const QString &projectId, QMap<QString, TaskItem> &tasks);
+    void scheduleSave(const QString &projectId, const QMap<QString, TaskItem> &tasks);
 
     void flushPendingSaves();
 

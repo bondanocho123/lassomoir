@@ -1,6 +1,7 @@
 #include "FileManager.h"
 
 
+#include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -20,9 +21,14 @@ FileManager::FileManager(QObject *parent) :
     m_schemaVersion(1),
     m_saveTimer(new QTimer(this))
 {
+    m_saveTimer->setSingleShot(true);
+
     connect(m_saveTimer, &QTimer::timeout, this, [this]{
         for (auto it = m_pendingSaves.constBegin(); it != m_pendingSaves.constEnd(); ++it) {
-            saveTasks(it.key(), it.value(), nullptr);
+            QString error;
+            if (!saveTasks(it.key(), it.value(), &error)) {
+                qWarning() << "[FileManager] Gagal menyimpan proyek" << it.key() << ":" << error;
+            }
         }
 
         m_pendingSaves.clear();
@@ -32,6 +38,18 @@ FileManager::FileManager(QObject *parent) :
 
 QString FileManager::projectFilePath(const QString &projectId) {
     return QStringLiteral("%1/projects/%2/session.json").arg(m_basePath, projectId);
+}
+
+QStringList FileManager::listProjectIds() {
+    QStringList ids;
+    const QDir projectsDir(QStringLiteral("%1/projects").arg(m_basePath));
+    const QStringList dirs = projectsDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+    for (const QString &dirName : dirs) {
+        if (QFile::exists(projectFilePath(dirName))) {
+            ids.append(dirName);
+        }
+    }
+    return ids;
 }
 
 QList<TaskItem> FileManager::loadTasks(const QString &projectId, QString *error){
@@ -91,6 +109,27 @@ bool FileManager::saveTasks(const QString &projectId, const QMap<QString, TaskIt
     for(const TaskItem &task : tasks){
         taskArray.append(taskToJson(task));
     }
+
+    QJsonObject root;
+    root[QStringLiteral("schemaVersion")] = m_schemaVersion;
+    root[QStringLiteral("projectId")] = projectId;
+    root[QStringLiteral("tasks")] = taskArray;
+
+    const QString path = projectFilePath(projectId);
+
+    // Pastikan folder projects/<projectId>/ ada sebelum menulis
+    const QString dirPath = QFileInfo(path).absolutePath();
+    if (!QDir().mkpath(dirPath)){
+        if (error) *error = QStringLiteral("Tidak bisa membuat folder sesi: %1").arg(dirPath);
+        return false;
+    }
+
+    if (!writeAtomic(path, QJsonDocument(root).toJson(QJsonDocument::Indented))){
+        if (error) *error = QStringLiteral("Gagal menulis file sesi: %1").arg(path);
+        return false;
+    }
+
+    return true;
 }
 
 QJsonObject FileManager::taskToJson(TaskItem task){
@@ -102,6 +141,8 @@ QJsonObject FileManager::taskToJson(TaskItem task){
     obj[QStringLiteral("title")] = task.title;
     obj[QStringLiteral("subtext")] = task.subtext;
     obj[QStringLiteral("badge")] = task.badge;
+
+    return obj;
 }
 
 TaskItem FileManager::taskFromJson(QJsonObject obj, QString *error){
@@ -132,4 +173,10 @@ bool FileManager::writeAtomic(const QString &path, const QByteArray &data){
 
     file.write(data);
     return file.commit();
+}
+
+void FileManager::scheduleSave(const QString &projectId, const QMap<QString, TaskItem> &tasks){
+    m_pendingSaves[projectId] = tasks;
+    m_pendingProjects.insert(projectId);
+    m_saveTimer->start(kSaveDebounceMs);
 }

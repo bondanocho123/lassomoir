@@ -79,14 +79,15 @@ QLabel#labelStageTitle {
     letter-spacing: 0.5px;
 }
 
-/* Tombol Header Swimlane - "New Task" (coklat primer solid) */
+/* Tombol "New Task" mengambang (FAB) di pojok kanan bawah swimlane.
+   Ukuran 52x52 diset di SwimlaneWidget.cpp; radius 26 membuatnya bulat penuh. */
 QPushButton#btnNewTask {
     background-color: #a9743f;
     color: #ffffff;
-    border: none;
-    border-radius: 4px;
-    padding: 4px 10px;
-    font-size: 11px;
+    border: 2px solid #f7f9f8;
+    border-radius: 26px;
+    padding: 0;
+    font-size: 24px;
     font-weight: bold;
 }
 
@@ -143,4 +144,91 @@ QScrollBar::sub-line:vertical {
 QScrollBar::add-page:vertical,
 QScrollBar::sub-page:vertical {
     background: transparent;
+}
+
+QScrollBar:horizontal {
+    background: transparent;
+    height: 8px;
+    margin: 0 2px 2px 2px;
+}
+
+QScrollBar::handle:horizontal {
+    background: #dccbb4;
+    border-radius: 4px;
+    min-width: 24px;
+}
+
+QScrollBar::handle:horizontal:hover {
+    background: #a9743f;
+}
+
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal {
+    width: 0;
+}
+
+QScrollBar::add-page:horizontal,
+QScrollBar::sub-page:horizontal {
+    background: transparent;
+}
+
+/* ============ Sidebar daftar project ============ */
+
+QWidget#sidebarPanel {
+    background-color: #f7f9f8;
+    border: 1px solid #d3d8d5;
+    border-radius: 8px;
+}
+
+QLabel#labelSidebarTitle {
+    font-size: 10px;
+    font-weight: bold;
+    color: #a9743f;
+    letter-spacing: 0.5px;
+    padding: 2px 4px;
+}
+
+QListWidget#projectList {
+    background: transparent;
+    border: none;
+    outline: none;
+}
+
+QListWidget#projectList::item {
+    color: #3d3730;
+    padding: 7px 10px;
+    border-radius: 5px;
+    margin-bottom: 2px;
+}
+
+QListWidget#projectList::item:hover {
+    background-color: #f2e3d1;
+    color: #8a5a2f;
+}
+
+/* Kedua state dipakai agar project terpilih tetap coklat walau daftar kehilangan fokus */
+QListWidget#projectList::item:selected,
+QListWidget#projectList::item:selected:!active {
+    background-color: #a9743f;
+    color: #ffffff;
+    font-weight: bold;
+}
+
+/* Tombol hamburger pengendali sidebar di top bar */
+QPushButton#btnToggleSidebar {
+    background: transparent;
+    border: none;
+    color: #3d3730;
+    font-size: 16px;
+    padding: 2px 4px;
+}
+
+QPushButton#btnToggleSidebar:hover {
+    color: #a9743f;
+}
+
+/* Pesan saat belum ada project yang dipilih */
+QLabel#labelEmptyState {
+    color: #8a7f70;
+    font-size: 12px;
 }
