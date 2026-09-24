@@ -501,14 +501,16 @@ QLabel#drawerMetrics {
     color: #6f6557;
 }
 
-QPushButton#btnDrawerClose {
+QPushButton#btnDrawerClose,
+QPushButton#btnDrawerExpand {
     background: transparent;
     border: none;
     color: #6f6557;
     font-size: 14px;
 }
 
-QPushButton#btnDrawerClose:hover {
+QPushButton#btnDrawerClose:hover,
+QPushButton#btnDrawerExpand:hover {
     background-color: #f1e8da;
     border-radius: 4px;
 }

@@ -38,7 +38,13 @@ void SplitterPaneAnimator::close() {
     }
 
     const int start = m_splitter->sizes().value(m_index);
-    if (!m_animation) {
+    if (m_expanded) {
+        // Pane lain muncul lagi selagi drawer menciut; yang diingat lebar sebelum expand
+        m_lastWidth = m_restoreWidth;
+        m_expanded = false;
+        squeezeOtherPane(start);
+        emit expandedChanged(false);
+    } else if (!m_animation) {
         // Ingat lebar hasil geseran pengguna untuk pembukaan berikutnya
         m_lastWidth = start;
     }
@@ -48,8 +54,27 @@ void SplitterPaneAnimator::close() {
     animate(start, 0);
 }
 
+void SplitterPaneAnimator::setExpanded(bool expanded) {
+    QWidget *pane = m_splitter->widget(m_index);
+    if (expanded == m_expanded || !m_open || !pane->isVisible()) {
+        return;
+    }
+
+    const int start = m_splitter->sizes().value(m_index);
+    if (expanded) {
+        // Tombol bisa ditekan selagi drawer masih membuka: lebar tujuannya yang diingat
+        m_restoreWidth = m_animation ? m_animationTarget : start;
+    }
+    m_expanded = expanded;
+    squeezeOtherPane(start);
+    animate(start, expanded ? availableWidth() : m_restoreWidth);
+    emit expandedChanged(expanded);
+}
+
 void SplitterPaneAnimator::animate(int from, int to) {
     if (m_animation) {
+        // Putuskan dulu supaya penutup animasi lama tidak berjalan dengan keadaan yang baru
+        m_animation->disconnect(this);
         m_animation->stop();
     }
 
@@ -58,6 +83,7 @@ void SplitterPaneAnimator::animate(int from, int to) {
     animation->setEndValue(to);
     animation->setDuration(200);
     animation->setEasingCurve(QEasingCurve::OutCubic);
+    m_animationTarget = to;
 
     connect(animation, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
         const int width = value.toInt();
@@ -71,6 +97,14 @@ void SplitterPaneAnimator::animate(int from, int to) {
         if (!m_open) {
             pane->hide();
         }
+        if (m_squeezeOther) {
+            QWidget *other = m_splitter->widget(m_index == 0 ? 1 : 0);
+            if (m_expanded) {
+                other->hide();
+            }
+            other->setMaximumWidth(QWIDGETSIZE_MAX);
+            m_squeezeOther = false;
+        }
         pane->setMaximumWidth(QWIDGETSIZE_MAX);
         pane->setMinimumWidth(m_minimumWidth);
     });
@@ -80,6 +114,10 @@ void SplitterPaneAnimator::animate(int from, int to) {
 }
 
 void SplitterPaneAnimator::setPaneWidth(int width) {
+    if (m_squeezeOther) {
+        squeezeOtherPane(width);
+    }
+
     QList<int> sizes = m_splitter->sizes();
     if (m_index >= sizes.size()) {
         return;
@@ -95,4 +133,18 @@ void SplitterPaneAnimator::setPaneWidth(int width) {
         sizes[other] = qMax(0, total - width);
     }
     m_splitter->setSizes(sizes);
+}
+
+void SplitterPaneAnimator::squeezeOtherPane(int paneWidth) {
+    QWidget *other = m_splitter->widget(m_index == 0 ? 1 : 0);
+    if (!other) {
+        return;
+    }
+    other->setMaximumWidth(qMax(0, availableWidth() - paneWidth));
+    other->show();
+    m_squeezeOther = true;
+}
+
+int SplitterPaneAnimator::availableWidth() const {
+    return m_splitter->contentsRect().width() - m_splitter->handleWidth();
 }

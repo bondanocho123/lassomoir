@@ -39,8 +39,13 @@ public:
     // Satu event run yang sedang berjalan (teks, tool, stderr)
     void appendLive(const AgentEvent &event, const QString &workingDirectory);
 
+    // Sinkronkan ikon/tooltip tombol expand dengan keadaan drawer (tanpa memancarkan sinyal)
+    void setExpanded(bool expanded);
+    bool isExpanded() const { return m_expanded; }
+
 signals:
     void closeRequested();   // tombol ✕ atau Esc
+    void expandToggled(bool expanded);   // tombol expand: true = lebarkan, false = kembalikan
     void approveRequested(const QString &taskId, const QString &note);
     void revisionRequested(const QString &taskId, const QString &note);
     void sendBackRequested(const QString &taskId, const QString &stage, const QString &note);
@@ -57,9 +62,11 @@ private:
     RunState m_runState = RunState::Idle;
     QString m_nextStage;
     QString m_liveMarkdown;
+    bool m_expanded = false;
 
     QLabel *m_title;
     QLabel *m_status;
+    QPushButton *m_expand;
     QComboBox *m_runSelector;
     QLabel *m_metrics;
     MarkdownView *m_view;

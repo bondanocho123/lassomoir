@@ -97,6 +97,10 @@ MainWindow::MainWindow(const StageCatalog &catalog, TaskManager &tasks, SwarmCoo
     m_drawerAnimator = new SplitterPaneAnimator(m_boardSplitter, 1, this);
 
     connect(m_drawer, &ResponseDrawer::closeRequested, m_drawerAnimator, &SplitterPaneAnimator::close);
+    // Dua arah: tombol expand menggerakkan animator, dan animator (mis. saat drawer ditutup
+    // dari luar) mengembalikan ikon tombol
+    connect(m_drawer, &ResponseDrawer::expandToggled, m_drawerAnimator, &SplitterPaneAnimator::setExpanded);
+    connect(m_drawerAnimator, &SplitterPaneAnimator::expandedChanged, m_drawer, &ResponseDrawer::setExpanded);
     connect(m_drawer, &ResponseDrawer::approveRequested, this, &MainWindow::handleApproveRequested);
     connect(m_drawer, &ResponseDrawer::revisionRequested, this, &MainWindow::handleRevisionRequested);
     connect(m_drawer, &ResponseDrawer::sendBackRequested, this, &MainWindow::handleSendBackRequested);

@@ -5,6 +5,7 @@
 #include <QComboBox>
 #include <QHBoxLayout>
 #include <QHash>
+#include <QIcon>
 #include <QLabel>
 #include <QPlainTextEdit>
 #include <QPushButton>
@@ -59,6 +60,17 @@ ResponseDrawer::ResponseDrawer(MermaidRenderer *renderer, QWidget *parent)
     m_status = new QLabel(this);
     m_status->setObjectName("drawerStatus");
 
+    m_expand = new QPushButton(this);
+    m_expand->setObjectName("btnDrawerExpand");
+    m_expand->setCursor(Qt::PointingHandCursor);
+    m_expand->setFixedSize(26, 26);
+    m_expand->setIconSize(QSize(14, 14));
+    connect(m_expand, &QPushButton::clicked, this, [this]() {
+        setExpanded(!m_expanded);
+        emit expandToggled(m_expanded);
+    });
+    setExpanded(false);
+
     auto *btnClose = new QPushButton(QStringLiteral("✕"), this);
     btnClose->setObjectName("btnDrawerClose");
     btnClose->setCursor(Qt::PointingHandCursor);
@@ -71,7 +83,9 @@ ResponseDrawer::ResponseDrawer(MermaidRenderer *renderer, QWidget *parent)
     titleBox->addWidget(m_title);
     titleBox->addWidget(m_status);
     auto *header = new QHBoxLayout();
+    header->setSpacing(2);
     header->addLayout(titleBox, 1);
+    header->addWidget(m_expand, 0, Qt::AlignTop);
     header->addWidget(btnClose, 0, Qt::AlignTop);
 
     m_runSelector = new QComboBox(this);
@@ -168,6 +182,12 @@ ResponseDrawer::ResponseDrawer(MermaidRenderer *renderer, QWidget *parent)
     connect(escape, &QShortcut::activated, this, &ResponseDrawer::closeRequested);
 
     m_reviewPanel->hide();
+}
+
+void ResponseDrawer::setExpanded(bool expanded) {
+    m_expanded = expanded;
+    m_expand->setIcon(QIcon(expanded ? QStringLiteral(":/icons/collapse.svg") : QStringLiteral(":/icons/expand.svg")));
+    m_expand->setToolTip(expanded ? QStringLiteral("Kembalikan ukuran") : QStringLiteral("Perluas"));
 }
 
 void ResponseDrawer::showTask(const TaskItem &task, RunState runState, const QString &nextStage,

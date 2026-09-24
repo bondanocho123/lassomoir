@@ -35,3 +35,5 @@ Kalau tetap pakai akun gratis, catat sumber tiap ikon di sini supaya nggak lupa 
 | `run.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
 | `stop.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
 | `review.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
+| `expand.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
+| `collapse.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |

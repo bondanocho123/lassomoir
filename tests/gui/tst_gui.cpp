@@ -24,6 +24,7 @@
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QSplitter>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTextBrowser>
@@ -95,6 +96,7 @@ private slots:
     void revisionRerunsWithPreviousDocument();
     void dragPastGateIsRejected();
     void drawerShowsLiveOutput();
+    void drawerExpandFillsBoardAndRestores();
     void reviewSurvivesRestart();
     void markdownViewRendersMermaid();
 
@@ -504,6 +506,55 @@ void TestGui::drawerShowsLiveOutput() {
     QVERIFY(selector->currentText().startsWith(QStringLiteral("SPECIFIER #1")));
     QVERIFY(view->toPlainText().contains(QStringLiteral("Spesifikasi final")));
     QVERIFY(!panel->findChild<QWidget *>(QStringLiteral("drawerReviewPanel"))->isHidden());
+}
+
+void TestGui::drawerExpandFillsBoardAndRestores() {
+    finishSpecifierRun(QStringLiteral("# Spek"));
+    runButton(QStringLiteral("t3"))->click();   // 📋 membuka drawer
+
+    ResponseDrawer *panel = drawer();
+    auto *splitter = m_window->findChild<QSplitter *>(QStringLiteral("boardSplitter"));
+    auto *expand = panel->findChild<QPushButton *>(QStringLiteral("btnDrawerExpand"));
+    auto *close = panel->findChild<QPushButton *>(QStringLiteral("btnDrawerClose"));
+    QVERIFY(splitter && expand && close);
+    QWidget *board = splitter->widget(0);
+    QVERIFY(!panel->isExpanded());
+    QCOMPARE(expand->toolTip(), QStringLiteral("Perluas"));
+
+    // Tunggu animasi buka selesai dan ingat lebar normalnya
+    QTest::qWait(400);
+    const int normalWidth = panel->width();
+    QVERIFY(normalWidth >= 360 && normalWidth < splitter->width());
+
+    // Expand: drawer memenuhi splitter, board tersembunyi, ikon jadi "kembalikan"
+    expand->click();
+    QVERIFY(panel->isExpanded());
+    QCOMPARE(expand->toolTip(), QStringLiteral("Kembalikan ukuran"));
+    QTRY_VERIFY(board->isHidden());
+    QTRY_COMPARE(panel->width(), splitter->width());
+
+    // Klik lagi: board muncul, drawer kembali ke lebar semula
+    expand->click();
+    QVERIFY(!panel->isExpanded());
+    QCOMPARE(expand->toolTip(), QStringLiteral("Perluas"));
+    QTRY_VERIFY(!board->isHidden());
+    QTRY_VERIFY(qAbs(panel->width() - normalWidth) <= 2);
+
+    // Ditutup saat sedang expand: board kembali, tombol kembali ke ikon "perluas",
+    // dan pembukaan berikutnya memakai lebar sebelum expand (bukan lebar penuh)
+    expand->click();
+    QTRY_VERIFY(board->isHidden());
+    close->click();
+    QTRY_VERIFY(panel->isHidden());
+    QVERIFY(!board->isHidden());
+    QVERIFY(!panel->isExpanded());
+    QCOMPARE(expand->toolTip(), QStringLiteral("Perluas"));
+
+    runButton(QStringLiteral("t3"))->click();
+    QVERIFY(!panel->isHidden());
+    QTest::qWait(400);
+    QVERIFY(!board->isHidden());
+    QVERIFY(qAbs(panel->width() - normalWidth) <= 2);
 }
 
 void TestGui::reviewSurvivesRestart() {
