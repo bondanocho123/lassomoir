@@ -134,6 +134,9 @@ int MainWindow::loadProjectsFromDisk() {
             }
             auto *card = new KanbanCardWidget(swimlane);
             card->setCardData(task.id, task.category, task.title, task.subtext, task.badge);
+            connect(card, &KanbanCardWidget::runRequested, this, [this](const QString &cardId) {
+                ui->consolePanel->appendLog("[SYSTEM] Run task: " + cardId);
+            });
             swimlane->addCardToStage(task.stage, card);
         }
     }
@@ -460,6 +463,9 @@ void MainWindow::handleNewTaskRequested(const QString &projectId) {
 
     auto *card = new KanbanCardWidget(swimlane);
     card->setCardData(item.id, item.category, item.title, item.subtext, item.badge);
+    connect(card, &KanbanCardWidget::runRequested, this, [this](const QString &cardId) {
+        ui->consolePanel->appendLog("[SYSTEM] Run task: " + cardId);
+    });
     swimlane->addCardToStage(item.stage, card);
 
     // Task baru ikut dipersistenkan; tanpa ini kartu hilang saat aplikasi ditutup

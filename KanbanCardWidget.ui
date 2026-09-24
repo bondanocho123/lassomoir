@@ -48,10 +48,39 @@
         </property>
        </spacer>
       </item>
-      <item row="1" column="0" colspan="3">
+      <item row="1" column="0" colspan="4">
        <widget class="QLabel" name="labelTitle">
         <property name="text">
          <string>Rancang ulang halaman login</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="3">
+       <widget class="QPushButton" name="btnCardRun">
+        <property name="maximumSize">
+         <size>
+          <width>22</width>
+          <height>22</height>
+         </size>
+        </property>
+        <property name="cursor">
+         <cursorShape>PointingHandCursor</cursorShape>
+        </property>
+        <property name="toolTip">
+         <string>Run task</string>
+        </property>
+        <property name="text">
+         <string/>
+        </property>
+        <property name="icon">
+         <iconset resource="Resources/resources.qrc">
+          <normaloff>:/icons/run.svg</normaloff>:/icons/run.svg</iconset>
+        </property>
+        <property name="iconSize">
+         <size>
+          <width>14</width>
+          <height>14</height>
+         </size>
         </property>
        </widget>
       </item>
@@ -69,7 +98,7 @@
         </property>
        </widget>
       </item>
-      <item row="2" column="0" colspan="3">
+      <item row="2" column="0" colspan="4">
        <widget class="QLabel" name="labelSubtext">
         <property name="text">
          <string>PIC: Budi</string>
@@ -81,6 +110,8 @@
    </item>
   </layout>
  </widget>
- <resources/>
+ <resources>
+  <include location="Resources/resources.qrc"/>
+ </resources>
  <connections/>
 </ui>

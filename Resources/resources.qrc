@@ -6,6 +6,7 @@
         <file>icons/plus.svg</file>
         <file>icons/plus-white.svg</file>
         <file>icons/sidebar.svg</file>
+        <file>icons/run.svg</file>
         <file>icons/trash.svg</file>
         <file>icons/trash-white.svg</file>
     </qresource>

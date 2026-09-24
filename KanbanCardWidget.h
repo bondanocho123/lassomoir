@@ -32,6 +32,8 @@ public:
 
 signals:
     void cardClicked(const QString &cardId);
+    // Tombol play di pojok kanan atas kartu diklik
+    void runRequested(const QString &cardId);
 
 protected:
     //Event penanganan drag and drop

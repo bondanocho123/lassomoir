@@ -17,6 +17,10 @@ KanbanCardWidget::KanbanCardWidget(QWidget *parent) : QWidget(parent), ui(new Ui
 
     // Pastikan widget kartu menangkap event hover/klik dengan baik
     setAttribute(Qt::WA_Hover, true);
+
+    connect(ui->btnCardRun, &QPushButton::clicked, this, [this]() {
+        emit runRequested(m_id);
+    });
 }
 
 KanbanCardWidget::~KanbanCardWidget() {

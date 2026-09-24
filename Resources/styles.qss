@@ -291,6 +291,17 @@ QPushButton#btnToggleSidebar {
     padding: 2px 4px;
 }
 
+/* Tombol Run (play hijau) di pojok kanan atas kartu task */
+QPushButton#btnCardRun {
+    background: transparent;
+    border: none;
+    padding: 2px 4px;
+}
+QPushButton#btnCardRun:hover {
+    background: #e3ebe6;
+    border-radius: 4px;
+}
+
 /* Pesan saat belum ada project yang dipilih */
 QLabel#labelEmptyState {
     color: #8a7f70;
