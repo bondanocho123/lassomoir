@@ -11,12 +11,15 @@ INCLUDEPATH += ..
 SOURCES += \
     tst_swarm.cpp \
     ../ClaudeCli.cpp \
+    ../CSharpMetrics.cpp \
     ../ClaudeCodeRuntime.cpp \
+    ../CodeMetrics.cpp \
     ../EdgeMermaidRenderer.cpp \
     ../FileManager.cpp \
     ../MermaidRenderer.cpp \
     ../PromptComposer.cpp \
     ../RunLogFormatter.cpp \
+    ../SourceTokens.cpp \
     ../StageCatalog.cpp \
     ../StageProfile.cpp \
     ../StageSwarm.cpp \
@@ -24,6 +27,7 @@ SOURCES += \
     ../SwarmCoordinator.cpp \
     ../TaskManager.cpp \
     ../TransitionPolicy.cpp \
+    ../WorkspaceDiff.cpp \
     ../WorkspaceGuard.cpp
 
 HEADERS += \
@@ -32,12 +36,15 @@ HEADERS += \
     ../AgentRuntime.h \
     ../AgentTypes.h \
     ../ClaudeCli.h \
+    ../CSharpMetrics.h \
     ../ClaudeCodeRuntime.h \
+    ../CodeMetrics.h \
     ../EdgeMermaidRenderer.h \
     ../FileManager.h \
     ../MermaidRenderer.h \
     ../PromptComposer.h \
     ../RunLogFormatter.h \
+    ../SourceTokens.h \
     ../StageCatalog.h \
     ../StageProfile.h \
     ../StageSwarm.h \
@@ -46,6 +53,7 @@ HEADERS += \
     ../TaskItem.h \
     ../TaskManager.h \
     ../TransitionPolicy.h \
+    ../WorkspaceDiff.h \
     ../WorkspaceGuard.h
 
 # Prompt peran (:/prompts), mermaid.min.js (:/vendor), dan fixture stream-json (:/fixtures)

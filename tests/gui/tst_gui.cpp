@@ -1,6 +1,8 @@
+#include "CodeMetrics.h"
 #include "FakeAgentRuntime.h"
 #include "KanbanCardWidget.h"
 #include "KanbanColumnWidget.h"
+#include "MaintainabilityView.h"
 #include "MarkdownView.h"
 #include "MermaidRenderer.h"
 #include "PromptComposer.h"
@@ -9,6 +11,7 @@
 #include "SwarmCoordinator.h"
 #include "SwimlaneWidget.h"
 #include "TaskManager.h"
+#include "WorkspaceDiff.h"
 #include "mainwindow.h"
 
 #include <QApplication>
@@ -121,6 +124,7 @@ private slots:
     void reviewSurvivesRestart();
     void markdownViewRendersMermaid();
     void architectDrawerShowsCodeChanges();
+    void maintainabilityViewShowsCSharpMembers();
 
 private:
     // Dialog modal membuka event loop sendiri di dalam handler klik; timer ini jalan di loop itu
@@ -653,18 +657,22 @@ void TestGui::architectDrawerShowsCodeChanges() {
         QSKIP("git tidak ada di PATH");
     }
 
-    // Folder kerja project Demo dijadikan repository: satu file diubah, satu file baru
+    // Folder kerja project Demo dijadikan repository: dua file diubah (satu kode), satu file baru
     const QDir dir(m_workDir.path());
     auto removeRepository = qScopeGuard([dir]() {
         QDir(dir.filePath(QStringLiteral(".git"))).removeRecursively();
         QFile::remove(dir.filePath(QStringLiteral("hello.txt")));
+        QFile::remove(dir.filePath(QStringLiteral("hitung.py")));
         QFile::remove(dir.filePath(QStringLiteral("baru.txt")));
     });
     QVERIFY(runGit(dir.path(), {QStringLiteral("init"), QStringLiteral("-q")}));
     QVERIFY(writeFile(dir.filePath(QStringLiteral("hello.txt")), "a\nb\n"));
-    QVERIFY(runGit(dir.path(), {QStringLiteral("add"), QStringLiteral("hello.txt")}));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("hitung.py")), "def hitung(x):\n    return x * 2\n"));
+    QVERIFY(runGit(dir.path(), {QStringLiteral("add"), QStringLiteral("-A")}));
     QVERIFY(runGit(dir.path(), {QStringLiteral("commit"), QStringLiteral("-q"), QStringLiteral("-m"), QStringLiteral("awal")}));
     QVERIFY(writeFile(dir.filePath(QStringLiteral("hello.txt")), "a\nc\n"));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("hitung.py")),
+                      "def hitung(x):\n    if x > 1:\n        return x * 2\n    return 0\n"));
     QVERIFY(writeFile(dir.filePath(QStringLiteral("baru.txt")), "x\n"));
 
     TaskItem task;
@@ -689,25 +697,44 @@ void TestGui::architectDrawerShowsCodeChanges() {
     // git dibaca di thread pool; hasilnya menyusul
     auto *files = panel->findChild<QTreeWidget *>(QStringLiteral("diffFileList"));
     QVERIFY(files);
-    QTRY_COMPARE(files->topLevelItemCount(), 2);
-    QCOMPARE(tabs->tabText(1), QStringLiteral("Perubahan kode · 2"));
+    QTRY_COMPARE(files->topLevelItemCount(), 3);
+    QCOMPARE(tabs->tabText(1), QStringLiteral("Perubahan kode · 3"));
     QCOMPARE(files->topLevelItem(0)->text(1), QStringLiteral("baru.txt"));
     QCOMPARE(files->topLevelItem(1)->text(0), QStringLiteral("M"));
     QCOMPARE(files->topLevelItem(1)->text(1), QStringLiteral("hello.txt"));
     QCOMPARE(files->topLevelItem(1)->text(2), QStringLiteral("+1"));
     QCOMPARE(files->topLevelItem(1)->text(3), QStringLiteral("−1"));
+    QCOMPARE(files->topLevelItem(2)->text(1), QStringLiteral("hitung.py"));
     QVERIFY(panel->findChild<QLabel *>(QStringLiteral("diffSummary"))
-                ->text().startsWith(QStringLiteral("2 file berubah · +2 −1 · dibanding commit ")));
+                ->text().startsWith(QStringLiteral("3 file berubah · +5 −2 · dibanding commit ")));
     const QString diffText = panel->findChild<QPlainTextEdit *>(QStringLiteral("diffText"))->toPlainText();
     QVERIFY(diffText.contains(QStringLiteral(" M  hello.txt")));
     QVERIFY(diffText.contains(QStringLiteral("2   - b")));
     QVERIFY(diffText.contains(QStringLiteral("  2 + c")));
 
+    // Tab Maintainability: hanya file kode yang diukur; percabangan baru menurunkan skornya
+    QVERIFY(tabs->tabText(2).startsWith(QStringLiteral("Maintainability · ")));
+    auto *scores = panel->findChild<QTreeWidget *>(QStringLiteral("miFileList"));
+    QVERIFY(scores);
+    QCOMPARE(scores->topLevelItemCount(), 1);
+    QTreeWidgetItem *hitung = scores->topLevelItem(0);
+    QCOMPARE(hitung->text(0), QStringLiteral("hitung.py"));
+    QVERIFY(hitung->text(1).toInt() > hitung->text(2).toInt());
+    QVERIFY(hitung->text(3).startsWith(QStringLiteral("−")));
+    const QString score = panel->findChild<QLabel *>(QStringLiteral("miScore"))->text();
+    QCOMPARE(score, hitung->text(2));
+    QCOMPARE(tabs->tabText(2), QStringLiteral("Maintainability · %1").arg(score));
+    QVERIFY(panel->findChild<QLabel *>(QStringLiteral("miChange"))->text().startsWith(QStringLiteral("Turun ")));
+    QVERIFY(panel->findChild<QLabel *>(QStringLiteral("miLegend"))->text().contains(QStringLiteral("2 file lain tidak diukur")));
+    // Tanpa file C#, kolom DIT dan Coupling disembunyikan
+    QVERIFY(scores->isColumnHidden(5));
+    QVERIFY(scores->isColumnHidden(6));
+
     // Muat ulang membaca keadaan folder terbaru
     QVERIFY(QFile::remove(dir.filePath(QStringLiteral("baru.txt"))));
     panel->findChild<QPushButton *>(QStringLiteral("btnDiffRefresh"))->click();
-    QTRY_COMPARE(files->topLevelItemCount(), 1);
-    QCOMPARE(tabs->tabText(1), QStringLiteral("Perubahan kode · 1"));
+    QTRY_COMPARE(files->topLevelItemCount(), 2);
+    QCOMPARE(tabs->tabText(1), QStringLiteral("Perubahan kode · 2"));
 
     // Task di stage lain: tab disembunyikan, drawer kembali ke hasil agent
     finishSpecifierRun(QStringLiteral("# Spek"));
@@ -715,6 +742,79 @@ void TestGui::architectDrawerShowsCodeChanges() {
     QCOMPARE(panel->taskId(), QStringLiteral("t3"));
     QVERIFY(tabs->isHidden());
     QVERIFY(panel->findChild<QTextBrowser *>(QStringLiteral("markdownView"))->isVisible());
+}
+
+void TestGui::maintainabilityViewShowsCSharpMembers() {
+    const QString path = QStringLiteral("Services/OrderService.cs");
+    FileDiff file;
+    file.path = path;
+    file.before = CodeMetrics::measure(path, QStringLiteral(
+        "namespace Shop;\n"
+        "public class OrderService : ServiceBase\n"
+        "{\n"
+        "    public int Place(int quantity)\n"
+        "    {\n"
+        "        return quantity;\n"
+        "    }\n"
+        "\n"
+        "    public void Refund(int id) { }\n"
+        "}\n"));
+    file.after = CodeMetrics::measure(path, QStringLiteral(
+        "namespace Shop;\n"
+        "public class OrderService : ServiceBase\n"
+        "{\n"
+        "    public int Place(int quantity)\n"
+        "    {\n"
+        "        if (quantity > 100 || quantity < 0) { return 0; }\n"
+        "        return quantity > 10 ? quantity - 1 : quantity;\n"
+        "    }\n"
+        "\n"
+        "    public void Cancel(Order order) { order.Close(); }\n"
+        "\n"
+        "    public void Refund(int id, string reason) { if (reason == null) { return; } }\n"
+        "}\n"));
+    WorkspaceDiff diff;
+    diff.files = {file};
+
+    MaintainabilityView view;
+    view.showDiff(diff);
+    auto *tree = view.findChild<QTreeWidget *>(QStringLiteral("miFileList"));
+    QVERIFY(tree);
+
+    // File → tipe → member, seperti Code Metrics Visual Studio
+    QCOMPARE(tree->topLevelItemCount(), 1);
+    QTreeWidgetItem *fileItem = tree->topLevelItem(0);
+    QCOMPARE(fileItem->text(0), path);
+    QCOMPARE(fileItem->childCount(), 1);
+    QTreeWidgetItem *type = fileItem->child(0);
+    QCOMPARE(type->text(0), QStringLiteral("OrderService"));
+    QCOMPARE(type->text(5), QStringLiteral("≥2"));   // ServiceBase tidak ada di diff ini
+    QCOMPARE(type->childCount(), 3);
+
+    QTreeWidgetItem *place = type->child(0);
+    QCOMPARE(place->text(0), QStringLiteral("Place(int)"));
+    QVERIFY(place->text(1).toInt() > place->text(2).toInt());
+    QVERIFY(place->text(3).startsWith(QStringLiteral("−")));
+    QCOMPARE(place->text(4), QStringLiteral("4"));
+    QVERIFY(place->text(5).isEmpty());   // DIT hanya untuk tipe
+
+    QTreeWidgetItem *cancel = type->child(1);
+    QCOMPARE(cancel->text(0), QStringLiteral("Cancel(Order)"));
+    QCOMPARE(cancel->text(1), QStringLiteral("—"));
+    QCOMPARE(cancel->text(3), QStringLiteral("baru"));
+    QCOMPARE(cancel->text(6), QStringLiteral("1"));   // Order
+
+    // Tanda tangan berubah: tetap dibandingkan dengan versi lamanya lewat nama
+    QTreeWidgetItem *refund = type->child(2);
+    QCOMPARE(refund->text(0), QStringLiteral("Refund(int, string)"));
+    QVERIFY(refund->text(1) != QStringLiteral("—"));
+    QVERIFY(refund->text(3) != QStringLiteral("baru"));
+    QVERIFY(refund->toolTip(0).contains(QStringLiteral("Sebelumnya: Refund(int)")));
+
+    QVERIFY(!tree->isColumnHidden(5));
+    QVERIFY(!tree->isColumnHidden(6));
+    QVERIFY(place->parent()->isExpanded());
+    QVERIFY(view.findChild<QLabel *>(QStringLiteral("miLegend"))->text().contains(QStringLiteral("C#:")));
 }
 
 int main(int argc, char *argv[]) {

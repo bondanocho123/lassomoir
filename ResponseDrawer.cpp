@@ -1,6 +1,9 @@
 #include "ResponseDrawer.h"
+#include "DiffView.h"
+#include "MaintainabilityView.h"
 #include "MarkdownView.h"
 #include "RunLogFormatter.h"
+#include "WorkspaceDiff.h"
 
 #include <QComboBox>
 #include <QHBoxLayout>
@@ -12,12 +15,18 @@
 #include <QScrollBar>
 #include <QShortcut>
 #include <QSignalBlocker>
+#include <QStackedWidget>
+#include <QTabBar>
 #include <QVBoxLayout>
 
 namespace {
 
 constexpr int kNone = -1;   // task belum punya run
 constexpr int kLive = -2;   // output run yang sedang berjalan
+
+constexpr int kResultTab = 0;
+constexpr int kDiffTab = 1;
+constexpr int kMaintainabilityTab = 2;
 
 QString decisionLabel(const QString &decision) {
     if (decision == ReviewDecision::Approved) return QStringLiteral("disetujui");
@@ -102,6 +111,34 @@ ResponseDrawer::ResponseDrawer(MermaidRenderer *renderer, QWidget *parent)
 
     m_view = new MarkdownView(renderer, this);
 
+    auto *resultPage = new QWidget(this);
+    auto *resultLayout = new QVBoxLayout(resultPage);
+    resultLayout->setContentsMargins(0, 0, 0, 0);
+    resultLayout->setSpacing(8);
+    resultLayout->addWidget(m_runSelector);
+    resultLayout->addWidget(m_metrics);
+    resultLayout->addWidget(m_view, 1);
+
+    m_diffView = new DiffView(this);
+    connect(m_diffView, &DiffView::refreshRequested, this, &ResponseDrawer::requestDiff);
+    m_maintainabilityView = new MaintainabilityView(this);
+
+    m_pages = new QStackedWidget(this);
+    m_pages->addWidget(resultPage);
+    m_pages->addWidget(m_diffView);
+    m_pages->addWidget(m_maintainabilityView);
+
+    m_tabs = new QTabBar(this);
+    m_tabs->setObjectName("drawerTabs");
+    m_tabs->setDrawBase(false);
+    m_tabs->setExpanding(false);
+    m_tabs->setFocusPolicy(Qt::NoFocus);
+    m_tabs->addTab(QStringLiteral("Hasil agent"));
+    m_tabs->addTab(QStringLiteral("Perubahan kode"));
+    m_tabs->addTab(QStringLiteral("Maintainability"));
+    connect(m_tabs, &QTabBar::currentChanged, m_pages, &QStackedWidget::setCurrentIndex);
+    m_tabs->hide();
+
     // Panel keputusan: hanya tampil saat task menunggu review dan run yang direview dipilih
     m_reviewPanel = new QWidget(this);
     m_reviewPanel->setObjectName("drawerReviewPanel");
@@ -172,9 +209,8 @@ ResponseDrawer::ResponseDrawer(MermaidRenderer *renderer, QWidget *parent)
     root->setContentsMargins(12, 12, 12, 12);
     root->setSpacing(8);
     root->addLayout(header);
-    root->addWidget(m_runSelector);
-    root->addWidget(m_metrics);
-    root->addWidget(m_view, 1);
+    root->addWidget(m_tabs);
+    root->addWidget(m_pages, 1);
     root->addWidget(m_reviewPanel);
 
     auto *escape = new QShortcut(QKeySequence(Qt::Key_Escape), this);
@@ -182,6 +218,10 @@ ResponseDrawer::ResponseDrawer(MermaidRenderer *renderer, QWidget *parent)
     connect(escape, &QShortcut::activated, this, &ResponseDrawer::closeRequested);
 
     m_reviewPanel->hide();
+}
+
+bool ResponseDrawer::showsCodeChanges(const QString &stageKey) {
+    return stageKey == QLatin1String("ARCHITECT");
 }
 
 void ResponseDrawer::setExpanded(bool expanded) {
@@ -193,6 +233,9 @@ void ResponseDrawer::setExpanded(bool expanded) {
 void ResponseDrawer::showTask(const TaskItem &task, RunState runState, const QString &nextStage,
                               const QStringList &sendBackStages) {
     const bool sameTask = !m_task.id.isEmpty() && task.id == m_task.id;
+    // Drawer tersembunyi = sedang dibuka lagi (MainWindow::openDrawer), bukan penyegaran
+    const bool opening = isHidden();
+    const QString previousStage = m_task.stage;
     const int previousSelection = selectedRun();
     const RunState previousRunState = m_runState;
 
@@ -219,6 +262,17 @@ void ResponseDrawer::showTask(const TaskItem &task, RunState runState, const QSt
     }
     rebuildRunSelector(selected);
 
+    // Folder kerja bisa berubah selama drawer tertutup, jadi git dibaca ulang setiap drawer dibuka
+    // atau task masuk stage peninjauan; penyegaran biasa (run selesai, keputusan) tidak mengulangnya
+    const bool codeReview = showsCodeChanges(task.stage);
+    const bool loadDiff = codeReview && (opening || !sameTask || previousStage != task.stage);
+    m_tabs->setVisible(codeReview);
+    if (!codeReview) {
+        m_tabs->setCurrentIndex(kResultTab);
+    } else if (loadDiff) {
+        m_tabs->setCurrentIndex(running ? kResultTab : kDiffTab);
+    }
+
     m_approve->setText(nextStage.isEmpty() ? QStringLiteral("Setujui")
                                            : QStringLiteral("Setujui → %1").arg(nextStage));
     m_sendBackTarget->clear();
@@ -232,6 +286,33 @@ void ResponseDrawer::showTask(const TaskItem &task, RunState runState, const QSt
         m_noteHint->hide();
     }
     updateReviewPanel();
+
+    if (loadDiff) {
+        requestDiff();
+    }
+}
+
+void ResponseDrawer::showDiff(const QString &taskId, const WorkspaceDiff &diff) {
+    if (taskId != m_task.id || !showsCodeChanges(m_task.stage)) {
+        return;
+    }
+    m_diffView->showDiff(diff);
+    m_maintainabilityView->showDiff(diff);
+    m_tabs->setTabText(kDiffTab, diff.files.isEmpty()
+                                     ? QStringLiteral("Perubahan kode")
+                                     : QStringLiteral("Perubahan kode · %1").arg(diff.files.size()));
+    const std::optional<int> maintainability = diff.maintainabilityAfter();
+    m_tabs->setTabText(kMaintainabilityTab, maintainability
+                                                ? QStringLiteral("Maintainability · %1").arg(*maintainability)
+                                                : QStringLiteral("Maintainability"));
+}
+
+void ResponseDrawer::requestDiff() {
+    m_diffView->showLoading();
+    m_maintainabilityView->showLoading();
+    m_tabs->setTabText(kDiffTab, QStringLiteral("Perubahan kode"));
+    m_tabs->setTabText(kMaintainabilityTab, QStringLiteral("Maintainability"));
+    emit diffRequested(m_task.id);
 }
 
 void ResponseDrawer::startLive() {
@@ -239,6 +320,7 @@ void ResponseDrawer::startLive() {
     if (m_runState == RunState::Idle) {
         m_runState = RunState::Running;
     }
+    m_tabs->setCurrentIndex(kResultTab);
     rebuildRunSelector(kLive);
     updateReviewPanel();
 }

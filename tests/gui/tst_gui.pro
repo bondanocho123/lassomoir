@@ -1,4 +1,4 @@
-QT += widgets svg testlib
+QT += widgets svg testlib concurrent
 
 CONFIG += console c++17 testcase
 CONFIG -= app_bundle
@@ -13,17 +13,22 @@ INCLUDEPATH += ../.. ..
 SOURCES += \
     tst_gui.cpp \
     ../../ClaudeCli.cpp \
+    ../../CSharpMetrics.cpp \
     ../../ClaudeCodeRuntime.cpp \
+    ../../CodeMetrics.cpp \
     ../../ConsolePanelWidget.cpp \
+    ../../DiffView.cpp \
     ../../FileManager.cpp \
     ../../KanbanCardWidget.cpp \
     ../../KanbanColumnWidget.cpp \
+    ../../MaintainabilityView.cpp \
     ../../MarkdownView.cpp \
     ../../MermaidRenderer.cpp \
     ../../NewTaskDialog.cpp \
     ../../PromptComposer.cpp \
     ../../ResponseDrawer.cpp \
     ../../RunLogFormatter.cpp \
+    ../../SourceTokens.cpp \
     ../../SplitterPaneAnimator.cpp \
     ../../StageCatalog.cpp \
     ../../StageProfile.cpp \
@@ -33,6 +38,7 @@ SOURCES += \
     ../../SwimlaneWidget.cpp \
     ../../TaskManager.cpp \
     ../../TransitionPolicy.cpp \
+    ../../WorkspaceDiff.cpp \
     ../../WorkspaceGuard.cpp \
     ../../mainwindow.cpp
 
@@ -42,17 +48,22 @@ HEADERS += \
     ../../AgentRuntime.h \
     ../../AgentTypes.h \
     ../../ClaudeCli.h \
+    ../../CSharpMetrics.h \
     ../../ClaudeCodeRuntime.h \
+    ../../CodeMetrics.h \
     ../../ConsolePanelWidget.h \
+    ../../DiffView.h \
     ../../FileManager.h \
     ../../KanbanCardWidget.h \
     ../../KanbanColumnWidget.h \
+    ../../MaintainabilityView.h \
     ../../MarkdownView.h \
     ../../MermaidRenderer.h \
     ../../NewTaskDialog.h \
     ../../PromptComposer.h \
     ../../ResponseDrawer.h \
     ../../RunLogFormatter.h \
+    ../../SourceTokens.h \
     ../../SplitterPaneAnimator.h \
     ../../StageCatalog.h \
     ../../StageProfile.h \
@@ -63,6 +74,7 @@ HEADERS += \
     ../../TaskItem.h \
     ../../TaskManager.h \
     ../../TransitionPolicy.h \
+    ../../WorkspaceDiff.h \
     ../../WorkspaceGuard.h \
     ../../mainwindow.h
 

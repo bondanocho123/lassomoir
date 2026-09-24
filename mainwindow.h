@@ -93,6 +93,9 @@ private slots:
     void handleRevisionRequested(const QString &taskId, const QString &note);
     void handleSendBackRequested(const QString &taskId, const QString &stage, const QString &note);
 
+    // Drawer minta perubahan kode folder kerja task (stage peninjauan kode)
+    void handleDiffRequested(const QString &taskId);
+
 private:
     Ui::MainWindow *ui;
     const StageCatalog &m_catalog;
@@ -103,6 +106,8 @@ private:
     QSplitter *m_boardSplitter = nullptr;
     ResponseDrawer *m_drawer = nullptr;
     SplitterPaneAnimator *m_drawerAnimator = nullptr;
+    // Nomor permintaan diff terbaru; hanya jawabannya yang ditampilkan di drawer
+    int m_diffRequest = 0;
     // Saat memuat dari disk tidak perlu menulis ulang session.json per task
     bool m_loading = false;
     // Perpindahan yang dipicu pengguna (drag / keputusan review) sudah dicatat pemanggilnya

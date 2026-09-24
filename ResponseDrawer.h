@@ -11,21 +11,30 @@
 #include <QStringList>
 #include <QWidget>
 
+struct WorkspaceDiff;
+class DiffView;
+class MaintainabilityView;
 class MarkdownView;
 class MermaidRenderer;
 class QComboBox;
 class QLabel;
 class QPlainTextEdit;
 class QPushButton;
+class QStackedWidget;
+class QTabBar;
 
 // Panel hasil agent untuk satu task: pemilih run (termasuk "Live" saat berjalan), metrik,
-// dokumen Markdown/Mermaid, dan panel keputusan saat task menunggu review.
-// Pasif: data datang dari MainWindow, keputusan dikirim balik lewat sinyal.
+// dokumen Markdown/Mermaid, dan panel keputusan saat task menunggu review. Di stage peninjauan
+// kode ada tab tambahan: perubahan kode folder kerja dan Maintainability Index-nya.
+// Pasif: data datang dari MainWindow, keputusan dan permintaan diff dikirim balik lewat sinyal.
 class ResponseDrawer : public QWidget {
     Q_OBJECT
 
 public:
     explicit ResponseDrawer(MermaidRenderer *renderer, QWidget *parent = nullptr);
+
+    // Stage yang tugasnya meninjau perubahan kode dari stage sebelumnya
+    static bool showsCodeChanges(const QString &stageKey);
 
     QString taskId() const { return m_task.id; }
 
@@ -39,6 +48,9 @@ public:
     // Satu event run yang sedang berjalan (teks, tool, stderr)
     void appendLive(const AgentEvent &event, const QString &workingDirectory);
 
+    // Jawaban diffRequested; diabaikan bila drawer sudah beralih ke task atau stage lain
+    void showDiff(const QString &taskId, const WorkspaceDiff &diff);
+
     // Sinkronkan ikon/tooltip tombol expand dengan keadaan drawer (tanpa memancarkan sinyal)
     void setExpanded(bool expanded);
     bool isExpanded() const { return m_expanded; }
@@ -49,8 +61,11 @@ signals:
     void approveRequested(const QString &taskId, const QString &note);
     void revisionRequested(const QString &taskId, const QString &note);
     void sendBackRequested(const QString &taskId, const QString &stage, const QString &note);
+    // Perubahan kode folder kerja task ini perlu dibaca (lagi); jawabannya lewat showDiff()
+    void diffRequested(const QString &taskId);
 
 private:
+    void requestDiff();
     void rebuildRunSelector(int selected);   // selected: indeks run, atau kLive
     void showSelected();
     void updateReviewPanel();
@@ -67,9 +82,13 @@ private:
     QLabel *m_title;
     QLabel *m_status;
     QPushButton *m_expand;
+    QTabBar *m_tabs;           // hanya tampil di stage peninjauan kode
+    QStackedWidget *m_pages;   // [hasil agent | perubahan kode], mengikuti m_tabs
     QComboBox *m_runSelector;
     QLabel *m_metrics;
     MarkdownView *m_view;
+    DiffView *m_diffView;
+    MaintainabilityView *m_maintainabilityView;
     QWidget *m_reviewPanel;
     QPlainTextEdit *m_note;
     QLabel *m_noteHint;

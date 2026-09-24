@@ -587,3 +587,173 @@ QPushButton#btnDrawerSendBack:hover {
     background-color: #eef2f8;
     border: 1px solid #33517a;
 }
+
+/* Tab drawer di stage peninjauan kode: Hasil agent | Perubahan kode */
+QTabBar#drawerTabs::tab {
+    background: transparent;
+    color: #6f6557;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 4px 10px;
+    margin-right: 4px;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+QTabBar#drawerTabs::tab:selected {
+    color: #33517a;
+    border-bottom: 2px solid #a9743f;
+}
+
+QTabBar#drawerTabs::tab:hover:!selected {
+    color: #3d3730;
+}
+
+/* ============ Perubahan kode (DiffView) ============ */
+QLabel#diffSummary {
+    font-size: 11px;
+    color: #6f6557;
+}
+
+QLabel#diffSummary[error="true"] {
+    color: #9b2c1f;
+}
+
+QPushButton#btnDiffRefresh {
+    background-color: #ffffff;
+    color: #33517a;
+    border: 1px solid #b9c6da;
+    border-radius: 4px;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+QPushButton#btnDiffRefresh:hover {
+    background-color: #eef2f8;
+    border: 1px solid #33517a;
+}
+
+QPushButton#btnDiffRefresh:disabled {
+    color: #b9c6da;
+}
+
+QTreeWidget#diffFileList {
+    background-color: #ffffff;
+    border: 1px solid #e7ddcd;
+    border-radius: 6px;
+    font-family: "Segoe UI", sans-serif;
+    font-size: 12px;
+    color: #3d3730;
+    outline: none;
+}
+
+QTreeWidget#diffFileList::item {
+    padding: 2px 2px;
+}
+
+QTreeWidget#diffFileList::item:hover {
+    background-color: #f8f1e6;
+}
+
+QTreeWidget#diffFileList::item:selected {
+    background-color: #f2e3d1;
+    color: #3d3730;
+}
+
+/* Diff: font monospace agar kolom nomor baris dan indentasi kode lurus */
+QPlainTextEdit#diffText {
+    background-color: #ffffff;
+    border: 1px solid #e7ddcd;
+    border-radius: 6px;
+    font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
+    font-size: 12px;
+    color: #3d3730;
+}
+
+/* ============ Maintainability Index (MaintainabilityView) ============ */
+QLabel#miMessage,
+QLabel#miBasis {
+    font-size: 11px;
+    color: #6f6557;
+}
+
+QLabel#miMessage[error="true"] {
+    color: #9b2c1f;
+}
+
+QWidget#miSummary {
+    background-color: #ffffff;
+    border: 1px solid #e7ddcd;
+    border-radius: 6px;
+}
+
+/* Warna skor & rating mengikuti ambang: baik (hijau), sedang (kuning tua), rendah (merah) */
+QLabel#miScore {
+    font-size: 30px;
+    font-weight: bold;
+    color: #2f7d32;
+}
+
+QLabel#miRating {
+    font-size: 13px;
+    font-weight: bold;
+    color: #2f7d32;
+}
+
+QLabel#miScore[rating="moderate"],
+QLabel#miRating[rating="moderate"] {
+    color: #b7791f;
+}
+
+QLabel#miScore[rating="low"],
+QLabel#miRating[rating="low"] {
+    color: #b3261e;
+}
+
+QLabel#miScore[rating="none"],
+QLabel#miRating[rating="none"] {
+    color: #8a7f70;
+}
+
+QLabel#miChange {
+    font-size: 12px;
+    color: #6f6557;
+}
+
+QLabel#miChange[trend="down"] {
+    color: #b3261e;
+}
+
+QLabel#miChange[trend="up"] {
+    color: #2f7d32;
+}
+
+QTreeWidget#miFileList {
+    background-color: #ffffff;
+    border: 1px solid #e7ddcd;
+    border-radius: 6px;
+    font-family: "Segoe UI", sans-serif;
+    font-size: 12px;
+    color: #3d3730;
+    outline: none;
+}
+
+QTreeWidget#miFileList::item {
+    padding: 2px 2px;
+}
+
+QTreeWidget#miFileList QHeaderView::section {
+    background-color: #fbf8f3;
+    color: #6f6557;
+    border: none;
+    border-bottom: 1px solid #e7ddcd;
+    padding: 4px 6px;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+QLabel#miLegend {
+    font-size: 11px;
+    color: #8a7f70;
+}

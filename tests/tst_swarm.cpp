@@ -1,5 +1,6 @@
 #include "ClaudeCli.h"
 #include "ClaudeCodeRuntime.h"
+#include "CodeMetrics.h"
 #include "EdgeMermaidRenderer.h"
 #include "FakeAgentRuntime.h"
 #include "FileManager.h"
@@ -30,6 +31,7 @@
 #include <QThread>
 #include <QtTest>
 
+#include <cmath>
 #include <cstdio>
 #include <memory>
 
@@ -233,8 +235,35 @@ bool runGit(const QString &directory, const QStringList &arguments) {
 }
 
 bool writeFile(const QString &path, const QByteArray &content) {
+    QDir().mkpath(QFileInfo(path).absolutePath());
     QFile file(path);
     return file.open(QIODevice::WriteOnly | QIODevice::Truncate) && file.write(content) == content.size();
+}
+
+const TypeMetrics *findType(const QList<TypeMetrics> &types, const QString &name) {
+    for (const TypeMetrics &type : types) {
+        if (type.name == name) {
+            return &type;
+        }
+    }
+    return nullptr;
+}
+
+const MemberMetrics *findMember(const TypeMetrics &type, const QString &name) {
+    for (const MemberMetrics &member : type.members) {
+        if (member.name == name) {
+            return &member;
+        }
+    }
+    return nullptr;
+}
+
+QStringList memberNames(const TypeMetrics &type) {
+    QStringList names;
+    for (const MemberMetrics &member : type.members) {
+        names.append(member.name);
+    }
+    return names;
 }
 
 QStringList diffPaths(const WorkspaceDiff &diff) {
@@ -300,6 +329,14 @@ private slots:
     void gitDiffParsesUnifiedDiff();
     void gitDiffCollectsWorkspaceChanges();
     void gitDiffHandlesMissingRepositoryAndFirstCommit();
+    void codeMetricsFormulaAndRating();
+    void codeMetricsCountsBraceLanguages();
+    void codeMetricsCountsPython();
+    void gitDiffMeasuresMaintainability();
+    void csharpMetricsParsesTypesAndMembers();
+    void csharpMetricsHandlesStringsAndNullable();
+    void csharpMetricsResolvesInheritance();
+    void gitDiffMeasuresCSharpTypes();
 
     // Claude Code sungguhan; hanya jalan bila LASSOMOIR_REAL_CLAUDE=1 (memakai token)
     void realClaudeRunsCoderTask();
@@ -1312,6 +1349,549 @@ void TestSwarm::gitDiffHandlesMissingRepositoryAndFirstCommit() {
     QCOMPARE(first.files.at(0).added, 2);
     QVERIFY(first.files.at(1).untracked);
     QCOMPARE(first.added(), 3);
+}
+
+void TestSwarm::codeMetricsFormulaAndRating() {
+    // 171 − 5,2·ln(1000) − 0,23·5 − 16,2·ln(50) = 70,55 → 41,3 pada skala 0–100
+    QCOMPARE(CodeMetrics::maintainabilityIndex(1000.0, 5, 50, 1), 41);
+    // Dirata-rata per fungsi: volume 200, kompleksitas 1, 10 baris per fungsi
+    QCOMPARE(CodeMetrics::maintainabilityIndex(1000.0, 5, 50, 5), 62);
+    QCOMPARE(CodeMetrics::maintainabilityIndex(0.0, 1, 0, 0), 100);
+    QCOMPARE(CodeMetrics::maintainabilityIndex(1e7, 500, 5000, 1), 0);
+
+    QVERIFY(maintainabilityRating(20) == MaintainabilityRating::Good);
+    QVERIFY(maintainabilityRating(19) == MaintainabilityRating::Moderate);
+    QVERIFY(maintainabilityRating(10) == MaintainabilityRating::Moderate);
+    QVERIFY(maintainabilityRating(9) == MaintainabilityRating::Low);
+
+    QVERIFY(CodeMetrics::supports(QStringLiteral("src/board.cpp")));
+    QVERIFY(CodeMetrics::supports(QStringLiteral("tools/Run.PY")));
+    QVERIFY(CodeMetrics::supports(QStringLiteral("app/Views/welcome.php")));
+    QVERIFY(!CodeMetrics::supports(QStringLiteral("README.md")));
+    QVERIFY(!CodeMetrics::supports(QStringLiteral("package.json")));
+    QVERIFY(!CodeMetrics::supports(QStringLiteral("Makefile")));
+}
+
+void TestSwarm::codeMetricsCountsBraceLanguages() {
+    // Konstruktor dengan initializer list, method, dan lambda = 3 fungsi; if/for/struct bukan fungsi.
+    // Keputusan: if, ||, for, &&, ?: = 5
+    const QString cpp = QStringLiteral(
+        "#include \"Board.h\"\n"
+        "#include <array>\n"
+        "\n"
+        "// Komentar tidak dihitung\n"
+        "Board::Board() : m_turn(Player::X) {\n"
+        "    reset();\n"
+        "}\n"
+        "\n"
+        "/* blok\n"
+        "   komentar */\n"
+        "bool Board::place(int index) {\n"
+        "    if (index < 0 || index >= 9) {\n"
+        "        return false;\n"
+        "    }\n"
+        "    for (int i = 0; i < 3; ++i) {\n"
+        "        m_seen = m_seen && check(i);\n"
+        "    }\n"
+        "    auto pick = [this](int x) { return x > 0 ? x : -x; };\n"
+        "    return pick(index) != 0;\n"
+        "}\n"
+        "\n"
+        "struct Point { int x; int y; };\n");
+    const CodeMetrics board = CodeMetrics::measure(QStringLiteral("Board.cpp"), cpp);
+    QCOMPARE(board.sloc, 16);
+    QCOMPARE(board.functions, 3);
+    QCOMPARE(board.complexity, 3 + 5);
+    QVERIFY(board.volume > 0.0);
+    QCOMPARE(board.maintainability,
+             CodeMetrics::maintainabilityIndex(board.volume, board.complexity, board.sloc, board.functions));
+
+    // function, arrow function, constructor, method, fungsi anonim = 5; "else {" dan "class {" bukan
+    const QString js = QStringLiteral(
+        "import { a } from './a.js';\n"
+        "\n"
+        "function add(x, y) {\n"
+        "  return x + y;\n"
+        "}\n"
+        "\n"
+        "const twice = (f) => {\n"
+        "  return (v) => f(f(v));\n"
+        "};\n"
+        "\n"
+        "class Counter {\n"
+        "  constructor() { this.n = 0; }\n"
+        "  inc() {\n"
+        "    if (this.n > 10 && !this.locked) { this.n = 0; } else { this.n++; }\n"
+        "  }\n"
+        "}\n"
+        "\n"
+        "setTimeout(function () { console.log(`done ${add(1, 2)}`); }, 10);\n");
+    const CodeMetrics counter = CodeMetrics::measure(QStringLiteral("counter.js"), js);
+    QCOMPARE(counter.sloc, 14);
+    QCOMPARE(counter.functions, 5);
+    QCOMPARE(counter.complexity, 5 + 2);
+
+    // Receiver + banyak nilai kembali, closure defer; "if strings.HasPrefix(...) {" tanpa kurung bukan fungsi
+    const QString go = QStringLiteral(
+        "package main\n"
+        "\n"
+        "import \"strings\"\n"
+        "\n"
+        "func (s *Server) Handle(path string) (int, error) {\n"
+        "\tif strings.HasPrefix(path, \"/api\") {\n"
+        "\t\treturn 200, nil\n"
+        "\t}\n"
+        "\tfor _, r := range s.routes {\n"
+        "\t\tif r == path || r == \"*\" {\n"
+        "\t\t\treturn 200, nil\n"
+        "\t\t}\n"
+        "\t}\n"
+        "\treturn 404, nil\n"
+        "}\n"
+        "\n"
+        "func helper() {\n"
+        "\tdefer func() {\n"
+        "\t\trecover()\n"
+        "\t}()\n"
+        "}\n");
+    const CodeMetrics server = CodeMetrics::measure(QStringLiteral("server.go"), go);
+    QCOMPARE(server.sloc, 18);
+    QCOMPARE(server.functions, 3);
+    QCOMPARE(server.complexity, 3 + 4);
+
+    // Hanya isi <?php ?> yang kode; "?string" tipe nullable, bukan ternary
+    const QString php = QStringLiteral(
+        "<html>\n"
+        "<body>\n"
+        "<?php if ($user): ?>\n"
+        "  <p>Halo <?= htmlspecialchars($user->name) ?></p>\n"
+        "<?php endif; ?>\n"
+        "<?php\n"
+        "# komentar hash\n"
+        "function greet(?string $name): string {\n"
+        "    return $name ? \"Halo $name\" : \"Halo\";\n"
+        "}\n"
+        "?>\n"
+        "</body>\n"
+        "</html>\n");
+    const CodeMetrics view = CodeMetrics::measure(QStringLiteral("welcome.php"), php);
+    QCOMPARE(view.sloc, 6);
+    QCOMPARE(view.functions, 1);
+    QCOMPARE(view.complexity, 1 + 2);
+
+    // Bahasa tak dikenal tidak diukur
+    QCOMPARE(CodeMetrics::measure(QStringLiteral("notes.md"), QStringLiteral("# if (x) { y(); }")).sloc, 0);
+}
+
+void TestSwarm::codeMetricsCountsPython() {
+    // Docstring dan komentar bukan baris kode; "#" di dalam string bukan komentar.
+    // Keputusan: for, if, and, if (ekspresi), except = 5
+    const QString python = QStringLiteral(
+        "\"\"\"Modul contoh.\"\"\"\n"
+        "import os\n"
+        "\n"
+        "\n"
+        "def main(args):\n"
+        "    \"\"\"Docstring fungsi.\"\"\"\n"
+        "    # komentar\n"
+        "    total = 0\n"
+        "    for a in args:\n"
+        "        if a and not a.startswith(\"#\"):\n"
+        "            total += 1\n"
+        "    return total if total else None\n"
+        "\n"
+        "\n"
+        "class Runner:\n"
+        "    def run(self):\n"
+        "        try:\n"
+        "            return main([])\n"
+        "        except ValueError:\n"
+        "            return 0\n");
+    const CodeMetrics metrics = CodeMetrics::measure(QStringLiteral("main.py"), python);
+    QCOMPARE(metrics.sloc, 13);
+    QCOMPARE(metrics.functions, 2);
+    QCOMPARE(metrics.complexity, 2 + 5);
+}
+
+void TestSwarm::gitDiffMeasuresMaintainability() {
+    if (QStandardPaths::findExecutable(QStringLiteral("git")).isEmpty()) {
+        QSKIP("git tidak ada di PATH");
+    }
+
+    QTemporaryDir repo;
+    const QDir dir(repo.path());
+    QVERIFY(runGit(dir.path(), {QStringLiteral("init"), QStringLiteral("-q")}));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("calc.py")), "def hitung(x):\n    return x * 2\n"));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("lama.js")), "function lama() {\n  return 1;\n}\n"));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("util.js")),
+                      "export function a(x) {\n  return x + 1;\n}\n\nexport function b(y) {\n  return y * 2;\n}\n"));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("README.md")), "# Proyek\n"));
+    QVERIFY(runGit(dir.path(), {QStringLiteral("add"), QStringLiteral("-A")}));
+    QVERIFY(runGit(dir.path(), {QStringLiteral("commit"), QStringLiteral("-q"), QStringLiteral("-m"), QStringLiteral("awal")}));
+
+    // Fungsi jadi lebih bercabang, satu file dihapus, satu diganti nama sambil diubah, satu file baru
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("calc.py")),
+                      "def hitung(x):\n    if x > 10 and x < 100:\n        return x * 2\n"
+                      "    for i in range(x):\n        if i % 2:\n            x += i\n    return x\n"));
+    QVERIFY(QFile::remove(dir.filePath(QStringLiteral("lama.js"))));
+    QVERIFY(runGit(dir.path(), {QStringLiteral("mv"), QStringLiteral("util.js"), QStringLiteral("helpers.js")}));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("helpers.js")),
+                      "export function a(x) {\n  return x > 0 ? x + 1 : 0;\n}\n\nexport function b(y) {\n  return y * 2;\n}\n"));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("baru.go")), "package main\n\nfunc main() {\n\tprintln(\"halo\")\n}\n"));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("README.md")), "# Proyek\n\nKeterangan.\n"));
+
+    const WorkspaceDiff diff = GitDiff::collect(dir.path());
+    QVERIFY2(diff.error.isEmpty(), qPrintable(diff.error));
+    QCOMPARE(diffPaths(diff), QStringList({"baru.go", "calc.py", "helpers.js", "lama.js", "README.md"}));
+
+    const FileDiff &created = diff.files.at(0);
+    QVERIFY(!created.before);
+    QVERIFY(created.after);
+    QCOMPARE(created.after->functions, 1);
+
+    const FileDiff &calc = diff.files.at(1);
+    QVERIFY(calc.before && calc.after);
+    QCOMPARE(calc.before->complexity, 1);
+    QCOMPARE(calc.after->complexity, 1 + 4);
+    QVERIFY(calc.after->maintainability < calc.before->maintainability);
+
+    // Sisi "sebelum" file yang diganti nama dibaca dari nama lamanya
+    const FileDiff &helpers = diff.files.at(2);
+    QVERIFY(helpers.status == FileDiff::Status::Renamed);
+    QCOMPARE(helpers.oldPath, QStringLiteral("util.js"));
+    QVERIFY(helpers.before && helpers.after);
+    QCOMPARE(helpers.before->functions, 2);
+    QCOMPARE(helpers.after->complexity, helpers.before->complexity + 1);
+
+    const FileDiff &deleted = diff.files.at(3);
+    QVERIFY(deleted.before);
+    QVERIFY(!deleted.after);
+
+    QVERIFY(!diff.files.at(4).before && !diff.files.at(4).after);
+
+    // Rata-rata tertimbang baris kode dari file yang terukur di tiap sisi
+    const std::optional<int> before = diff.maintainabilityBefore();
+    const std::optional<int> after = diff.maintainabilityAfter();
+    QVERIFY(before && after);
+    const auto weighted = [](std::initializer_list<CodeMetrics> files) {
+        double sum = 0;
+        int lines = 0;
+        for (const CodeMetrics &metrics : files) {
+            sum += metrics.maintainability * metrics.sloc;
+            lines += metrics.sloc;
+        }
+        return int(std::lround(sum / lines));
+    };
+    QCOMPARE(*before, weighted({*calc.before, *helpers.before, *deleted.before}));
+    QCOMPARE(*after, weighted({*created.after, *calc.after, *helpers.after}));
+}
+
+void TestSwarm::csharpMetricsParsesTypesAndMembers() {
+    const QString source = QStringLiteral(R"cs(using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Shop.Orders;
+
+[Serializable]
+public class OrderService : ServiceBase, IOrderService
+{
+    private readonly IRepository<Order> _repository;
+    private static readonly string Prefix = "ORD";
+
+    public int Count { get; private set; }
+
+    public decimal Total => _repository.All().Sum(o => o.Amount);
+
+    public string Label
+    {
+        get { return Count > 0 ? $"{Prefix}-{(Count > 1 ? "x" : "y")}" : Prefix; }
+        set { Count = value?.Length ?? 0; }
+    }
+
+    public OrderService(IRepository<Order> repository)
+    {
+        _repository = repository ?? throw new ArgumentNullException(nameof(repository));
+    }
+
+    public Order Place(Customer customer, int quantity)
+    {
+        if (customer == null || quantity <= 0)
+        {
+            throw new InvalidOperationException("Pesanan tidak valid");
+        }
+        else if (quantity > 100 && !customer.IsVip)
+        {
+            quantity = 100;
+        }
+
+        var order = new Order(customer, quantity);
+        foreach (var item in customer.Cart)
+        {
+            order.Add(item);
+        }
+        try
+        {
+            _repository.Save(order);
+        }
+        catch (TimeoutException ex) when (ex.Message.Length > 0)
+        {
+            Log(ex);
+        }
+        return order;
+    }
+
+    public static string Describe(Order order) => order.Status switch
+    {
+        OrderStatus.New => "baru",
+        OrderStatus.Paid or OrderStatus.Shipped => "diproses",
+        _ => "lainnya",
+    };
+
+    private void Log(Exception ex)
+    {
+        Console.WriteLine(@"C:\logs\" + ex.Message);
+        int Twice(int x) => x * 2;
+        var n = Twice(Count);
+    }
+
+    public class Snapshot
+    {
+        public DateTime TakenAt { get; init; }
+    }
+}
+
+public struct Money
+{
+    public decimal Amount;
+    public static Money operator +(Money a, Money b) => new Money { Amount = a.Amount + b.Amount };
+}
+
+public interface IOrderService
+{
+    Order Place(Customer customer, int quantity);
+    int Count { get; }
+}
+
+public enum OrderStatus { New, Paid, Shipped }
+
+public record Receipt(Guid Id, decimal Amount);
+)cs");
+    const CodeMetrics metrics = CodeMetrics::measure(QStringLiteral("Services/OrderService.cs"), source);
+    const QList<TypeMetrics> &types = metrics.types;
+
+    // Urutan sumber; tipe bersarang punya entri sendiri
+    QStringList names;
+    for (const TypeMetrics &type : types) {
+        names.append(type.kind + QLatin1Char(' ') + type.fullName());
+    }
+    QCOMPARE(names, QStringList({"class Shop.Orders.OrderService", "class Shop.Orders.OrderService.Snapshot",
+                                 "struct Shop.Orders.Money", "interface Shop.Orders.IOrderService",
+                                 "enum Shop.Orders.OrderStatus", "record Shop.Orders.Receipt"}));
+
+    // Hanya member berkode: auto-property, field, dan tipe bersarang bukan member
+    const TypeMetrics *service = findType(types, QStringLiteral("OrderService"));
+    QVERIFY(service);
+    QCOMPARE(memberNames(*service), QStringList({"Total", "Label", "OrderService(IRepository<Order>)",
+                                                 "Place(Customer, int)", "Describe(Order)", "Log(Exception)"}));
+    QCOMPARE(service->baseClass, QStringLiteral("ServiceBase"));
+
+    // Kompleksitas: ternary vs "?" nullable, ?. dan ??, else if, filter when, arm switch expression
+    QCOMPARE(findMember(*service, QStringLiteral("Total"))->complexity, 1);
+    QCOMPARE(findMember(*service, QStringLiteral("Label"))->complexity, 1 + 3);
+    QCOMPARE(findMember(*service, QStringLiteral("OrderService(IRepository<Order>)"))->complexity, 1 + 1);
+    QCOMPARE(findMember(*service, QStringLiteral("Place(Customer, int)"))->complexity, 1 + 7);
+    QCOMPARE(findMember(*service, QStringLiteral("Describe(Order)"))->complexity, 1 + 3);
+    QCOMPARE(findMember(*service, QStringLiteral("Log(Exception)"))->complexity, 1);
+    QCOMPARE(service->complexity, 1 + 4 + 2 + 8 + 4 + 1);
+
+    // Class coupling: tipe di parameter, return, new, catch, akses statis, generic, atribut, base list
+    QCOMPARE(findMember(*service, QStringLiteral("Place(Customer, int)"))->coupling, 4);
+    QCOMPARE(findMember(*service, QStringLiteral("OrderService(IRepository<Order>)"))->coupling, 3);
+    QCOMPARE(findMember(*service, QStringLiteral("Describe(Order)"))->coupling, 2);
+    QCOMPARE(findMember(*service, QStringLiteral("Log(Exception)"))->coupling, 2);
+    QCOMPARE(findMember(*service, QStringLiteral("Label"))->coupling, 0);
+    QCOMPARE(service->coupling, 12);
+
+    // Baris kode member: baris kosong tidak dihitung
+    QCOMPARE(findMember(*service, QStringLiteral("Total"))->lines, 1);
+    QCOMPARE(findMember(*service, QStringLiteral("OrderService(IRepository<Order>)"))->lines, 4);
+    QCOMPARE(findMember(*service, QStringLiteral("Place(Customer, int)"))->lines, 25);
+    const MemberMetrics *place = findMember(*service, QStringLiteral("Place(Customer, int)"));
+    QCOMPARE(place->maintainability,
+             CodeMetrics::maintainabilityIndex(place->volume, place->complexity, place->lines, 1));
+
+    // DIT: kelas dasar di luar file ini tidak dikenal → minimal
+    QCOMPARE(service->inheritanceDepth, 2);
+    QVERIFY(service->inheritanceOpen);
+
+    const TypeMetrics *snapshot = findType(types, QStringLiteral("OrderService.Snapshot"));
+    QVERIFY(snapshot && snapshot->members.isEmpty());
+    QCOMPARE(snapshot->coupling, 1);   // DateTime
+    QCOMPARE(snapshot->maintainability, 100);
+    QCOMPARE(snapshot->inheritanceDepth, 1);
+
+    const TypeMetrics *money = findType(types, QStringLiteral("Money"));
+    QCOMPARE(memberNames(*money), QStringList({"operator +(Money, Money)"}));
+    QCOMPARE(money->coupling, 0);   // hanya dirinya sendiri
+    QCOMPARE(money->inheritanceDepth, 2);
+
+    const TypeMetrics *contract = findType(types, QStringLiteral("IOrderService"));
+    QVERIFY(contract->members.isEmpty());
+    QCOMPARE(contract->coupling, 2);   // Order, Customer
+    QCOMPARE(contract->inheritanceDepth, 0);
+
+    QCOMPARE(findType(types, QStringLiteral("OrderStatus"))->inheritanceDepth, 3);
+    QCOMPARE(findType(types, QStringLiteral("Receipt"))->coupling, 1);   // Guid
+    QCOMPARE(findType(types, QStringLiteral("Receipt"))->inheritanceDepth, 1);
+
+    // Tingkat file memakai member hasil pengurai C#
+    QCOMPARE(metrics.functions, 6 + 1);
+    QCOMPARE(metrics.complexity, 20 + 1);
+}
+
+void TestSwarm::csharpMetricsHandlesStringsAndNullable() {
+    // String verbatim berakhiran '\', interpolasi berisi kutip, dan raw string tidak boleh merusak
+    // pemisahan member; "int?" bukan ternary
+    const QString source = QStringLiteral(R"cs(class Paths
+{
+    string A() => @"C:\dir\" + "x";
+
+    string B(bool ok)
+    {
+        var s = $"{(ok ? "ya" : "tidak")} {{literal}}";
+        if (ok) { return s; }
+        return @"say ""hi""";
+    }
+
+    string C() => """
+        raw "quoted" { not a brace }
+        """;
+
+    int D(int? x, List<Dictionary<string, int>> map) => x ?? map.Count;
+
+    int this[int index] => index;
+}
+)cs");
+    const QList<TypeMetrics> types = CodeMetrics::measure(QStringLiteral("Paths.cs"), source).types;
+    QCOMPARE(int(types.size()), 1);
+    const TypeMetrics &paths = types.first();
+    QCOMPARE(memberNames(paths), QStringList({"A()", "B(bool)", "C()", "D(int?, List<Dictionary<string, int>>)",
+                                              "this[int]"}));
+    QCOMPARE(findMember(paths, QStringLiteral("A()"))->complexity, 1);
+    QCOMPARE(findMember(paths, QStringLiteral("B(bool)"))->complexity, 2);
+    QCOMPARE(findMember(paths, QStringLiteral("C()"))->complexity, 1);
+    QCOMPARE(findMember(paths, QStringLiteral("D(int?, List<Dictionary<string, int>>)"))->complexity, 2);
+    QCOMPARE(findMember(paths, QStringLiteral("B(bool)"))->lines, 6);
+    QCOMPARE(findMember(paths, QStringLiteral("C()"))->lines, 3);
+}
+
+void TestSwarm::csharpMetricsResolvesInheritance() {
+    // Peta kelas dasar dari teks sumber: interface/struct tidak punya kelas dasar, partial digabung
+    const QHash<QString, QString> bases = CSharpMetrics::declaredBases(QStringLiteral(
+        "namespace Shop;\n"
+        "public abstract class ServiceBase : Controller, IDisposable { }\n"
+        "public partial class Widget { }\n"
+        "public partial class Widget : Component { }\n"
+        "public interface IThing : IDisposable { }\n"
+        "public record Point(int X, int Y) : Shape(X);\n"
+        "public struct Size : IEquatable<Size> { }\n"
+        "public class Box<T> where T : class { }\n"
+        "public class Repo<T> : Base.Repository<T> where T : Entity { }\n"));
+    QCOMPARE(bases.value(QStringLiteral("ServiceBase")), QStringLiteral("Controller"));
+    QCOMPARE(bases.value(QStringLiteral("Widget")), QStringLiteral("Component"));
+    QVERIFY(bases.contains(QStringLiteral("IThing")) && bases.value(QStringLiteral("IThing")).isEmpty());
+    QCOMPARE(bases.value(QStringLiteral("Point")), QStringLiteral("Shape"));
+    QVERIFY(bases.value(QStringLiteral("Size")).isEmpty());
+    QVERIFY(bases.contains(QStringLiteral("Box")) && bases.value(QStringLiteral("Box")).isEmpty());
+    QCOMPARE(bases.value(QStringLiteral("Repo")), QStringLiteral("Repository"));
+
+    QList<TypeMetrics> types(4);
+    types[0].kind = QStringLiteral("class");
+    types[0].baseClass = QStringLiteral("ServiceBase");
+    types[1].kind = QStringLiteral("class");
+    types[1].baseClass = QStringLiteral("MonoBehaviour");
+    types[2].kind = QStringLiteral("class");
+    types[2].baseClass = QStringLiteral("ThirdPartyBase");
+    types[3].kind = QStringLiteral("class");
+    types[3].baseClass = QStringLiteral("Loop");
+    const QHash<QString, QString> project = {{"ServiceBase", "Controller"}, {"Loop", "Cycle"}, {"Cycle", "Loop"}};
+    CSharpMetrics::resolveInheritance(&types, project);
+
+    // OrderService → ServiceBase → Controller → ControllerBase → Object
+    QCOMPARE(types[0].inheritanceDepth, 4);
+    QVERIFY(!types[0].inheritanceOpen);
+    // MonoBehaviour → Behaviour → Component → UnityEngine.Object → Object
+    QCOMPARE(types[1].inheritanceDepth, 5);
+    QVERIFY(!types[1].inheritanceOpen);
+    // Kelas dasar tak dikenal: minimal dirinya + kelas dasar itu
+    QCOMPARE(types[2].inheritanceDepth, 2);
+    QVERIFY(types[2].inheritanceOpen);
+    // Rantai melingkar tetap berhenti
+    QVERIFY(types[3].inheritanceOpen);
+    QVERIFY(types[3].inheritanceDepth < 40);
+}
+
+void TestSwarm::gitDiffMeasuresCSharpTypes() {
+    if (QStandardPaths::findExecutable(QStringLiteral("git")).isEmpty()) {
+        QSKIP("git tidak ada di PATH");
+    }
+
+    QTemporaryDir repo;
+    const QDir dir(repo.path());
+    QVERIFY(runGit(dir.path(), {QStringLiteral("init"), QStringLiteral("-q")}));
+    // Kelas dasar ada di file lain yang tidak berubah: DIT tetap terbaca dari seluruh project
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("Services/ServiceBase.cs")),
+                      "namespace Shop;\npublic abstract class ServiceBase : Controller { }\n"));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("Services/OrderService.cs")),
+                      "namespace Shop;\n"
+                      "public class OrderService : ServiceBase\n"
+                      "{\n"
+                      "    public int Place(int quantity)\n"
+                      "    {\n"
+                      "        return quantity;\n"
+                      "    }\n"
+                      "}\n"));
+    QVERIFY(runGit(dir.path(), {QStringLiteral("add"), QStringLiteral("-A")}));
+    QVERIFY(runGit(dir.path(), {QStringLiteral("commit"), QStringLiteral("-q"), QStringLiteral("-m"), QStringLiteral("awal")}));
+
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("Services/OrderService.cs")),
+                      "namespace Shop;\n"
+                      "public class OrderService : ServiceBase\n"
+                      "{\n"
+                      "    public int Place(int quantity)\n"
+                      "    {\n"
+                      "        if (quantity > 100 || quantity < 0) { return 0; }\n"
+                      "        return quantity > 10 ? quantity - 1 : quantity;\n"
+                      "    }\n"
+                      "\n"
+                      "    public void Cancel(Order order) { order.Close(); }\n"
+                      "}\n"));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("Models/Order.cs")),
+                      "namespace Shop;\npublic class Order : Entity\n{\n    public void Close() { }\n}\n"));
+
+    const WorkspaceDiff diff = GitDiff::collect(dir.path());
+    QVERIFY2(diff.error.isEmpty(), qPrintable(diff.error));
+    QCOMPARE(diffPaths(diff), QStringList({"Models/Order.cs", "Services/OrderService.cs"}));
+
+    const FileDiff &order = diff.files.at(0);
+    QVERIFY(order.after && !order.before);
+    QCOMPARE(int(order.after->types.size()), 1);
+    QCOMPARE(order.after->types.first().inheritanceDepth, 2);
+    QVERIFY(order.after->types.first().inheritanceOpen);
+
+    const FileDiff &service = diff.files.at(1);
+    QVERIFY(service.before && service.after);
+    const TypeMetrics *before = findType(service.before->types, QStringLiteral("OrderService"));
+    const TypeMetrics *after = findType(service.after->types, QStringLiteral("OrderService"));
+    QVERIFY(before && after);
+    // OrderService → ServiceBase (file lain) → Controller → ControllerBase → Object
+    QCOMPARE(after->inheritanceDepth, 4);
+    QVERIFY(!after->inheritanceOpen);
+    QCOMPARE(findMember(*before, QStringLiteral("Place(int)"))->complexity, 1);
+    QCOMPARE(findMember(*after, QStringLiteral("Place(int)"))->complexity, 1 + 3);
+    QVERIFY(!findMember(*before, QStringLiteral("Cancel(Order)")));
+    QCOMPARE(findMember(*after, QStringLiteral("Cancel(Order)"))->coupling, 1);
 }
 
 void TestSwarm::realEdgeRendersMermaid() {
