@@ -1,4 +1,5 @@
 #include "NewTaskDialog.h"
+#include "StageCatalog.h"
 
 #include <QComboBox>
 #include <QDateTime>
@@ -13,9 +14,44 @@ namespace {
 const QStringList kCategoryPresets = {
     "component", "utility", "design", "bug", "feature"
 };
+
+// Stage yang model & effort-nya boleh dipilih per task; stage lain memakai bawaan katalog
+const QStringList kTunableStages = {"SPECIFIER", "CODER"};
+
+struct Choice {
+    const char *value;
+    const char *label;
+};
+const QList<Choice> kModelChoices = {
+    {"haiku", "Haiku"}, {"sonnet", "Sonnet"}, {"opus", "Opus"},
+};
+const QList<Choice> kEffortChoices = {
+    {"low", "Low"}, {"medium", "Medium"}, {"high", "High"}, {"xhigh", "XHigh"}, {"max", "Max"},
+};
+
+// Teks item pertama: "Bawaan (Sonnet)". Nilai yang bukan alias dikenal ditampilkan apa adanya.
+QString labelFor(const QList<Choice> &choices, const QString &value) {
+    for (const Choice &choice : choices) {
+        if (value == QLatin1String(choice.value)) {
+            return QString::fromLatin1(choice.label);
+        }
+    }
+    return value;
 }
 
-NewTaskDialog::NewTaskDialog(const QString &projectId, const QStringList &stageKeys, QWidget *parent)
+void fillCombo(QComboBox *combo, const QList<Choice> &choices, const QString &defaultValue) {
+    combo->setObjectName("taskFormCombo");
+    const QString defaultLabel = labelFor(choices, defaultValue);
+    combo->addItem(defaultLabel.isEmpty() ? QStringLiteral("Bawaan")
+                                          : QStringLiteral("Bawaan (%1)").arg(defaultLabel),
+                   QString());
+    for (const Choice &choice : choices) {
+        combo->addItem(QString::fromLatin1(choice.label), QString::fromLatin1(choice.value));
+    }
+}
+}
+
+NewTaskDialog::NewTaskDialog(const QString &projectId, const StageCatalog &catalog, QWidget *parent)
     : QDialog(parent), m_projectId(projectId) {
     setObjectName("NewTaskDialog");
     setWindowTitle("New Task");
@@ -50,7 +86,7 @@ NewTaskDialog::NewTaskDialog(const QString &projectId, const QStringList &stageK
     m_stageInput = new QComboBox(this);
     m_stageInput->setObjectName("taskFormCombo");
     // Pilihan stage datang dari StageCatalog, jadi task baru tidak pernah memakai key yang tidak dikenal
-    m_stageInput->addItems(stageKeys);
+    m_stageInput->addItems(catalog.keys());
     m_stageInput->setCurrentText("WAITING");
 
     auto *fieldRow = new QHBoxLayout();
@@ -58,6 +94,21 @@ NewTaskDialog::NewTaskDialog(const QString &projectId, const QStringList &stageK
     fieldRow->addWidget(buildField("CATEGORY", m_categoryInput));
     fieldRow->addWidget(buildField("STAGE", m_stageInput));
     root->addLayout(fieldRow);
+
+    // Model & effort agent per stage; hanya stage yang punya agent di katalog yang ditampilkan
+    QList<QWidget *> tuningRows;
+    for (const QString &stageKey : kTunableStages) {
+        const StageProfile *profile = catalog.profile(stageKey);
+        if (profile && profile->agent()) {
+            tuningRows.append(buildTuningRow(stageKey, *profile->agent()));
+        }
+    }
+    if (!tuningRows.isEmpty()) {
+        root->addWidget(buildDivider());
+        for (QWidget *row : std::as_const(tuningRows)) {
+            root->addWidget(row);
+        }
+    }
 
     root->addWidget(buildDivider());
 
@@ -84,8 +135,8 @@ NewTaskDialog::NewTaskDialog(const QString &projectId, const QStringList &stageK
     });
 }
 
-NewTaskDialog::NewTaskDialog(const TaskItem &task, const QStringList &stageKeys, QWidget *parent)
-    : NewTaskDialog(task.projectId, stageKeys, parent) {
+NewTaskDialog::NewTaskDialog(const TaskItem &task, const StageCatalog &catalog, QWidget *parent)
+    : NewTaskDialog(task.projectId, catalog, parent) {
     m_editing = true;
     m_original = task;
 
@@ -98,6 +149,39 @@ NewTaskDialog::NewTaskDialog(const TaskItem &task, const QStringList &stageKeys,
 
     m_stageInput->setCurrentText(task.stage);
     m_stageInput->setEnabled(false);
+
+    for (auto it = m_tuningInputs.cbegin(); it != m_tuningInputs.cend(); ++it) {
+        const AgentTuning tuning = task.tuning.value(it.key());
+        selectValue(it->model, tuning.model);
+        selectValue(it->effort, tuning.effort);
+    }
+}
+
+QWidget *NewTaskDialog::buildTuningRow(const QString &stageKey, const AgentDefinition &defaults) {
+    TuningInputs inputs;
+    inputs.model = new QComboBox(this);
+    fillCombo(inputs.model, kModelChoices, defaults.model);
+    inputs.effort = new QComboBox(this);
+    fillCombo(inputs.effort, kEffortChoices, defaults.effort);
+    m_tuningInputs.insert(stageKey, inputs);
+
+    auto *row = new QWidget(this);
+    auto *layout = new QHBoxLayout(row);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(12);
+    layout->addWidget(buildField(QStringLiteral("%1 MODEL").arg(stageKey), inputs.model));
+    layout->addWidget(buildField(QStringLiteral("%1 EFFORT").arg(stageKey), inputs.effort));
+    return row;
+}
+
+void NewTaskDialog::selectValue(QComboBox *combo, const QString &value) {
+    int index = combo->findData(value);
+    if (index < 0) {
+        // Nilai tersimpan di luar daftar (mis. id model penuh): tetap ditampilkan agar tidak hilang diam-diam
+        combo->addItem(value, value);
+        index = combo->count() - 1;
+    }
+    combo->setCurrentIndex(index);
 }
 
 QWidget *NewTaskDialog::buildField(const QString &labelText, QWidget *inputWidget) {
@@ -136,5 +220,13 @@ TaskItem NewTaskDialog::resultTask() const {
     item.category = m_categoryInput->currentText().trimmed();
     item.title = m_titleInput->text().trimmed();
     item.subtext = m_subtextInput->text().trimmed();
+    for (auto it = m_tuningInputs.cbegin(); it != m_tuningInputs.cend(); ++it) {
+        const AgentTuning tuning{it->model->currentData().toString(), it->effort->currentData().toString()};
+        if (tuning.isEmpty()) {
+            item.tuning.remove(it.key());
+        } else {
+            item.tuning.insert(it.key(), tuning);
+        }
+    }
     return item;
 }

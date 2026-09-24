@@ -198,6 +198,21 @@ QJsonObject FileManager::taskToJson(TaskItem task){
     }
     obj[QStringLiteral("runs")] = runs;
 
+    // Hanya pilihan yang benar-benar menimpa bawaan stage yang ditulis
+    QJsonObject tuning;
+    for (auto it = task.tuning.cbegin(); it != task.tuning.cend(); ++it) {
+        if (it->isEmpty()) {
+            continue;
+        }
+        QJsonObject entry;
+        entry[QStringLiteral("model")] = it->model;
+        entry[QStringLiteral("effort")] = it->effort;
+        tuning[it.key()] = entry;
+    }
+    if (!tuning.isEmpty()) {
+        obj[QStringLiteral("tuning")] = tuning;
+    }
+
     return obj;
 }
 
@@ -222,6 +237,15 @@ TaskItem FileManager::taskFromJson(QJsonObject obj, QString *error){
     const QJsonArray runs = obj.value(QStringLiteral("runs")).toArray();
     for (const QJsonValue &run : runs) {
         result.runs.append(runFromJson(run.toObject()));
+    }
+    const QJsonObject tuning = obj.value(QStringLiteral("tuning")).toObject();
+    for (auto it = tuning.constBegin(); it != tuning.constEnd(); ++it) {
+        const QJsonObject entry = it.value().toObject();
+        const AgentTuning value{entry.value(QStringLiteral("model")).toString(),
+                                entry.value(QStringLiteral("effort")).toString()};
+        if (!value.isEmpty()) {
+            result.tuning.insert(it.key(), value);
+        }
     }
 
     return result;

@@ -11,6 +11,7 @@
 #include "SwarmCoordinator.h"
 #include "TaskItem.h"
 #include "TaskManager.h"
+#include "WorkspaceDiff.h"
 #include "WorkspaceGuard.h"
 
 #include <QCoreApplication>
@@ -23,6 +24,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QProcess>
+#include <QScopeGuard>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QThread>
@@ -216,6 +218,33 @@ struct SwarmFixture {
     }
 };
 
+// git sungguhan untuk menyiapkan repository uji; identitas dan signing dipaksa supaya tidak
+// bergantung pada konfigurasi global mesin
+bool runGit(const QString &directory, const QStringList &arguments) {
+    QProcess process;
+    process.setWorkingDirectory(directory);
+    process.start(QStandardPaths::findExecutable(QStringLiteral("git")),
+                  QStringList{QStringLiteral("-c"), QStringLiteral("user.name=Lassomoir Test"),
+                              QStringLiteral("-c"), QStringLiteral("user.email=test@lassomoir.local"),
+                              QStringLiteral("-c"), QStringLiteral("commit.gpgsign=false")}
+                      + arguments);
+    return process.waitForFinished(20000) && process.exitStatus() == QProcess::NormalExit
+           && process.exitCode() == 0;
+}
+
+bool writeFile(const QString &path, const QByteArray &content) {
+    QFile file(path);
+    return file.open(QIODevice::WriteOnly | QIODevice::Truncate) && file.write(content) == content.size();
+}
+
+QStringList diffPaths(const WorkspaceDiff &diff) {
+    QStringList paths;
+    for (const FileDiff &file : diff.files) {
+        paths.append(file.path);
+    }
+    return paths;
+}
+
 }
 
 class TestSwarm : public QObject {
@@ -233,6 +262,8 @@ private slots:
     void parserReportsDeniedTools();
     void parserIgnoresNoise();
     void cliArgumentsFollowAgentDefinition();
+    void catalogDefaultsAreFrugal();
+    void taskTuningOverridesStageDefaults();
     void promptComposerSkipsEmptyFields();
 
     // Gerombolan
@@ -264,6 +295,11 @@ private slots:
 
     // Mermaid (fungsi murni)
     void mermaidHelpers();
+
+    // Perubahan kode untuk stage peninjauan (parser murni + git sungguhan)
+    void gitDiffParsesUnifiedDiff();
+    void gitDiffCollectsWorkspaceChanges();
+    void gitDiffHandlesMissingRepositoryAndFirstCommit();
 
     // Claude Code sungguhan; hanya jalan bila LASSOMOIR_REAL_CLAUDE=1 (memakai token)
     void realClaudeRunsCoderTask();
@@ -391,12 +427,77 @@ void TestSwarm::cliArgumentsFollowAgentDefinition() {
     QCOMPARE(argValue(coder, QStringLiteral("--permission-mode")), QStringLiteral("acceptEdits"));
     QCOMPARE(argValue(coder, QStringLiteral("--permission-prompts")), QStringLiteral("none"));
     QVERIFY(coder.contains(QStringLiteral("--strict-mcp-config")));
-    QCOMPARE(argValue(coder, QStringLiteral("--effort")), QStringLiteral("high"));
+    QCOMPARE(argValue(coder, QStringLiteral("--model")), QStringLiteral("sonnet"));
+    QCOMPARE(argValue(coder, QStringLiteral("--effort")), QStringLiteral("medium"));
     QVERIFY(argValue(coder, QStringLiteral("--append-system-prompt")).startsWith(QStringLiteral("Kamu adalah agen CODER")));
 
     const QStringList specifier = ClaudeCli::arguments(*catalog.profile(QStringLiteral("SPECIFIER"))->agent());
     QVERIFY(!specifier.contains(QStringLiteral("--allowedTools")));
     QCOMPARE(argValue(specifier, QStringLiteral("--tools")), QStringLiteral("Read,Grep,Glob"));
+
+    // Model kosong = CLI memakai model bawaannya, jadi flag tidak dikirim
+    AgentDefinition bare = *catalog.profile(QStringLiteral("CODER"))->agent();
+    bare.model.clear();
+    bare.effort.clear();
+    const QStringList bareArgs = ClaudeCli::arguments(bare);
+    QVERIFY(!bareArgs.contains(QStringLiteral("--model")));
+    QVERIFY(!bareArgs.contains(QStringLiteral("--effort")));
+}
+
+void TestSwarm::catalogDefaultsAreFrugal() {
+    const StageCatalog catalog = StageCatalog::standard();
+    auto tuningOf = [&catalog](const char *stage) {
+        const AgentDefinition &agent = *catalog.profile(QString::fromLatin1(stage))->agent();
+        return QStringList{agent.model, agent.effort};
+    };
+    QCOMPARE(tuningOf("SPECIFIER"), QStringList({"sonnet", "medium"}));
+    QCOMPARE(tuningOf("CODER"), QStringList({"sonnet", "medium"}));
+    QCOMPARE(tuningOf("CLEANER"), QStringList({"haiku", "low"}));
+    QCOMPARE(tuningOf("ARCHITECT"), QStringList({"sonnet", "medium"}));
+    QCOMPARE(tuningOf("HARDENER"), QStringList({"sonnet", "medium"}));
+    QCOMPARE(tuningOf("QA"), QStringList({"haiku", "low"}));
+}
+
+void TestSwarm::taskTuningOverridesStageDefaults() {
+    SwarmFixture f;
+    auto launchOf = [&f](const QString &id) { return sessionFor(f.runtime, id)->launch().agent; };
+
+    // Tanpa pilihan pengguna: bawaan stage
+    QVERIFY(f.run(QStringLiteral("plain"), QStringLiteral("SPECIFIER")));
+    QCOMPARE(launchOf(QStringLiteral("plain")).model, QStringLiteral("sonnet"));
+    QCOMPARE(launchOf(QStringLiteral("plain")).effort, QStringLiteral("medium"));
+
+    // Model dan effort ditimpa; pilihan untuk stage lain tidak ikut terbawa
+    TaskItem heavy = makeTask(QStringLiteral("heavy"), QStringLiteral("CODER"));
+    heavy.tuning.insert(QStringLiteral("CODER"), {QStringLiteral("opus"), QStringLiteral("high")});
+    heavy.tuning.insert(QStringLiteral("SPECIFIER"), {QStringLiteral("haiku"), QStringLiteral("low")});
+    QVERIFY(f.swarm.run(heavy, f.dir.path()));
+    QCOMPARE(launchOf(QStringLiteral("heavy")).model, QStringLiteral("opus"));
+    QCOMPARE(launchOf(QStringLiteral("heavy")).effort, QStringLiteral("high"));
+
+    // Field kosong dibiarkan: hanya effort yang ditimpa, model tetap bawaan
+    TaskItem effortOnly = makeTask(QStringLiteral("effort"), QStringLiteral("SPECIFIER"));
+    effortOnly.tuning.insert(QStringLiteral("SPECIFIER"), {QString(), QStringLiteral("max")});
+    QVERIFY(f.swarm.run(effortOnly, f.dir.path()));
+    QCOMPARE(launchOf(QStringLiteral("effort")).model, QStringLiteral("sonnet"));
+    QCOMPARE(launchOf(QStringLiteral("effort")).effort, QStringLiteral("max"));
+
+    // Bawaan katalog tidak ikut berubah, dan pilihan sampai ke argumen CLI
+    QCOMPARE(f.catalog.profile(QStringLiteral("CODER"))->agent()->model, QStringLiteral("sonnet"));
+    const QStringList args = ClaudeCli::arguments(launchOf(QStringLiteral("heavy")));
+    QCOMPARE(argValue(args, QStringLiteral("--model")), QStringLiteral("opus"));
+    QCOMPARE(argValue(args, QStringLiteral("--effort")), QStringLiteral("high"));
+
+    // Form edit menyimpan pilihan lewat TaskManager tanpa menyentuh stage atau status
+    TaskManager manager(f.catalog);
+    manager.addTask(makeTask(QStringLiteral("m1"), QStringLiteral("CODER")));
+    QVERIFY(manager.updateDetails(QStringLiteral("m1"), QStringLiteral("Baru"), QStringLiteral("bug"),
+                                  QStringLiteral("catatan"), heavy.tuning));
+    const std::optional<TaskItem> updated = manager.task(QStringLiteral("m1"));
+    QVERIFY(updated);
+    QCOMPARE(updated->title, QStringLiteral("Baru"));
+    QCOMPARE(updated->stage, QStringLiteral("CODER"));
+    QCOMPARE(updated->tuning.value(QStringLiteral("CODER")).model, QStringLiteral("opus"));
 }
 
 void TestSwarm::promptComposerSkipsEmptyFields() {
@@ -922,6 +1023,9 @@ void TestSwarm::fileManagerRoundTripsRunsAndState() {
     run.decision = ReviewDecision::Revise;
     run.reviewNote = QStringLiteral("catatan");
     task.runs = {run};
+    task.tuning.insert(QStringLiteral("CODER"), {QStringLiteral("opus"), QStringLiteral("high")});
+    task.tuning.insert(QStringLiteral("SPECIFIER"), {QString(), QStringLiteral("low")});
+    task.tuning.insert(QStringLiteral("QA"), AgentTuning());   // entri kosong tidak ditulis
 
     QString error;
     {
@@ -950,6 +1054,11 @@ void TestSwarm::fileManagerRoundTripsRunsAndState() {
     QCOMPARE(restored.reviewNote, QStringLiteral("catatan"));
     QCOMPARE(restored.finishedAt.toSecsSinceEpoch(), run.finishedAt.toSecsSinceEpoch());
     QCOMPARE(reader.workingDirectory(QStringLiteral("RoundTrip")), QStringLiteral("C:/repo"));
+    QCOMPARE(int(back.tuning.size()), 2);
+    QCOMPARE(back.tuning.value(QStringLiteral("CODER")).model, QStringLiteral("opus"));
+    QCOMPARE(back.tuning.value(QStringLiteral("CODER")).effort, QStringLiteral("high"));
+    QVERIFY(back.tuning.value(QStringLiteral("SPECIFIER")).model.isEmpty());
+    QCOMPARE(back.tuning.value(QStringLiteral("SPECIFIER")).effort, QStringLiteral("low"));
 
     // File lama tanpa "state"/"runs" (dan dengan "badge") tetap terbaca
     QVERIFY(QDir().mkpath(base + QStringLiteral("/projects/Legacy")));
@@ -962,6 +1071,7 @@ void TestSwarm::fileManagerRoundTripsRunsAndState() {
     QCOMPARE(int(old.size()), 1);
     QVERIFY(old.first().state == TaskState::Idle);
     QVERIFY(old.first().runs.isEmpty());
+    QVERIFY(old.first().tuning.isEmpty());
 
     QDir(base + QStringLiteral("/projects")).removeRecursively();
 }
@@ -991,6 +1101,217 @@ void TestSwarm::mermaidHelpers() {
     QVERIFY(page.contains(QStringLiteral("&lt;/pre&gt;&lt;script&gt;")));
     QVERIFY(page.contains(QStringLiteral("securityLevel: 'strict'")));
     QVERIFY(EdgeMermaidRenderer::pageHtml(QStringLiteral("graph TD; A[%2]-->B")).contains(QStringLiteral("A[%2]")));
+}
+
+void TestSwarm::gitDiffParsesUnifiedDiff() {
+    const QString patch = QStringList{
+        QStringLiteral("diff --git a/src/board.cpp b/src/board.cpp"),
+        QStringLiteral("index 1111111..2222222 100644"),
+        QStringLiteral("--- a/src/board.cpp"),
+        QStringLiteral("+++ b/src/board.cpp"),
+        QStringLiteral("@@ -10,4 +10,5 @@ void Board::reset()"),
+        QStringLiteral(" int x = 0;"),
+        // Baris "-- komentar" yang dihapus: di dalam hunk bukan header "--- a/..."
+        QStringLiteral("--- dulu komentar"),
+        QStringLiteral("+-- sekarang komentar"),
+        QStringLiteral("+int y = 2;"),
+        // Baris konteks kosong tanpa spasi (diff.suppressBlankEmpty)
+        QString(),
+        QStringLiteral(" return x;"),
+        QStringLiteral("diff --git a/docs/catatan baru.md b/docs/catatan baru.md"),
+        QStringLiteral("new file mode 100644"),
+        QStringLiteral("index 0000000..3333333"),
+        QStringLiteral("--- /dev/null"),
+        QStringLiteral("+++ b/docs/catatan baru.md\t"),
+        QStringLiteral("@@ -0,0 +1,2 @@"),
+        QStringLiteral("+# Catatan"),
+        QStringLiteral("+baris dua"),
+        QStringLiteral("\\ No newline at end of file"),
+        QStringLiteral("diff --git a/old.txt b/old.txt"),
+        QStringLiteral("deleted file mode 100644"),
+        QStringLiteral("index 4444444..0000000"),
+        QStringLiteral("--- a/old.txt"),
+        QStringLiteral("+++ /dev/null"),
+        QStringLiteral("@@ -1 +0,0 @@"),
+        QStringLiteral("-hapus saya"),
+        QStringLiteral("diff --git a/a.h b/b.h"),
+        QStringLiteral("similarity index 90%"),
+        QStringLiteral("rename from a.h"),
+        QStringLiteral("rename to b.h"),
+        QStringLiteral("index 5555555..6666666 100644"),
+        QStringLiteral("--- a/a.h"),
+        QStringLiteral("+++ b/b.h"),
+        QStringLiteral("@@ -1,2 +1,2 @@"),
+        QStringLiteral("-#ifndef A_H"),
+        QStringLiteral("+#ifndef B_H"),
+        QStringLiteral(" #define X"),
+        QStringLiteral("diff --git a/logo.png b/logo.png"),
+        QStringLiteral("index 7777777..8888888 100644"),
+        QStringLiteral("Binary files a/logo.png and b/logo.png differ"),
+        QStringLiteral("diff --git a/run.sh b/run.sh"),
+        QStringLiteral("old mode 100644"),
+        QStringLiteral("new mode 100755"),
+        QString(),
+    }.join(QLatin1Char('\n'));
+
+    // Keluaran git dengan CRLF (mis. lewat pipe di Windows) harus terbaca sama persis
+    for (const QString &text : {patch, QString(patch).replace(QStringLiteral("\n"), QStringLiteral("\r\n"))}) {
+        const QList<FileDiff> files = GitDiff::parse(text);
+        QCOMPARE(int(files.size()), 6);
+
+        const FileDiff &board = files.at(0);
+        QCOMPARE(board.path, QStringLiteral("src/board.cpp"));
+        QVERIFY(board.status == FileDiff::Status::Modified);
+        QCOMPARE(board.added, 2);
+        QCOMPARE(board.removed, 1);
+        QCOMPARE(int(board.lines.size()), 7);
+        QVERIFY(board.lines.at(0).kind == DiffLine::Kind::Hunk);
+        QCOMPARE(board.lines.at(0).text, QStringLiteral("@@ -10,4 +10,5 @@ void Board::reset()"));
+        QVERIFY(board.lines.at(2).kind == DiffLine::Kind::Removed);
+        QCOMPARE(board.lines.at(2).text, QStringLiteral("-- dulu komentar"));
+        QCOMPARE(board.lines.at(2).oldLine, 11);
+        QCOMPARE(board.lines.at(2).newLine, 0);
+        QVERIFY(board.lines.at(4).kind == DiffLine::Kind::Added);
+        QCOMPARE(board.lines.at(4).newLine, 12);
+        QVERIFY(board.lines.at(5).kind == DiffLine::Kind::Context);
+        QVERIFY(board.lines.at(5).text.isEmpty());
+        QCOMPARE(board.lines.at(6).text, QStringLiteral("return x;"));
+        QCOMPARE(board.lines.at(6).oldLine, 13);
+        QCOMPARE(board.lines.at(6).newLine, 14);
+
+        const FileDiff &notes = files.at(1);
+        QCOMPARE(notes.path, QStringLiteral("docs/catatan baru.md"));
+        QVERIFY(notes.status == FileDiff::Status::Added);
+        QVERIFY(!notes.untracked);
+        QCOMPARE(notes.added, 2);
+        QVERIFY(notes.lines.last().kind == DiffLine::Kind::Note);
+        QCOMPARE(notes.lines.last().text, QStringLiteral("No newline at end of file"));
+
+        QCOMPARE(files.at(2).path, QStringLiteral("old.txt"));
+        QVERIFY(files.at(2).status == FileDiff::Status::Deleted);
+        QCOMPARE(files.at(2).removed, 1);
+        QCOMPARE(files.at(2).lines.last().oldLine, 1);
+
+        QVERIFY(files.at(3).status == FileDiff::Status::Renamed);
+        QCOMPARE(files.at(3).oldPath, QStringLiteral("a.h"));
+        QCOMPARE(files.at(3).path, QStringLiteral("b.h"));
+        QCOMPARE(files.at(3).added, 1);
+        QCOMPARE(files.at(3).removed, 1);
+
+        QCOMPARE(files.at(4).path, QStringLiteral("logo.png"));
+        QVERIFY(files.at(4).note.contains(QStringLiteral("biner")));
+        QVERIFY(files.at(4).lines.isEmpty());
+
+        QCOMPARE(files.at(5).path, QStringLiteral("run.sh"));
+        QCOMPARE(files.at(5).note, QStringLiteral("Mode file berubah (100644 → 100755)"));
+    }
+
+    QVERIFY(GitDiff::parse(QString()).isEmpty());
+}
+
+void TestSwarm::gitDiffCollectsWorkspaceChanges() {
+    if (QStandardPaths::findExecutable(QStringLiteral("git")).isEmpty()) {
+        QSKIP("git tidak ada di PATH");
+    }
+
+    QTemporaryDir repo;
+    const QDir dir(repo.path());
+    QVERIFY(runGit(dir.path(), {QStringLiteral("init"), QStringLiteral("-q")}));
+    QVERIFY(dir.mkpath(QStringLiteral("sub")));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("keep.txt")), "satu\ndua\ntiga\n"));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("gone.txt")), "hapus\n"));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("sub/inner.txt")), "lama\n"));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral(".gitignore")), "build/\n"));
+    QVERIFY(runGit(dir.path(), {QStringLiteral("add"), QStringLiteral("-A")}));
+    QVERIFY(runGit(dir.path(), {QStringLiteral("commit"), QStringLiteral("-q"), QStringLiteral("-m"), QStringLiteral("awal")}));
+
+    // Perubahan seperti hasil CODER: ubah, hapus, file baru (teks & biner), dan file yang di-ignore
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("keep.txt")), "satu\nDUA\ntiga\n"));
+    QVERIFY(QFile::remove(dir.filePath(QStringLiteral("gone.txt"))));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("sub/inner.txt")), "baru\n"));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("Baru.txt")), "halo\r\ndunia\r\n"));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("gambar.bin")), QByteArray("PNG\0\0data", 9)));
+    QVERIFY(dir.mkpath(QStringLiteral("build")));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("build/out.o")), "objek\n"));
+
+    const WorkspaceDiff diff = GitDiff::collect(dir.path());
+    QVERIFY2(diff.error.isEmpty(), qPrintable(diff.error));
+    QCOMPARE(int(diff.baseCommit.size()), 7);
+    QCOMPARE(diffPaths(diff), QStringList({"Baru.txt", "gambar.bin", "gone.txt", "keep.txt", "sub/inner.txt"}));
+
+    const FileDiff &created = diff.files.at(0);
+    QVERIFY(created.status == FileDiff::Status::Added);
+    QVERIFY(created.untracked);
+    QCOMPARE(created.added, 2);
+    QCOMPARE(created.lines.at(1).text, QStringLiteral("dunia"));
+    QCOMPARE(created.lines.at(1).newLine, 2);
+
+    QVERIFY(diff.files.at(1).untracked);
+    QVERIFY(diff.files.at(1).note.contains(QStringLiteral("biner")));
+    QVERIFY(diff.files.at(1).lines.isEmpty());
+
+    QVERIFY(diff.files.at(2).status == FileDiff::Status::Deleted);
+    QCOMPARE(diff.files.at(2).removed, 1);
+
+    const FileDiff &kept = diff.files.at(3);
+    QVERIFY(kept.status == FileDiff::Status::Modified);
+    QCOMPARE(kept.added, 1);
+    QCOMPARE(kept.removed, 1);
+    bool sawRemoved = false;
+    bool sawAdded = false;
+    for (const DiffLine &line : kept.lines) {
+        sawRemoved |= line.kind == DiffLine::Kind::Removed && line.text == QLatin1String("dua") && line.oldLine == 2;
+        sawAdded |= line.kind == DiffLine::Kind::Added && line.text == QLatin1String("DUA") && line.newLine == 2;
+    }
+    QVERIFY(sawRemoved && sawAdded);
+    QCOMPARE(diff.added(), 2 + 1 + 1);
+    QCOMPARE(diff.removed(), 1 + 1 + 1);
+
+    // Folder kerja = subfolder repository: hanya isinya, dengan path relatif terhadap subfolder
+    const WorkspaceDiff inner = GitDiff::collect(dir.filePath(QStringLiteral("sub")));
+    QVERIFY2(inner.error.isEmpty(), qPrintable(inner.error));
+    QCOMPARE(diffPaths(inner), QStringList({"inner.txt"}));
+
+    // Hanya membaca: tidak ada yang masuk index
+    QProcess status;
+    status.setWorkingDirectory(dir.path());
+    status.start(QStandardPaths::findExecutable(QStringLiteral("git")),
+                 {QStringLiteral("diff"), QStringLiteral("--cached"), QStringLiteral("--name-only")});
+    QVERIFY(status.waitForFinished(20000));
+    QVERIFY(status.readAllStandardOutput().trimmed().isEmpty());
+}
+
+void TestSwarm::gitDiffHandlesMissingRepositoryAndFirstCommit() {
+    if (QStandardPaths::findExecutable(QStringLiteral("git")).isEmpty()) {
+        QSKIP("git tidak ada di PATH");
+    }
+
+    // Git tidak boleh naik ke folder induk yang kebetulan repository
+    QTemporaryDir plain;
+    qputenv("GIT_CEILING_DIRECTORIES", QFileInfo(plain.path()).absolutePath().toUtf8());
+    auto restoreEnv = qScopeGuard([]() { qunsetenv("GIT_CEILING_DIRECTORIES"); });
+
+    const WorkspaceDiff missing = GitDiff::collect(plain.path());
+    QVERIFY(missing.error.startsWith(QStringLiteral("Folder kerja bukan repository git")));
+    QVERIFY(missing.files.isEmpty());
+
+    // Repository baru tanpa commit: file di index dan file baru sama-sama tampil sebagai file baru
+    QTemporaryDir fresh;
+    const QDir dir(fresh.path());
+    QVERIFY(runGit(dir.path(), {QStringLiteral("init"), QStringLiteral("-q")}));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("staged.txt")), "a\nb\n"));
+    QVERIFY(runGit(dir.path(), {QStringLiteral("add"), QStringLiteral("staged.txt")}));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("untracked.txt")), "c\n"));
+
+    const WorkspaceDiff first = GitDiff::collect(dir.path());
+    QVERIFY2(first.error.isEmpty(), qPrintable(first.error));
+    QVERIFY(first.baseCommit.isEmpty());
+    QCOMPARE(diffPaths(first), QStringList({"staged.txt", "untracked.txt"}));
+    QVERIFY(first.files.at(0).status == FileDiff::Status::Added);
+    QVERIFY(!first.files.at(0).untracked);
+    QCOMPARE(first.files.at(0).added, 2);
+    QVERIFY(first.files.at(1).untracked);
+    QCOMPARE(first.added(), 3);
 }
 
 void TestSwarm::realEdgeRendersMermaid() {

@@ -44,7 +44,7 @@ void TaskManager::addTask(const TaskItem &item) {
 }
 
 bool TaskManager::updateDetails(const QString &taskId, const QString &title, const QString &category,
-                                const QString &subtext) {
+                                const QString &subtext, const QHash<QString, AgentTuning> &tuning) {
     auto it = m_tasks.find(taskId);
     if (it == m_tasks.end()) {
         return false;
@@ -52,6 +52,7 @@ bool TaskManager::updateDetails(const QString &taskId, const QString &title, con
     it->title = title;
     it->category = category;
     it->subtext = subtext;
+    it->tuning = tuning;
     emit taskChanged(*it);
     return true;
 }

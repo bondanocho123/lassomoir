@@ -4,10 +4,12 @@
 #pragma once
 
 #include <QDialog>
+#include <QMap>
 #include <QString>
 
 #include "TaskItem.h"
 
+class StageCatalog;
 class QLineEdit;
 class QComboBox;
 class QLabel;
@@ -21,12 +23,12 @@ class NewTaskDialog : public QDialog
     Q_OBJECT
 
 public:
-    // stageKeys: urutan stage dari StageCatalog, jadi pilihan di combo selalu valid
-    NewTaskDialog(const QString &projectId, const QStringList &stageKeys, QWidget *parent = nullptr);
+    // catalog: urutan stage dan bawaan model/effort tiap stage, jadi pilihan di combo selalu valid
+    NewTaskDialog(const QString &projectId, const StageCatalog &catalog, QWidget *parent = nullptr);
 
     // Mode edit: form terisi dari task yang ada. Stage dikunci karena perpindahan stage
     // hanya lewat drag di board (yang lolos gerbang StageProfile), bukan lewat form.
-    NewTaskDialog(const TaskItem &task, const QStringList &stageKeys, QWidget *parent = nullptr);
+    NewTaskDialog(const TaskItem &task, const StageCatalog &catalog, QWidget *parent = nullptr);
 
     // Hanya valid dipanggil setelah exec() == QDialog::Accepted.
     // Mode edit: id, projectId, dan field yang tidak ada di form (status, riwayat run)
@@ -49,9 +51,21 @@ private:
     QComboBox *m_stageInput;
     QPushButton *m_btnCreate;
 
+    // Pilihan model & effort per stage yang boleh disetel (SPECIFIER, CODER); data combo
+    // kosong = ikuti bawaan stage
+    struct TuningInputs {
+        QComboBox *model = nullptr;
+        QComboBox *effort = nullptr;
+    };
+    QMap<QString, TuningInputs> m_tuningInputs;
+
     // Bungkus label kecil (mis. "TASK TITLE") + widget input jadi satu kolom vertikal
     QWidget *buildField(const QString &labelText, QWidget *inputWidget);
     QFrame *buildDivider();
+
+    // Dua field MODEL & EFFORT untuk satu stage; item pertama menyebut bawaan stage
+    QWidget *buildTuningRow(const QString &stageKey, const AgentDefinition &defaults);
+    static void selectValue(QComboBox *combo, const QString &value);
 };
 
 #endif // NEWTASKDIALOG_H

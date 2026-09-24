@@ -32,6 +32,9 @@ QStringList ClaudeCli::arguments(const AgentDefinition &agent) {
          // Server MCP milik pengguna tidak ikut dimuat di run agent
          << QStringLiteral("--strict-mcp-config");
 
+    if (!agent.model.isEmpty()) {
+        args << QStringLiteral("--model") << agent.model;
+    }
     if (!agent.effort.isEmpty()) {
         args << QStringLiteral("--effort") << agent.effort;
     }

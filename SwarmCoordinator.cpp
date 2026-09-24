@@ -54,6 +54,7 @@ bool SwarmCoordinator::run(const TaskItem &task, const QString &workingDirectory
 
     AgentLaunch launch;
     launch.agent = *profile->agent();
+    launch.agent.applyTuning(task.tuning.value(task.stage));
     launch.prompt = m_composer.compose(task);
     launch.workingDirectory = workingDirectory;
     swarm->submit(task, launch);

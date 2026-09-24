@@ -13,8 +13,11 @@
 #include "StageCatalog.h"
 #include "SwarmCoordinator.h"
 #include "TaskManager.h"
+#include "WorkspaceDiff.h"
 
 #include <QFileDialog>
+#include <QFutureWatcher>
+#include <QtConcurrent/QtConcurrentRun>
 #include <QInputDialog>
 #include <QDateTime>
 #include <QAbstractAnimation>
@@ -104,6 +107,7 @@ MainWindow::MainWindow(const StageCatalog &catalog, TaskManager &tasks, SwarmCoo
     connect(m_drawer, &ResponseDrawer::approveRequested, this, &MainWindow::handleApproveRequested);
     connect(m_drawer, &ResponseDrawer::revisionRequested, this, &MainWindow::handleRevisionRequested);
     connect(m_drawer, &ResponseDrawer::sendBackRequested, this, &MainWindow::handleSendBackRequested);
+    connect(m_drawer, &ResponseDrawer::diffRequested, this, &MainWindow::handleDiffRequested);
 
     // Simpan lebar minimum asli sidebar (dari .ui) sebelum animasi bisa mengubahnya
     m_sidebarMinWidth = ui->sidebarPanel->minimumWidth();
@@ -532,7 +536,7 @@ void MainWindow::handleCardMoved(const QString &projectId, KanbanCardWidget *car
 }
 
 void MainWindow::handleNewTaskRequested(const QString &projectId) {
-    NewTaskDialog dialog(projectId, m_catalog.keys(), this);
+    NewTaskDialog dialog(projectId, m_catalog, this);
     if (dialog.exec() != QDialog::Accepted) {
         return;
     }
@@ -556,14 +560,14 @@ void MainWindow::handleEditTaskRequested(const QString &projectId, const QString
     const std::optional<TaskItem> task = m_tasks.task(taskId);
     if (!task) return;
 
-    NewTaskDialog dialog(*task, m_catalog.keys(), this);
+    NewTaskDialog dialog(*task, m_catalog, this);
     if (dialog.exec() != QDialog::Accepted) {
         return;
     }
 
     // Kartu dan file sesi ikut diperbarui lewat sinyal taskChanged
     const TaskItem item = dialog.resultTask();
-    if (!m_tasks.updateDetails(taskId, item.title, item.category, item.subtext)) {
+    if (!m_tasks.updateDetails(taskId, item.title, item.category, item.subtext, item.tuning)) {
         return;
     }
 
@@ -682,9 +686,12 @@ void MainWindow::openDrawer(const QString &taskId) {
     const std::optional<TaskItem> task = m_tasks.task(taskId);
     if (!task) return;
 
-    // Klik pada kartu yang belum pernah dijalankan tidak membuka apa-apa
+    // Klik pada kartu yang belum pernah dijalankan tidak membuka apa-apa, kecuali di stage
+    // peninjauan kode: perubahan kode sudah bisa ditinjau sebelum agent-nya dijalankan
     const RunState runState = m_swarm.state(taskId);
-    if (task->runs.isEmpty() && runState == RunState::Idle) return;
+    if (task->runs.isEmpty() && runState == RunState::Idle && !ResponseDrawer::showsCodeChanges(task->stage)) {
+        return;
+    }
 
     m_drawer->showTask(*task, runState, m_tasks.nextStage(task->stage), m_tasks.sendBackTargets(task->stage));
     const int boardWidth = m_boardSplitter->width();
@@ -794,6 +801,31 @@ void MainWindow::handleSendBackRequested(const QString &taskId, const QString &s
     ui->consolePanel->appendLog(RunLogFormatter::gateLine(
         *task, sent ? QString("dikembalikan dari %1 ke %2").arg(task->stage, stage)
                     : QString("gagal dikembalikan: %1").arg(reason)));
+}
+
+void MainWindow::handleDiffRequested(const QString &taskId) {
+    const std::optional<TaskItem> task = m_tasks.task(taskId);
+    if (!task) return;
+
+    const QString workingDirectory = m_fileManager->workingDirectory(task->projectId);
+    if (workingDirectory.isEmpty() || !QDir(workingDirectory).exists()) {
+        m_drawer->showDiff(taskId, WorkspaceDiff::failure(
+                                       QString("Folder kerja project %1 belum dipilih atau sudah tidak ada.")
+                                           .arg(task->projectId)));
+        return;
+    }
+
+    // git bisa lambat di repository besar, jadi dibaca di thread pool. Hasil permintaan lama
+    // yang tersusul (mis. tombol muat ulang ditekan dua kali) dibuang.
+    const int request = ++m_diffRequest;
+    auto *watcher = new QFutureWatcher<WorkspaceDiff>(this);
+    connect(watcher, &QFutureWatcher<WorkspaceDiff>::finished, this, [this, watcher, taskId, request]() {
+        watcher->deleteLater();
+        if (request == m_diffRequest) {
+            m_drawer->showDiff(taskId, watcher->result());
+        }
+    });
+    watcher->setFuture(QtConcurrent::run(&GitDiff::collect, workingDirectory));
 }
 
 void MainWindow::handleRunRequested(const QString &projectId, const QString &taskId) {

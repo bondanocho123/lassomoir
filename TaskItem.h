@@ -6,6 +6,7 @@
 #include "AgentTypes.h"
 
 #include <QDateTime>
+#include <QHash>
 #include <QList>
 #include <QSet>
 #include <QString>
@@ -62,6 +63,10 @@ struct TaskItem {
     QString subtext;
     TaskState state = TaskState::Idle;
     QList<StageRun> runs;   // kronologis, run terlama dulu
+
+    // Model/effort pilihan pengguna per key stage; stage yang tidak ada di sini memakai
+    // bawaan StageCatalog
+    QHash<QString, AgentTuning> tuning;
 
     // Run terakhir di stage tertentu; nullptr bila belum pernah ada
     const StageRun *latestRun(const QString &stageKey) const {

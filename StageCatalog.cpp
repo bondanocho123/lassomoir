@@ -11,38 +11,44 @@ StageCatalog StageCatalog::standard() {
     const auto autoAdvance = std::make_shared<AutoAdvance>();
 
     auto agent = [](const QString &key, const QStringList &tools, const QStringList &allowedTools,
-                    const QString &effort, int maxConcurrent) {
+                    const QString &model, const QString &effort, int maxConcurrent) {
         AgentDefinition definition;
         definition.rolePrompt = loadRolePrompt(key);
         definition.tools = tools;
         definition.allowedTools = allowedTools;
+        definition.model = model;
         definition.effort = effort;
         definition.maxConcurrent = maxConcurrent;
         return definition;
     };
 
+    // Bawaan dibuat irit dan cepat: Sonnet medium untuk stage yang menulis atau menilai kode,
+    // Haiku low untuk stage mekanis (rapikan, jalankan tes). Model/effort SPECIFIER dan CODER
+    // bisa ditimpa per task lewat dialog New Task (TaskItem::tuning).
     // SPECIFIER dan ARCHITECT sengaja tanpa Write: folder artefak belum ada dan hasilnya
     // berupa teks jawaban, jadi agent-nya read-only dan boleh jalan paralel dengan penulis.
     return StageCatalog({
         StageProfile(QStringLiteral("WAITING"), std::nullopt, autoAdvance),
         StageProfile(QStringLiteral("SPECIFIER"),
-                     agent(QStringLiteral("SPECIFIER"), {"Read", "Grep", "Glob"}, {}, "high", 3),
+                     agent(QStringLiteral("SPECIFIER"), {"Read", "Grep", "Glob"}, {}, "sonnet", "medium", 3),
                      gate),
         StageProfile(QStringLiteral("CODER"),
                      agent(QStringLiteral("CODER"), {"Read", "Grep", "Glob", "Edit", "Write", "Bash"},
-                           {"Bash(git *)"}, "high", 2),
+                           {"Bash(git *)"}, "sonnet", "medium", 2),
                      autoAdvance),
         StageProfile(QStringLiteral("CLEANER"),
-                     agent(QStringLiteral("CLEANER"), {"Read", "Grep", "Glob", "Edit", "Bash"}, {}, "medium", 1),
+                     agent(QStringLiteral("CLEANER"), {"Read", "Grep", "Glob", "Edit", "Bash"}, {},
+                           "haiku", "low", 1),
                      autoAdvance),
         StageProfile(QStringLiteral("ARCHITECT"),
-                     agent(QStringLiteral("ARCHITECT"), {"Read", "Grep", "Glob"}, {}, "high", 2),
+                     agent(QStringLiteral("ARCHITECT"), {"Read", "Grep", "Glob"}, {}, "sonnet", "medium", 2),
                      autoAdvance),
         StageProfile(QStringLiteral("HARDENER"),
-                     agent(QStringLiteral("HARDENER"), {"Read", "Grep", "Glob", "Edit", "Write", "Bash"}, {}, "high", 1),
+                     agent(QStringLiteral("HARDENER"), {"Read", "Grep", "Glob", "Edit", "Write", "Bash"}, {},
+                           "sonnet", "medium", 1),
                      autoAdvance),
         StageProfile(QStringLiteral("QA"),
-                     agent(QStringLiteral("QA"), {"Read", "Grep", "Glob", "Bash"}, {}, "medium", 1),
+                     agent(QStringLiteral("QA"), {"Read", "Grep", "Glob", "Bash"}, {}, "haiku", "low", 1),
                      gate),
         StageProfile(QStringLiteral("DONE"), std::nullopt, autoAdvance),
     });

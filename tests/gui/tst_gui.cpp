@@ -23,12 +23,16 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
+#include <QProcess>
 #include <QPushButton>
+#include <QScopeGuard>
 #include <QSplitter>
 #include <QStandardPaths>
+#include <QTabBar>
 #include <QTemporaryDir>
 #include <QTextBrowser>
 #include <QTimer>
+#include <QTreeWidget>
 #include <QtTest>
 
 #include <functional>
@@ -71,6 +75,23 @@ QJsonObject taskJson(const QString &id, const QString &stage, const QString &tit
     return task;
 }
 
+bool runGit(const QString &directory, const QStringList &arguments) {
+    QProcess process;
+    process.setWorkingDirectory(directory);
+    process.start(QStandardPaths::findExecutable(QStringLiteral("git")),
+                  QStringList{QStringLiteral("-c"), QStringLiteral("user.name=Lassomoir Test"),
+                              QStringLiteral("-c"), QStringLiteral("user.email=test@lassomoir.local"),
+                              QStringLiteral("-c"), QStringLiteral("commit.gpgsign=false")}
+                      + arguments);
+    return process.waitForFinished(20000) && process.exitStatus() == QProcess::NormalExit
+           && process.exitCode() == 0;
+}
+
+bool writeFile(const QString &path, const QByteArray &content) {
+    QFile file(path);
+    return file.open(QIODevice::WriteOnly | QIODevice::Truncate) && file.write(content) == content.size();
+}
+
 }
 
 // MainWindow asli + SwarmCoordinator asli, hanya runtime agent yang palsu:
@@ -99,6 +120,7 @@ private slots:
     void drawerExpandFillsBoardAndRestores();
     void reviewSurvivesRestart();
     void markdownViewRendersMermaid();
+    void architectDrawerShowsCodeChanges();
 
 private:
     // Dialog modal membuka event loop sendiri di dalam handler klik; timer ini jalan di loop itu
@@ -339,10 +361,20 @@ void TestGui::doubleClickEditsTask() {
         QCOMPARE(inputs[0]->text(), QStringLiteral("Tulis hello"));
 
         // Stage dikunci: pindah stage tetap lewat drag di board
+        // Urutan combo: kategori, stage, lalu model & effort SPECIFIER dan CODER
         const QList<QComboBox *> combos = dialog->findChildren<QComboBox *>(QStringLiteral("taskFormCombo"));
-        QCOMPARE(combos.size(), 2);
+        QCOMPARE(combos.size(), 6);
         QCOMPARE(combos[1]->currentText(), QStringLiteral("CODER"));
         QVERIFY(!combos[1]->isEnabled());
+
+        // Item pertama menyebut bawaan stage; task ini belum punya pilihan sendiri
+        QComboBox *coderModel = combos[4];
+        QComboBox *coderEffort = combos[5];
+        QCOMPARE(coderModel->itemText(0), QStringLiteral("Bawaan (Sonnet)"));
+        QCOMPARE(coderEffort->itemText(0), QStringLiteral("Bawaan (Medium)"));
+        QCOMPARE(coderModel->currentIndex(), 0);
+        coderModel->setCurrentIndex(coderModel->findData(QStringLiteral("opus")));
+        coderEffort->setCurrentIndex(coderEffort->findData(QStringLiteral("high")));
 
         inputs[0]->setText(QStringLiteral("Tulis hello v2"));
         inputs[1]->setText(QStringLiteral("PIC: Budi"));
@@ -368,6 +400,13 @@ void TestGui::doubleClickEditsTask() {
     QVERIFY(swimlane);
     QCOMPARE(swimlane->stageOf(coder), QStringLiteral("CODER"));
     QVERIFY(consoleText().contains(QStringLiteral("[TASK EDITED] Demo -> CODER: 'Tulis hello v2'")));
+
+    // Pilihan model & effort dari form ikut tersimpan di task, hanya untuk stage yang disetel
+    const std::optional<TaskItem> edited = m_tasks->task(QStringLiteral("t1"));
+    QVERIFY(edited);
+    QCOMPARE(int(edited->tuning.size()), 1);
+    QCOMPARE(edited->tuning.value(QStringLiteral("CODER")).model, QStringLiteral("opus"));
+    QCOMPARE(edited->tuning.value(QStringLiteral("CODER")).effort, QStringLiteral("high"));
 }
 
 void TestGui::cancelledEditKeepsTask() {
@@ -607,6 +646,75 @@ void TestGui::markdownViewRendersMermaid() {
     MarkdownView plain(nullptr);
     plain.showMarkdown(QStringLiteral("```mermaid\n%1\n```").arg(code));
     QVERIFY(plain.toPlainText().contains(code));
+}
+
+void TestGui::architectDrawerShowsCodeChanges() {
+    if (QStandardPaths::findExecutable(QStringLiteral("git")).isEmpty()) {
+        QSKIP("git tidak ada di PATH");
+    }
+
+    // Folder kerja project Demo dijadikan repository: satu file diubah, satu file baru
+    const QDir dir(m_workDir.path());
+    auto removeRepository = qScopeGuard([dir]() {
+        QDir(dir.filePath(QStringLiteral(".git"))).removeRecursively();
+        QFile::remove(dir.filePath(QStringLiteral("hello.txt")));
+        QFile::remove(dir.filePath(QStringLiteral("baru.txt")));
+    });
+    QVERIFY(runGit(dir.path(), {QStringLiteral("init"), QStringLiteral("-q")}));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("hello.txt")), "a\nb\n"));
+    QVERIFY(runGit(dir.path(), {QStringLiteral("add"), QStringLiteral("hello.txt")}));
+    QVERIFY(runGit(dir.path(), {QStringLiteral("commit"), QStringLiteral("-q"), QStringLiteral("-m"), QStringLiteral("awal")}));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("hello.txt")), "a\nc\n"));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("baru.txt")), "x\n"));
+
+    TaskItem task;
+    task.id = QStringLiteral("t4");
+    task.projectId = QStringLiteral("Demo");
+    task.stage = QStringLiteral("ARCHITECT");
+    task.category = QStringLiteral("utility");
+    task.title = QStringLiteral("Tinjau struktur");
+    m_tasks->addTask(task);
+    KanbanCardWidget *architect = card(QStringLiteral("t4"));
+    QVERIFY(architect);
+
+    // Belum pernah di-run, tapi di stage peninjauan kode drawer tetap terbuka di tab perubahan kode
+    QTest::mouseClick(architect, Qt::LeftButton);
+    ResponseDrawer *panel = drawer();
+    QVERIFY(panel && !panel->isHidden());
+    QCOMPARE(panel->taskId(), QStringLiteral("t4"));
+    auto *tabs = panel->findChild<QTabBar *>(QStringLiteral("drawerTabs"));
+    QVERIFY(tabs && !tabs->isHidden());
+    QCOMPARE(tabs->currentIndex(), 1);
+
+    // git dibaca di thread pool; hasilnya menyusul
+    auto *files = panel->findChild<QTreeWidget *>(QStringLiteral("diffFileList"));
+    QVERIFY(files);
+    QTRY_COMPARE(files->topLevelItemCount(), 2);
+    QCOMPARE(tabs->tabText(1), QStringLiteral("Perubahan kode · 2"));
+    QCOMPARE(files->topLevelItem(0)->text(1), QStringLiteral("baru.txt"));
+    QCOMPARE(files->topLevelItem(1)->text(0), QStringLiteral("M"));
+    QCOMPARE(files->topLevelItem(1)->text(1), QStringLiteral("hello.txt"));
+    QCOMPARE(files->topLevelItem(1)->text(2), QStringLiteral("+1"));
+    QCOMPARE(files->topLevelItem(1)->text(3), QStringLiteral("−1"));
+    QVERIFY(panel->findChild<QLabel *>(QStringLiteral("diffSummary"))
+                ->text().startsWith(QStringLiteral("2 file berubah · +2 −1 · dibanding commit ")));
+    const QString diffText = panel->findChild<QPlainTextEdit *>(QStringLiteral("diffText"))->toPlainText();
+    QVERIFY(diffText.contains(QStringLiteral(" M  hello.txt")));
+    QVERIFY(diffText.contains(QStringLiteral("2   - b")));
+    QVERIFY(diffText.contains(QStringLiteral("  2 + c")));
+
+    // Muat ulang membaca keadaan folder terbaru
+    QVERIFY(QFile::remove(dir.filePath(QStringLiteral("baru.txt"))));
+    panel->findChild<QPushButton *>(QStringLiteral("btnDiffRefresh"))->click();
+    QTRY_COMPARE(files->topLevelItemCount(), 1);
+    QCOMPARE(tabs->tabText(1), QStringLiteral("Perubahan kode · 1"));
+
+    // Task di stage lain: tab disembunyikan, drawer kembali ke hasil agent
+    finishSpecifierRun(QStringLiteral("# Spek"));
+    runButton(QStringLiteral("t3"))->click();
+    QCOMPARE(panel->taskId(), QStringLiteral("t3"));
+    QVERIFY(tabs->isHidden());
+    QVERIFY(panel->findChild<QTextBrowser *>(QStringLiteral("markdownView"))->isVisible());
 }
 
 int main(int argc, char *argv[]) {
