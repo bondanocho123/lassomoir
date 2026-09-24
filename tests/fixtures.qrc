@@ -1,0 +1,8 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/">
+        <file>fixtures/text.jsonl</file>
+        <file>fixtures/tool.jsonl</file>
+        <file>fixtures/deny.jsonl</file>
+    </qresource>
+</RCC>

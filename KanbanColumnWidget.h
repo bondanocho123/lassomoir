@@ -29,6 +29,10 @@ public:
     void setStageName(const QString &name);
     QString stageName() const { return m_stageName; }
 
+    // Stage kolom ini punya agent? Diteruskan ke tombol run semua kartu di dalamnya
+    void setRunnable(bool runnable);
+    bool isRunnable() const { return m_runnable; }
+
     void addCard(KanbanCardWidget *card);
     void insertCard(int index, KanbanCardWidget *card);
     void removeCard(KanbanCardWidget *card);
@@ -49,6 +53,7 @@ private:
     Ui::KanbanColumnWidget *ui;
     QString m_stageName;
     QVBoxLayout *m_cardListLayout;
+    bool m_runnable = false;
 
     // Menghitung indeks baris kartu berdasarkan posisi vertikal mouse
     int calculateInsertIndex(int dropY, const KanbanCardWidget *exclude) const;

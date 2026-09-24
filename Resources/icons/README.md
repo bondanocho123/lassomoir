@@ -33,3 +33,5 @@ Kalau tetap pakai akun gratis, catat sumber tiap ikon di sini supaya nggak lupa 
 | `trash.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
 | `trash-white.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
 | `run.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
+| `stop.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
+| `review.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |

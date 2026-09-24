@@ -21,31 +21,37 @@ class NewTaskDialog : public QDialog
     Q_OBJECT
 
 public:
-    explicit NewTaskDialog(const QString &projectId, QWidget *parent = nullptr);
+    // stageKeys: urutan stage dari StageCatalog, jadi pilihan di combo selalu valid
+    NewTaskDialog(const QString &projectId, const QStringList &stageKeys, QWidget *parent = nullptr);
 
-    // Hanya valid dipanggil setelah exec() == QDialog::Accepted
+    // Mode edit: form terisi dari task yang ada. Stage dikunci karena perpindahan stage
+    // hanya lewat drag di board (yang lolos gerbang StageProfile), bukan lewat form.
+    NewTaskDialog(const TaskItem &task, const QStringList &stageKeys, QWidget *parent = nullptr);
+
+    // Hanya valid dipanggil setelah exec() == QDialog::Accepted.
+    // Mode edit: id, projectId, dan field yang tidak ada di form (status, riwayat run)
+    // dibawa dari task asal.
     TaskItem resultTask() const;
 
 private slots:
-    void changeApprovals(int delta);
     void updateCreateButtonEnabled();
 
 private:
     QString m_projectId;
-    int m_approvals = 0;
+
+    // Task asal saat mode edit; kosong (id kosong) saat membuat task baru
+    TaskItem m_original;
+    bool m_editing = false;
 
     QLineEdit *m_titleInput;
     QLineEdit *m_subtextInput;
     QComboBox *m_categoryInput;
     QComboBox *m_stageInput;
-    QLabel *m_approvalsValueLabel;
-    QLabel *m_badgePreviewLabel;
     QPushButton *m_btnCreate;
 
     // Bungkus label kecil (mis. "TASK TITLE") + widget input jadi satu kolom vertikal
     QWidget *buildField(const QString &labelText, QWidget *inputWidget);
     QFrame *buildDivider();
-    void updateBadgePreview();
 };
 
 #endif // NEWTASKDIALOG_H

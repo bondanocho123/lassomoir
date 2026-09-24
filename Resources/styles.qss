@@ -37,6 +37,25 @@ KanbanCardWidget:hover {
     border: 1px solid #a9743f;
 }
 
+/* Status run agent (property "state", lihat KanbanCardWidget::setRunState).
+   Ditulis setelah :hover supaya garis status tetap terlihat saat kursor di atas kartu. */
+KanbanCardWidget[state="queued"] {
+    border: 1px dashed #33517a;
+}
+
+KanbanCardWidget[state="running"] {
+    border: 1px solid #33517a;
+}
+
+/* Status task di stage-nya (KanbanCardWidget::setTaskState) */
+KanbanCardWidget[state="review"] {
+    border: 2px solid #b7791f;
+}
+
+KanbanCardWidget[state="failed"] {
+    border: 1px solid #b4442f;
+}
+
 /* Tag Kategori pada Kartu (coklat muda) */
 QLabel#labelCategory {
     background-color: #f2e3d1;
@@ -86,8 +105,9 @@ QLabel#labelStageTitle {
     letter-spacing: 0.5px;
 }
 
-/* Tombol Header Swimlane - "Close" (outline navy) */
-QPushButton#btnClose {
+/* Tombol Header Swimlane - "Close" dan folder kerja agent (outline navy) */
+QPushButton#btnClose,
+QPushButton#btnWorkingDir {
     background-color: #ffffff;
     color: #33517a;
     border: 1px solid #b9c6da;
@@ -97,12 +117,14 @@ QPushButton#btnClose {
     font-weight: bold;
 }
 
-QPushButton#btnClose:hover {
+QPushButton#btnClose:hover,
+QPushButton#btnWorkingDir:hover {
     background-color: #eef2f8;
     border: 1px solid #33517a;
 }
 
-QPushButton#btnClose:pressed {
+QPushButton#btnClose:pressed,
+QPushButton#btnWorkingDir:pressed {
     background-color: #dfe7f2;
 }
 
@@ -458,4 +480,108 @@ QPushButton#btnTaskFormCreate:disabled {
     background-color: #d9c6ac;
     border: 1px solid #d9c6ac;
     color: #ffffff;
+}
+
+/* ============ Drawer hasil agent (ResponseDrawer) ============ */
+QWidget#responseDrawer {
+    background-color: #fbf8f3;
+    border: 1px solid #e2d5c1;
+    border-radius: 8px;
+}
+
+QLabel#drawerTitle {
+    font-size: 14px;
+    font-weight: bold;
+    color: #33517a;
+}
+
+QLabel#drawerStatus,
+QLabel#drawerMetrics {
+    font-size: 11px;
+    color: #6f6557;
+}
+
+QPushButton#btnDrawerClose {
+    background: transparent;
+    border: none;
+    color: #6f6557;
+    font-size: 14px;
+}
+
+QPushButton#btnDrawerClose:hover {
+    background-color: #f1e8da;
+    border-radius: 4px;
+}
+
+/* Dokumen hasil agent: font sans agar spesifikasi panjang tetap nyaman dibaca */
+QTextBrowser#markdownView {
+    background-color: #ffffff;
+    border: 1px solid #e7ddcd;
+    border-radius: 6px;
+    padding: 6px;
+    font-family: "Segoe UI", sans-serif;
+    font-size: 13px;
+    color: #3d3730;
+}
+
+QWidget#drawerReviewPanel {
+    background-color: #fbeccf;
+    border: 1px solid #b7791f;
+    border-radius: 6px;
+}
+
+QLabel#drawerSectionLabel {
+    font-size: 10px;
+    font-weight: bold;
+    color: #7a4a12;
+    letter-spacing: 0.5px;
+}
+
+QPlainTextEdit#drawerNote {
+    background-color: #ffffff;
+    border: 1px solid #e2d5c1;
+    border-radius: 4px;
+    font-family: "Segoe UI", sans-serif;
+    font-size: 12px;
+}
+
+QLabel#drawerNoteHint {
+    color: #9b2c1f;
+    font-size: 11px;
+}
+
+/* Setujui = aksi utama (coklat), Revisi/Kembalikan = sekunder (outline navy) */
+QPushButton#btnDrawerApprove {
+    background-color: #8f5f31;
+    color: #ffffff;
+    border: none;
+    border-radius: 4px;
+    padding: 5px 12px;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+QPushButton#btnDrawerApprove:hover {
+    background-color: #7a5024;
+}
+
+QPushButton#btnDrawerApprove:pressed {
+    background-color: #6a441f;
+}
+
+QPushButton#btnDrawerRevise,
+QPushButton#btnDrawerSendBack {
+    background-color: #ffffff;
+    color: #33517a;
+    border: 1px solid #b9c6da;
+    border-radius: 4px;
+    padding: 5px 12px;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+QPushButton#btnDrawerRevise:hover,
+QPushButton#btnDrawerSendBack:hover {
+    background-color: #eef2f8;
+    border: 1px solid #33517a;
 }

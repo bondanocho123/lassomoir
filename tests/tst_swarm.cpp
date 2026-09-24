@@ -1,0 +1,1053 @@
+#include "ClaudeCli.h"
+#include "ClaudeCodeRuntime.h"
+#include "EdgeMermaidRenderer.h"
+#include "FakeAgentRuntime.h"
+#include "FileManager.h"
+#include "MermaidRenderer.h"
+#include "PromptComposer.h"
+#include "RunLogFormatter.h"
+#include "StageCatalog.h"
+#include "StreamJsonParser.h"
+#include "SwarmCoordinator.h"
+#include "TaskItem.h"
+#include "TaskManager.h"
+#include "WorkspaceGuard.h"
+
+#include <QCoreApplication>
+#include <QDir>
+#include <QElapsedTimer>
+#include <QFile>
+#include <QFileInfo>
+#include <QImage>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QProcess>
+#include <QStandardPaths>
+#include <QTemporaryDir>
+#include <QThread>
+#include <QtTest>
+
+#include <cstdio>
+#include <memory>
+
+#ifdef Q_OS_WIN
+#include <fcntl.h>
+#include <io.h>
+#endif
+
+namespace {
+
+// Bila variabel ini di-set, exe test ini berperan sebagai `claude` palsu (lihat runFakeClaude)
+constexpr char kFakeClaudeEnv[] = "LASSOMOIR_FAKE_CLAUDE";
+
+QByteArray readResource(const QString &path) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return QByteArray();
+    }
+    return file.readAll();
+}
+
+QList<AgentEvent> parseFixture(const QString &name) {
+    QList<AgentEvent> events;
+    const QList<QByteArray> lines = readResource(QStringLiteral(":/fixtures/%1").arg(name)).split('\n');
+    for (const QByteArray &line : lines) {
+        events += StreamJsonParser::parseLine(line);
+    }
+    return events;
+}
+
+TaskItem makeTask(const QString &id, const QString &stage, const QString &projectId = QStringLiteral("P")) {
+    TaskItem task;
+    task.id = id;
+    task.projectId = projectId;
+    task.stage = stage;
+    task.title = QStringLiteral("Task %1").arg(id);
+    task.category = QStringLiteral("utility");
+    return task;
+}
+
+AgentResult successResult() {
+    AgentResult result;
+    result.success = true;
+    result.outcome = QStringLiteral("success");
+    return result;
+}
+
+StageRun stageRun(const QString &stage, bool success, const QString &message,
+                  const QString &outcome = QString()) {
+    AgentResult result;
+    result.success = success;
+    result.outcome = !outcome.isEmpty() ? outcome
+                                        : (success ? QStringLiteral("success") : QStringLiteral("error_during_execution"));
+    result.message = message;
+    return StageRun::finished(stage, result);
+}
+
+QString argValue(const QStringList &args, const QString &flag) {
+    const qsizetype index = args.indexOf(flag);
+    return index >= 0 && index + 1 < args.size() ? args.at(index + 1) : QString();
+}
+
+// Session palsu milik task tertentu, dikenali dari judul di prompt-nya
+FakeAgentSession *sessionFor(const FakeAgentRuntime &runtime, const QString &taskId) {
+    const QString marker = QStringLiteral("Judul: Task %1\n").arg(taskId);
+    for (const QPointer<FakeAgentSession> &session : runtime.sessions) {
+        if (session && session->launch().prompt.contains(marker)) {
+            return session;
+        }
+    }
+    return nullptr;
+}
+
+AgentLaunch fakeLaunch(const QString &workingDirectory, int timeoutMs = 15000) {
+    AgentLaunch launch;
+    launch.agent = *StageCatalog::standard().profile(QStringLiteral("CODER"))->agent();
+    launch.agent.timeoutMs = timeoutMs;
+    launch.prompt = QStringLiteral("# Task\nJudul: Uji \u2713 \"kutip\" & <tag>\n");
+    launch.workingDirectory = workingDirectory;
+    return launch;
+}
+
+// Dijalankan sebagai proses anak oleh ClaudeCodeSession
+int runFakeClaude(const QString &mode) {
+#ifdef Q_OS_WIN
+    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
+    // Seperti claude -p: baca prompt dari stdin sampai EOF
+    QByteArray prompt;
+    char buffer[4096];
+    size_t count;
+    while ((count = std::fread(buffer, 1, sizeof buffer, stdin)) > 0) {
+        prompt.append(buffer, qsizetype(count));
+    }
+
+    if (mode.startsWith(QLatin1String("print:"))) {
+        QByteArray data = readResource(QStringLiteral(":/fixtures/%1").arg(mode.mid(6)));
+        // Baris terakhir sengaja tanpa '\n': menguji pembacaan sisa buffer saat proses selesai
+        if (data.endsWith('\n')) {
+            data.chop(1);
+        }
+        std::fwrite(data.constData(), 1, size_t(data.size()), stdout);
+        return 0;
+    }
+    if (mode.startsWith(QLatin1String("echo:"))) {
+        QJsonObject echo;
+        echo[QStringLiteral("args")] = QJsonArray::fromStringList(QCoreApplication::arguments().mid(1));
+        echo[QStringLiteral("stdin")] = QString::fromUtf8(prompt);
+        QFile file(mode.mid(5));
+        if (file.open(QIODevice::WriteOnly)) {
+            file.write(QJsonDocument(echo).toJson());
+        }
+        const char result[] = R"({"type":"result","subtype":"success","is_error":false,"result":"ok"})" "\n";
+        std::fwrite(result, 1, sizeof result - 1, stdout);
+        return 0;
+    }
+    if (mode == QLatin1String("hang")) {
+        QThread::sleep(60);   // dihentikan lewat cancel atau timeout jauh sebelum ini
+        return 0;
+    }
+    if (mode == QLatin1String("fail")) {
+        std::fputs("Error: belum login\n", stderr);
+        return 3;
+    }
+    return 1;
+}
+
+// Mengaktifkan mode claude palsu selama objek ini hidup
+class FakeClaudeMode {
+public:
+    explicit FakeClaudeMode(const QString &mode) { qputenv(kFakeClaudeEnv, mode.toUtf8()); }
+    ~FakeClaudeMode() { qunsetenv(kFakeClaudeEnv); }
+};
+
+struct SessionRecorder {
+    QList<AgentEvent> events;
+    QList<AgentResult> results;
+
+    void attach(AgentSession *session) {
+        QObject::connect(session, &AgentSession::eventReceived, session,
+                         [this](const AgentEvent &event) { events.append(event); });
+        QObject::connect(session, &AgentSession::finished, session,
+                         [this](const AgentResult &result) { results.append(result); });
+    }
+
+    QStringList toolNames() const {
+        QStringList names;
+        for (const AgentEvent &event : events) {
+            if (event.kind == AgentEvent::Kind::ToolUse) {
+                names.append(event.toolName);
+            }
+        }
+        return names;
+    }
+};
+
+// Coordinator dengan katalog asli dan runtime palsu, plus pencatat sinyalnya
+struct SwarmFixture {
+    StageCatalog catalog = StageCatalog::standard();
+    FakeAgentRuntime runtime;
+    TaskPromptComposer composer;
+    SwarmCoordinator swarm{catalog, runtime, composer};
+    QTemporaryDir dir;
+
+    int queued = 0;
+    int started = 0;
+    QStringList finishedIds;
+    QList<AgentResult> results;
+
+    SwarmFixture() {
+        QObject::connect(&swarm, &SwarmCoordinator::runQueued, &swarm,
+                         [this](const TaskItem &) { ++queued; });
+        QObject::connect(&swarm, &SwarmCoordinator::runStarted, &swarm,
+                         [this](const TaskItem &, const AgentLaunch &) { ++started; });
+        QObject::connect(&swarm, &SwarmCoordinator::runFinished, &swarm,
+                         [this](const TaskItem &task, const AgentResult &result) {
+            finishedIds.append(task.id);
+            results.append(result);
+        });
+    }
+
+    bool run(const QString &id, const QString &stage, const QString &projectId = QStringLiteral("P"),
+             QString *reason = nullptr) {
+        return swarm.run(makeTask(id, stage, projectId), dir.path(), reason);
+    }
+};
+
+}
+
+class TestSwarm : public QObject {
+    Q_OBJECT
+
+private slots:
+    // Konfigurasi stage
+    void catalogKeepsPipelineOrder();
+    void catalogGivesAgentsOnlyToWorkingStages();
+    void approvalGateNeedsApproval();
+
+    // Parser, argumen CLI, prompt
+    void parserReadsPlainAnswer();
+    void parserReadsToolCalls();
+    void parserReportsDeniedTools();
+    void parserIgnoresNoise();
+    void cliArgumentsFollowAgentDefinition();
+    void promptComposerSkipsEmptyFields();
+
+    // Gerombolan
+    void workspaceGuardAllowsOneWriterPerFolder();
+    void swarmRespectsMaxConcurrent();
+    void writersInSameFolderTakeTurns();
+    void cancelRemovesQueuedAndStopsRunning();
+    void runRejectsInvalidRequests();
+    void cancelProjectOnlyTouchesThatProject();
+    void sessionFinishingInsideStartIsSafe();
+
+    // Tampilan konsol
+    void logFormatterSummaries();
+
+    // Proses claude (palsu)
+    void claudeSessionStreamsEvents();
+    void claudeSessionSendsPromptThroughStdin();
+    void claudeSessionCancelStopsProcess();
+    void claudeSessionTimesOut();
+    void claudeSessionReportsStderrWithoutResult();
+    void claudeSessionWithoutProgramFinishesOnce();
+
+    // Review gate & serah-terima antar stage
+    void taskManagerAdvancesAndGates();
+    void taskManagerReviewDecisions();
+    void manualMoveRespectsGate();
+    void composerBuildsHandoffPrompt();
+    void fileManagerRoundTripsRunsAndState();
+
+    // Mermaid (fungsi murni)
+    void mermaidHelpers();
+
+    // Claude Code sungguhan; hanya jalan bila LASSOMOIR_REAL_CLAUDE=1 (memakai token)
+    void realClaudeRunsCoderTask();
+    // Edge sungguhan; hanya jalan bila LASSOMOIR_REAL_MERMAID=1 (tanpa token)
+    void realEdgeRendersMermaid();
+};
+
+void TestSwarm::catalogKeepsPipelineOrder() {
+    const StageCatalog catalog = StageCatalog::standard();
+    QCOMPARE(catalog.keys(), QStringList({"WAITING", "SPECIFIER", "CODER", "CLEANER",
+                                          "ARCHITECT", "HARDENER", "QA", "DONE"}));
+    QVERIFY(!catalog.profile(QStringLiteral("TIDAK_ADA")));
+}
+
+void TestSwarm::catalogGivesAgentsOnlyToWorkingStages() {
+    const StageCatalog catalog = StageCatalog::standard();
+    QVERIFY(!catalog.profile(QStringLiteral("WAITING"))->agent());
+    QVERIFY(!catalog.profile(QStringLiteral("DONE"))->agent());
+
+    const QList<const StageProfile *> agentStages = catalog.agentStages();
+    QCOMPARE(int(agentStages.size()), 6);
+    for (const StageProfile *profile : agentStages) {
+        // Instruksi peran terbaca dari resource dan menyebut stage-nya sendiri
+        QVERIFY2(profile->agent()->rolePrompt.contains(profile->key()), qPrintable(profile->key()));
+    }
+
+    QVERIFY(catalog.profile(QStringLiteral("SPECIFIER"))->exitPolicy().isGated());
+    QVERIFY(catalog.profile(QStringLiteral("QA"))->exitPolicy().isGated());
+    QVERIFY(!catalog.profile(QStringLiteral("CODER"))->exitPolicy().isGated());
+
+    QVERIFY(!catalog.profile(QStringLiteral("SPECIFIER"))->agent()->writesWorkspace());
+    QVERIFY(!catalog.profile(QStringLiteral("ARCHITECT"))->agent()->writesWorkspace());
+    QVERIFY(catalog.profile(QStringLiteral("CODER"))->agent()->writesWorkspace());
+    QCOMPARE(catalog.profile(QStringLiteral("SPECIFIER"))->agent()->maxConcurrent, 3);
+}
+
+void TestSwarm::approvalGateNeedsApproval() {
+    const ApprovalGate gate;
+    TaskItem task = makeTask(QStringLiteral("1"), QStringLiteral("SPECIFIER"));
+    QString reason;
+    QVERIFY(!gate.canLeave(task, &reason));   // belum pernah run
+    QVERIFY(reason.contains(QStringLiteral("SPECIFIER")));
+
+    StageRun run = stageRun(QStringLiteral("SPECIFIER"), true, QStringLiteral("spek"));
+    task.runs = {run};
+    QVERIFY(!gate.canLeave(task, nullptr));   // sudah run, belum disetujui
+
+    run.decision = ReviewDecision::Approved;
+    task.runs = {run};
+    QVERIFY(gate.canLeave(task, nullptr));
+    QCOMPARE(task.approvedGates(), 1);
+
+    // Persetujuan di SPECIFIER tidak ikut meloloskan gate QA
+    task.stage = QStringLiteral("QA");
+    QVERIFY(!gate.canLeave(task, nullptr));
+    QVERIFY(AutoAdvance().canLeave(TaskItem(), nullptr));
+}
+
+void TestSwarm::parserReadsPlainAnswer() {
+    const QList<AgentEvent> events = parseFixture(QStringLiteral("text.jsonl"));
+    QCOMPARE(int(events.size()), 2);
+    QVERIFY(events.at(0).kind == AgentEvent::Kind::Text);
+    QCOMPARE(events.at(0).text, QStringLiteral("Halo"));
+
+    QVERIFY(events.at(1).kind == AgentEvent::Kind::Result);
+    const AgentResult result = events.at(1).result;
+    QVERIFY(result.success);
+    QCOMPARE(result.totalTokens, qint64(2910));
+    QCOMPARE(result.durationMs, qint64(5782));
+    QCOMPARE(result.sessionId, QStringLiteral("105e3a30-578a-41e7-9b57-b5de8ce25466"));
+    QVERIFY(result.deniedTools.isEmpty());
+}
+
+void TestSwarm::parserReadsToolCalls() {
+    const QList<AgentEvent> events = parseFixture(QStringLiteral("tool.jsonl"));
+    QStringList tools;
+    for (const AgentEvent &event : events) {
+        if (event.kind == AgentEvent::Kind::ToolUse) {
+            tools.append(event.toolName);
+        }
+    }
+    QCOMPARE(tools, QStringList({"Read", "Write", "Bash"}));
+    QVERIFY(events.first().toolDetail.endsWith(QStringLiteral("a.txt")));
+    QVERIFY(events.last().kind == AgentEvent::Kind::Result);
+    QVERIFY(events.last().result.success);
+    QVERIFY(events.last().result.deniedTools.isEmpty());
+}
+
+void TestSwarm::parserReportsDeniedTools() {
+    const QList<AgentEvent> events = parseFixture(QStringLiteral("deny.jsonl"));
+    QVERIFY(events.last().kind == AgentEvent::Kind::Result);
+    // Denial tidak membuat run gagal; hanya dicatat
+    QVERIFY(events.last().result.success);
+    QCOMPARE(events.last().result.deniedTools, QStringList({"Bash"}));
+}
+
+void TestSwarm::parserIgnoresNoise() {
+    QVERIFY(StreamJsonParser::parseLine(QByteArray()).isEmpty());
+    QVERIFY(StreamJsonParser::parseLine("bukan json").isEmpty());
+    QVERIFY(StreamJsonParser::parseLine(R"({"type":"assistant","message":{)").isEmpty());
+    QVERIFY(StreamJsonParser::parseLine(R"({"type":"system","subtype":"init"})").isEmpty());
+    QVERIFY(StreamJsonParser::parseLine(R"({"type":"rate_limit_event"})").isEmpty());
+    QVERIFY(StreamJsonParser::parseLine(
+                R"({"type":"assistant","message":{"content":[{"type":"thinking","thinking":"..."},{"type":"text","text":"  "}]}})")
+                .isEmpty());
+
+    // Satu pesan assistant dengan dua blok menghasilkan dua event
+    const QList<AgentEvent> both = StreamJsonParser::parseLine(
+        R"({"type":"assistant","message":{"content":[{"type":"text","text":"Cari dulu"},{"type":"tool_use","name":"Grep","input":{"pattern":"TODO"}}]}})");
+    QCOMPARE(int(both.size()), 2);
+    QCOMPARE(both.at(0).text, QStringLiteral("Cari dulu"));
+    QCOMPARE(both.at(1).toolName, QStringLiteral("Grep"));
+    QCOMPARE(both.at(1).toolDetail, QStringLiteral("TODO"));
+}
+
+void TestSwarm::cliArgumentsFollowAgentDefinition() {
+    const StageCatalog catalog = StageCatalog::standard();
+
+    const QStringList coder = ClaudeCli::arguments(*catalog.profile(QStringLiteral("CODER"))->agent());
+    QCOMPARE(coder.first(), QStringLiteral("-p"));
+    QCOMPARE(argValue(coder, QStringLiteral("--output-format")), QStringLiteral("stream-json"));
+    QVERIFY(coder.contains(QStringLiteral("--verbose")));
+    QCOMPARE(argValue(coder, QStringLiteral("--tools")), QStringLiteral("Read,Grep,Glob,Edit,Write,Bash"));
+    QCOMPARE(argValue(coder, QStringLiteral("--allowedTools")), QStringLiteral("Bash(git *)"));
+    QCOMPARE(argValue(coder, QStringLiteral("--permission-mode")), QStringLiteral("acceptEdits"));
+    QCOMPARE(argValue(coder, QStringLiteral("--permission-prompts")), QStringLiteral("none"));
+    QVERIFY(coder.contains(QStringLiteral("--strict-mcp-config")));
+    QCOMPARE(argValue(coder, QStringLiteral("--effort")), QStringLiteral("high"));
+    QVERIFY(argValue(coder, QStringLiteral("--append-system-prompt")).startsWith(QStringLiteral("Kamu adalah agen CODER")));
+
+    const QStringList specifier = ClaudeCli::arguments(*catalog.profile(QStringLiteral("SPECIFIER"))->agent());
+    QVERIFY(!specifier.contains(QStringLiteral("--allowedTools")));
+    QCOMPARE(argValue(specifier, QStringLiteral("--tools")), QStringLiteral("Read,Grep,Glob"));
+}
+
+void TestSwarm::promptComposerSkipsEmptyFields() {
+    TaskItem task = makeTask(QStringLiteral("1"), QStringLiteral("CODER"));
+    task.title = QStringLiteral("  Buat hello.txt ");
+    task.subtext.clear();
+    QCOMPARE(TaskPromptComposer().compose(task),
+             QStringLiteral("# Task\nJudul: Buat hello.txt\nKategori: utility\n"));
+
+    task.subtext = QStringLiteral("PIC: Budi");
+    QVERIFY(TaskPromptComposer().compose(task).endsWith(QStringLiteral("Catatan: PIC: Budi\n")));
+}
+
+void TestSwarm::workspaceGuardAllowsOneWriterPerFolder() {
+    WorkspaceGuard guard;
+    QVERIFY(guard.tryAcquire(QStringLiteral("C:/repo"), true));
+    QVERIFY(!guard.tryAcquire(QStringLiteral("C:/repo/"), true));   // folder sama setelah dinormalisasi
+#ifdef Q_OS_WIN
+    QVERIFY(!guard.tryAcquire(QStringLiteral("c:/REPO"), true));    // Windows tidak peka huruf besar/kecil
+#endif
+    QVERIFY(guard.isLocked(QStringLiteral("C:/repo")));
+    QVERIFY(guard.tryAcquire(QStringLiteral("C:/repo"), false));    // pembaca tidak ditahan
+    QVERIFY(guard.tryAcquire(QStringLiteral("C:/lain"), true));
+
+    guard.release(QStringLiteral("C:/repo"), true);
+    QVERIFY(!guard.isLocked(QStringLiteral("C:/repo")));
+    QVERIFY(guard.tryAcquire(QStringLiteral("C:/repo"), true));
+}
+
+void TestSwarm::swarmRespectsMaxConcurrent() {
+    SwarmFixture f;
+    for (int i = 1; i <= 4; ++i) {
+        QVERIFY(f.run(QString::number(i), QStringLiteral("SPECIFIER")));
+    }
+    // SPECIFIER maksimal 3 agent sekaligus
+    QCOMPARE(f.started, 3);
+    QCOMPARE(f.queued, 1);
+    QVERIFY(f.swarm.state(QStringLiteral("4")) == RunState::Queued);
+
+    sessionFor(f.runtime, QStringLiteral("1"))->finishWith(successResult());
+    QCOMPARE(f.finishedIds, QStringList({"1"}));
+    QCOMPARE(f.started, 4);
+    QVERIFY(f.swarm.state(QStringLiteral("4")) == RunState::Running);
+    QVERIFY(f.swarm.state(QStringLiteral("1")) == RunState::Idle);
+}
+
+void TestSwarm::writersInSameFolderTakeTurns() {
+    SwarmFixture f;
+    QVERIFY(f.run(QStringLiteral("c1"), QStringLiteral("CODER")));
+    QVERIFY(f.run(QStringLiteral("k1"), QStringLiteral("CLEANER")));
+    QVERIFY(f.swarm.state(QStringLiteral("c1")) == RunState::Running);
+    QVERIFY(f.swarm.state(QStringLiteral("k1")) == RunState::Queued);    // folder sedang ditulis CODER
+
+    QVERIFY(f.run(QStringLiteral("s1"), QStringLiteral("SPECIFIER")));
+    QVERIFY(f.swarm.state(QStringLiteral("s1")) == RunState::Running);   // pembaca tidak ditahan
+
+    QTemporaryDir other;
+    QVERIFY(f.swarm.run(makeTask(QStringLiteral("c2"), QStringLiteral("CODER")), other.path()));
+    QVERIFY(f.swarm.state(QStringLiteral("c2")) == RunState::Running);   // folder lain boleh paralel
+
+    sessionFor(f.runtime, QStringLiteral("c1"))->finishWith(successResult());
+    QVERIFY(f.swarm.state(QStringLiteral("k1")) == RunState::Running);   // giliran pindah lintas stage
+}
+
+void TestSwarm::cancelRemovesQueuedAndStopsRunning() {
+    SwarmFixture f;
+    QVERIFY(f.run(QStringLiteral("k1"), QStringLiteral("CLEANER")));
+    QVERIFY(f.run(QStringLiteral("k2"), QStringLiteral("CLEANER")));
+    QVERIFY(f.swarm.state(QStringLiteral("k2")) == RunState::Queued);
+
+    f.swarm.cancel(QStringLiteral("k2"));
+    QVERIFY(f.swarm.state(QStringLiteral("k2")) == RunState::Idle);
+    QCOMPARE(f.finishedIds, QStringList({"k2"}));
+    QCOMPARE(f.results.last().outcome, QStringLiteral("cancelled"));
+    QCOMPARE(int(f.runtime.sessions.size()), 1);   // run yang antre tidak pernah membuat session
+
+    f.swarm.cancel(QStringLiteral("k1"));
+    QVERIFY(f.swarm.state(QStringLiteral("k1")) == RunState::Idle);
+    QCOMPARE(f.finishedIds, QStringList({"k2", "k1"}));
+    QCOMPARE(f.results.last().outcome, QStringLiteral("cancelled"));
+}
+
+void TestSwarm::runRejectsInvalidRequests() {
+    SwarmFixture f;
+    QString reason;
+
+    QVERIFY(!f.run(QStringLiteral("w"), QStringLiteral("WAITING"), QStringLiteral("P"), &reason));
+    QVERIFY(reason.contains(QStringLiteral("WAITING")));
+
+    QVERIFY(f.run(QStringLiteral("a"), QStringLiteral("SPECIFIER")));
+    QVERIFY(!f.run(QStringLiteral("a"), QStringLiteral("SPECIFIER"), QStringLiteral("P"), &reason));
+    QVERIFY(reason.contains(QStringLiteral("sudah berjalan")));
+
+    QVERIFY(!f.swarm.run(makeTask(QStringLiteral("b"), QStringLiteral("SPECIFIER")),
+                         f.dir.filePath(QStringLiteral("tidak-ada")), &reason));
+    QVERIFY(reason.contains(QStringLiteral("folder kerja")));
+
+    f.runtime.available = false;
+    QVERIFY(!f.run(QStringLiteral("c"), QStringLiteral("SPECIFIER"), QStringLiteral("P"), &reason));
+    QCOMPARE(reason, QStringLiteral("runtime palsu dimatikan"));
+
+    QCOMPARE(f.started, 1);
+}
+
+void TestSwarm::cancelProjectOnlyTouchesThatProject() {
+    SwarmFixture f;
+    QVERIFY(f.run(QStringLiteral("a1"), QStringLiteral("SPECIFIER"), QStringLiteral("A")));
+    QVERIFY(f.run(QStringLiteral("b1"), QStringLiteral("SPECIFIER"), QStringLiteral("B")));
+    QVERIFY(f.run(QStringLiteral("a2"), QStringLiteral("CODER"), QStringLiteral("A")));
+    QVERIFY(f.run(QStringLiteral("a3"), QStringLiteral("CLEANER"), QStringLiteral("A")));
+    QVERIFY(f.swarm.state(QStringLiteral("a3")) == RunState::Queued);
+
+    f.swarm.cancelProject(QStringLiteral("A"));
+    QVERIFY(f.swarm.state(QStringLiteral("a1")) == RunState::Idle);
+    QVERIFY(f.swarm.state(QStringLiteral("a2")) == RunState::Idle);
+    QVERIFY(f.swarm.state(QStringLiteral("a3")) == RunState::Idle);
+    QVERIFY(f.swarm.state(QStringLiteral("b1")) == RunState::Running);
+    // a3 dibuang dari antrean sebelum a2 berhenti, jadi tidak sempat jalan
+    QCOMPARE(f.started, 3);
+    QCOMPARE(int(f.finishedIds.size()), 3);
+}
+
+void TestSwarm::sessionFinishingInsideStartIsSafe() {
+    SwarmFixture f;
+    f.runtime.finishOnStart = true;
+    QVERIFY(f.run(QStringLiteral("x"), QStringLiteral("CODER")));
+    QCOMPARE(f.started, 1);
+    QCOMPARE(f.queued, 0);
+    QCOMPARE(f.finishedIds, QStringList({"x"}));
+    QVERIFY(f.swarm.state(QStringLiteral("x")) == RunState::Idle);
+
+    // Kunci folder sudah dilepas: penulis berikutnya langsung jalan
+    f.runtime.finishOnStart = false;
+    QVERIFY(f.run(QStringLiteral("y"), QStringLiteral("CLEANER")));
+    QVERIFY(f.swarm.state(QStringLiteral("y")) == RunState::Running);
+}
+
+void TestSwarm::logFormatterSummaries() {
+    QCOMPARE(RunLogFormatter::formatDuration(5782), QStringLiteral("5.8s"));
+    QCOMPARE(RunLogFormatter::formatDuration(72000), QStringLiteral("1m 12s"));
+    QCOMPARE(RunLogFormatter::formatTokens(950), QStringLiteral("950"));
+    QCOMPARE(RunLogFormatter::formatTokens(2910), QStringLiteral("2.9k"));
+    QCOMPARE(RunLogFormatter::formatTokens(107000), QStringLiteral("107k"));
+    QCOMPARE(RunLogFormatter::formatTokens(1200000), QStringLiteral("1.2M"));
+
+    const TaskItem task = makeTask(QStringLiteral("1"), QStringLiteral("CODER"));
+    AgentResult result = successResult();
+    result.durationMs = 5782;
+    result.totalTokens = 2910;
+    result.costUsd = 0.029;
+    result.sessionId = QStringLiteral("abc");
+    result.deniedTools = QStringList({"Bash", "Bash"});
+    QCOMPARE(RunLogFormatter::finishLine(task, result),
+             QStringLiteral("[AGENT:CODER] ✓ selesai · 5.8s · 2.9k tok · $0.03 · sesi abc · 2 aksi ditolak (Bash)"));
+    // Literal UTF-8 di source terbaca sebagai karakter yang benar, bukan hanya sama-sama salah
+    QVERIFY(RunLogFormatter::finishLine(task, result).contains(QChar(0x2713)));   // ✓
+    QCOMPARE(RunLogFormatter::finishLine(task, AgentResult::failure(QStringLiteral("timeout"),
+                                                                    QStringLiteral("melewati batas 20 menit"))),
+             QStringLiteral("[AGENT:CODER] ✗ timeout: melewati batas 20 menit"));
+
+    AgentEvent tool;
+    tool.kind = AgentEvent::Kind::ToolUse;
+    tool.toolName = QStringLiteral("Write");
+    tool.toolDetail = QStringLiteral("C:/work/demo/src/hello.txt");
+    QCOMPARE(RunLogFormatter::eventLine(task, tool, QStringLiteral("C:/work/demo")),
+             QStringLiteral("[AGENT:CODER] → Write src/hello.txt"));
+#ifdef Q_OS_WIN
+    tool.toolDetail = QStringLiteral("C:\\work\\demo\\src\\hello.txt");
+    QCOMPARE(RunLogFormatter::eventLine(task, tool, QStringLiteral("C:/work/demo")),
+             QStringLiteral("[AGENT:CODER] → Write src/hello.txt"));
+#endif
+    tool.toolDetail = QString(300, QLatin1Char('x'));
+    QCOMPARE(int(RunLogFormatter::eventLine(task, tool, QString()).size()),
+             int(QStringLiteral("[AGENT:CODER] → Write ").size()) + 100);
+}
+
+void TestSwarm::claudeSessionStreamsEvents() {
+    const FakeClaudeMode mode(QStringLiteral("print:tool.jsonl"));
+    QTemporaryDir dir;
+    ClaudeCodeRuntime runtime(QCoreApplication::applicationFilePath());
+    QVERIFY(runtime.isAvailable(nullptr));
+
+    SessionRecorder recorder;
+    std::unique_ptr<AgentSession> session(runtime.createSession(fakeLaunch(dir.path()), nullptr));
+    recorder.attach(session.get());
+    session->start();
+
+    QTRY_COMPARE_WITH_TIMEOUT(int(recorder.results.size()), 1, 15000);
+    // Event result ada di baris terakhir yang tidak diakhiri '\n'
+    QVERIFY(recorder.results.first().success);
+    QCOMPARE(recorder.toolNames(), QStringList({"Read", "Write", "Bash"}));
+    QVERIFY(!session->isRunning());
+}
+
+void TestSwarm::claudeSessionSendsPromptThroughStdin() {
+    QTemporaryDir dir;
+    const QString echoPath = dir.filePath(QStringLiteral("echo.json"));
+    const FakeClaudeMode mode(QStringLiteral("echo:") + echoPath);
+    ClaudeCodeRuntime runtime(QCoreApplication::applicationFilePath());
+    const AgentLaunch launch = fakeLaunch(dir.path());
+
+    SessionRecorder recorder;
+    std::unique_ptr<AgentSession> session(runtime.createSession(launch, nullptr));
+    recorder.attach(session.get());
+    session->start();
+    QTRY_COMPARE_WITH_TIMEOUT(int(recorder.results.size()), 1, 15000);
+
+    QFile file(echoPath);
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    const QJsonObject echo = QJsonDocument::fromJson(file.readAll()).object();
+    QStringList args;
+    const QJsonArray argArray = echo.value(QStringLiteral("args")).toArray();
+    for (const QJsonValue &value : argArray) {
+        args.append(value.toString());
+    }
+
+    // Prompt (UTF-8, kutip, &, <>) sampai utuh lewat stdin, tidak lewat argumen
+    QCOMPARE(echo.value(QStringLiteral("stdin")).toString(), launch.prompt);
+    QVERIFY(!args.join(QLatin1Char(' ')).contains(QStringLiteral("Judul")));
+    // Argumen, termasuk instruksi peran multi-baris dan "Bash(git *)", sampai tanpa berubah
+    QCOMPARE(args, ClaudeCli::arguments(launch.agent));
+}
+
+void TestSwarm::claudeSessionCancelStopsProcess() {
+    const FakeClaudeMode mode(QStringLiteral("hang"));
+    QTemporaryDir dir;
+    ClaudeCodeRuntime runtime(QCoreApplication::applicationFilePath());
+
+    SessionRecorder recorder;
+    std::unique_ptr<AgentSession> session(runtime.createSession(fakeLaunch(dir.path()), nullptr));
+    recorder.attach(session.get());
+    session->start();
+    QVERIFY(session->isRunning());
+    QTest::qWait(300);
+
+    QElapsedTimer timer;
+    timer.start();
+    session->cancel();
+    session->cancel();   // idempoten
+    QTRY_COMPARE_WITH_TIMEOUT(int(recorder.results.size()), 1, 5000);
+    QVERIFY(timer.elapsed() < 2000);
+    QCOMPARE(recorder.results.first().outcome, QStringLiteral("cancelled"));
+
+    QTest::qWait(200);
+    QCOMPARE(int(recorder.results.size()), 1);
+}
+
+void TestSwarm::claudeSessionTimesOut() {
+    const FakeClaudeMode mode(QStringLiteral("hang"));
+    QTemporaryDir dir;
+    ClaudeCodeRuntime runtime(QCoreApplication::applicationFilePath());
+
+    SessionRecorder recorder;
+    std::unique_ptr<AgentSession> session(runtime.createSession(fakeLaunch(dir.path(), 500), nullptr));
+    recorder.attach(session.get());
+    session->start();
+
+    QTRY_COMPARE_WITH_TIMEOUT(int(recorder.results.size()), 1, 5000);
+    QCOMPARE(recorder.results.first().outcome, QStringLiteral("timeout"));
+    QVERIFY(!recorder.results.first().success);
+}
+
+void TestSwarm::claudeSessionReportsStderrWithoutResult() {
+    const FakeClaudeMode mode(QStringLiteral("fail"));
+    QTemporaryDir dir;
+    ClaudeCodeRuntime runtime(QCoreApplication::applicationFilePath());
+
+    SessionRecorder recorder;
+    std::unique_ptr<AgentSession> session(runtime.createSession(fakeLaunch(dir.path()), nullptr));
+    recorder.attach(session.get());
+    session->start();
+
+    QTRY_COMPARE_WITH_TIMEOUT(int(recorder.results.size()), 1, 15000);
+    QCOMPARE(recorder.results.first().outcome, QStringLiteral("no_result"));
+    QCOMPARE(recorder.results.first().message, QStringLiteral("Error: belum login"));
+    QVERIFY(!recorder.events.isEmpty());
+    QVERIFY(recorder.events.last().kind == AgentEvent::Kind::Stderr);
+}
+
+void TestSwarm::claudeSessionWithoutProgramFinishesOnce() {
+    QTemporaryDir dir;
+    {
+        ClaudeCodeRuntime runtime{QString()};
+        QString reason;
+        QVERIFY(!runtime.isAvailable(&reason));
+        QVERIFY(!reason.isEmpty());
+
+        SessionRecorder recorder;
+        std::unique_ptr<AgentSession> session(runtime.createSession(fakeLaunch(dir.path()), nullptr));
+        recorder.attach(session.get());
+        session->start();
+        QCOMPARE(int(recorder.results.size()), 1);   // langsung di dalam start()
+        QCOMPARE(recorder.results.first().outcome, QStringLiteral("failed_to_start"));
+    }
+    {
+        ClaudeCodeRuntime runtime(dir.filePath(QStringLiteral("tidak-ada.exe")));
+        SessionRecorder recorder;
+        std::unique_ptr<AgentSession> session(runtime.createSession(fakeLaunch(dir.path()), nullptr));
+        recorder.attach(session.get());
+        session->start();
+        QTRY_COMPARE_WITH_TIMEOUT(int(recorder.results.size()), 1, 5000);
+        QCOMPARE(recorder.results.first().outcome, QStringLiteral("failed_to_start"));
+        QTest::qWait(200);
+        QCOMPARE(int(recorder.results.size()), 1);
+    }
+}
+
+void TestSwarm::realClaudeRunsCoderTask() {
+    if (qEnvironmentVariableIsEmpty("LASSOMOIR_REAL_CLAUDE")) {
+        QSKIP("Set LASSOMOIR_REAL_CLAUDE=1 untuk menjalankan claude sungguhan (memakai token)");
+    }
+
+    QTemporaryDir dir;
+    QProcess git;
+    git.setWorkingDirectory(dir.path());
+    git.start(QStringLiteral("git"), {QStringLiteral("init"), QStringLiteral("-q")});
+    QVERIFY(git.waitForFinished(15000));
+
+    const StageCatalog catalog = StageCatalog::standard();
+    ClaudeCodeRuntime runtime;
+    QString reason;
+    QVERIFY2(runtime.isAvailable(&reason), qPrintable(reason));
+    TaskPromptComposer composer;
+    SwarmCoordinator swarm(catalog, runtime, composer);
+
+    QList<AgentResult> results;
+    connect(&swarm, &SwarmCoordinator::runStarted, this, [](const TaskItem &task, const AgentLaunch &launch) {
+        for (const QString &line : RunLogFormatter::startLines(task, launch)) {
+            qInfo().noquote() << line;
+        }
+    });
+    connect(&swarm, &SwarmCoordinator::runEvent, this, [&dir](const TaskItem &task, const AgentEvent &event) {
+        qInfo().noquote() << RunLogFormatter::eventLine(task, event, dir.path());
+    });
+    connect(&swarm, &SwarmCoordinator::runFinished, this, [&results](const TaskItem &task, const AgentResult &result) {
+        qInfo().noquote() << RunLogFormatter::finishLine(task, result);
+        results.append(result);
+    });
+
+    TaskItem task = makeTask(QStringLiteral("real"), QStringLiteral("CODER"));
+    task.title = QStringLiteral("Buat file hello.txt berisi teks 'halo dari agent', lalu jalankan git add hello.txt");
+    QVERIFY2(swarm.run(task, dir.path(), &reason), qPrintable(reason));
+    QTRY_COMPARE_WITH_TIMEOUT(int(results.size()), 1, 300000);
+
+    const AgentResult result = results.first();
+    QVERIFY2(result.success, qPrintable(result.outcome + QStringLiteral(": ") + result.message));
+    QVERIFY(QFile::exists(dir.filePath(QStringLiteral("hello.txt"))));
+    // "Bash(git *)" di --allowedTools terbaca CLI: git add tidak ditolak
+    QVERIFY2(result.deniedTools.isEmpty(), qPrintable(result.deniedTools.join(QStringLiteral(", "))));
+
+    git.start(QStringLiteral("git"), {QStringLiteral("diff"), QStringLiteral("--cached"), QStringLiteral("--name-only")});
+    QVERIFY(git.waitForFinished(15000));
+    QVERIFY(QString::fromUtf8(git.readAllStandardOutput()).contains(QStringLiteral("hello.txt")));
+}
+
+void TestSwarm::taskManagerAdvancesAndGates() {
+    const StageCatalog catalog = StageCatalog::standard();
+    TaskManager tasks(catalog);
+    QStringList moves;
+    connect(&tasks, &TaskManager::taskMoved, &tasks, [&moves](const TaskItem &task, const QString &from) {
+        moves.append(QStringLiteral("%1:%2->%3").arg(task.id, from, task.stage));
+    });
+
+    // Sukses tanpa gate: maju sendiri ke stage berikutnya (run tetap manual)
+    tasks.addTask(makeTask(QStringLiteral("c"), QStringLiteral("CODER")));
+    tasks.recordRun(QStringLiteral("c"), stageRun(QStringLiteral("CODER"), true, QStringLiteral("Selesai")));
+    QCOMPARE(tasks.task(QStringLiteral("c"))->stage, QStringLiteral("CLEANER"));
+    QVERIFY(tasks.task(QStringLiteral("c"))->state == TaskState::Idle);
+    QCOMPARE(moves, QStringList({"c:CODER->CLEANER"}));
+
+    // Sukses di stage ber-gate: berhenti untuk review
+    tasks.addTask(makeTask(QStringLiteral("s"), QStringLiteral("SPECIFIER")));
+    tasks.recordRun(QStringLiteral("s"), stageRun(QStringLiteral("SPECIFIER"), true, QStringLiteral("# Spesifikasi")));
+    QCOMPARE(tasks.task(QStringLiteral("s"))->stage, QStringLiteral("SPECIFIER"));
+    QVERIFY(tasks.task(QStringLiteral("s"))->state == TaskState::AwaitingReview);
+
+    // Gagal dan dibatalkan tetap di stage yang sama
+    tasks.addTask(makeTask(QStringLiteral("f"), QStringLiteral("CLEANER")));
+    tasks.recordRun(QStringLiteral("f"), stageRun(QStringLiteral("CLEANER"), false, QStringLiteral("melewati batas"),
+                                                  QStringLiteral("timeout")));
+    QVERIFY(tasks.task(QStringLiteral("f"))->state == TaskState::Failed);
+    QCOMPARE(tasks.task(QStringLiteral("f"))->stage, QStringLiteral("CLEANER"));
+
+    tasks.addTask(makeTask(QStringLiteral("x"), QStringLiteral("HARDENER")));
+    tasks.recordRun(QStringLiteral("x"), stageRun(QStringLiteral("HARDENER"), false, QStringLiteral("dibatalkan"),
+                                                  QStringLiteral("cancelled")));
+    QVERIFY(tasks.task(QStringLiteral("x"))->state == TaskState::Idle);
+    QCOMPARE(int(tasks.task(QStringLiteral("x"))->runs.size()), 1);
+
+    QCOMPARE(tasks.nextStage(QStringLiteral("QA")), QStringLiteral("DONE"));
+    QVERIFY(tasks.nextStage(QStringLiteral("DONE")).isEmpty());
+}
+
+void TestSwarm::taskManagerReviewDecisions() {
+    const StageCatalog catalog = StageCatalog::standard();
+    TaskManager tasks(catalog);
+    QString reason;
+
+    tasks.addTask(makeTask(QStringLiteral("s"), QStringLiteral("SPECIFIER")));
+    tasks.recordRun(QStringLiteral("s"), stageRun(QStringLiteral("SPECIFIER"), true, QStringLiteral("Spek v1")));
+
+    // Revisi wajib pakai catatan
+    QVERIFY(!tasks.requestRevision(QStringLiteral("s"), QStringLiteral("  "), &reason));
+    QVERIFY(reason.contains(QStringLiteral("catatan")));
+    QVERIFY(tasks.requestRevision(QStringLiteral("s"), QStringLiteral("Kalkulator jangan dihapus"), &reason));
+    TaskItem task = *tasks.task(QStringLiteral("s"));
+    QVERIFY(task.state == TaskState::Idle);
+    QCOMPARE(task.stage, QStringLiteral("SPECIFIER"));
+    QCOMPARE(task.runs.last().decision, ReviewDecision::Revise);
+    QCOMPARE(task.runs.last().reviewNote, QStringLiteral("Kalkulator jangan dihapus"));
+
+    // Tidak sedang review: keputusan ditolak
+    QVERIFY(!tasks.approve(QStringLiteral("s"), QString(), &reason));
+
+    tasks.recordRun(QStringLiteral("s"), stageRun(QStringLiteral("SPECIFIER"), true, QStringLiteral("Spek v2")));
+    QVERIFY(tasks.approve(QStringLiteral("s"), QStringLiteral("Newsletter tetap"), &reason));
+    task = *tasks.task(QStringLiteral("s"));
+    QCOMPARE(task.stage, QStringLiteral("CODER"));
+    QVERIFY(task.state == TaskState::Idle);
+    QCOMPARE(task.approvedGates(), 1);
+    QCOMPARE(task.runs.last().decision, ReviewDecision::Approved);
+
+    // QA dikembalikan ke CODER dengan catatan
+    tasks.addTask(makeTask(QStringLiteral("q"), QStringLiteral("QA")));
+    tasks.recordRun(QStringLiteral("q"), stageRun(QStringLiteral("QA"), true, QStringLiteral("Kriteria 3 gagal")));
+    QCOMPARE(tasks.sendBackTargets(QStringLiteral("QA")),
+             QStringList({"SPECIFIER", "CODER", "CLEANER", "ARCHITECT", "HARDENER"}));
+    QVERIFY(tasks.sendBackTargets(QStringLiteral("SPECIFIER")).isEmpty());
+    QVERIFY(!tasks.sendBack(QStringLiteral("q"), QStringLiteral("DONE"), QStringLiteral("x"), &reason));
+    QVERIFY(!tasks.sendBack(QStringLiteral("q"), QStringLiteral("CODER"), QString(), &reason));
+    QVERIFY(tasks.sendBack(QStringLiteral("q"), QStringLiteral("CODER"), QStringLiteral("Perbaiki anchor footer"), &reason));
+    task = *tasks.task(QStringLiteral("q"));
+    QCOMPARE(task.stage, QStringLiteral("CODER"));
+    QVERIFY(task.state == TaskState::Idle);
+    QCOMPARE(task.runs.last().decision, ReviewDecision::SentBack);
+}
+
+void TestSwarm::manualMoveRespectsGate() {
+    const StageCatalog catalog = StageCatalog::standard();
+    TaskManager tasks(catalog);
+    QStringList rejected;
+    connect(&tasks, &TaskManager::taskMoveRejected, &tasks,
+            [&rejected](const QString &, const QString &, const QString &reason) { rejected.append(reason); });
+    QString reason;
+
+    tasks.addTask(makeTask(QStringLiteral("s"), QStringLiteral("SPECIFIER")));
+    QVERIFY(!tasks.moveTask(QStringLiteral("s"), QStringLiteral("CODER"), &reason));   // maju melewati gate
+    QVERIFY(reason.contains(QStringLiteral("SPECIFIER")));
+    QCOMPARE(int(rejected.size()), 1);
+    QVERIFY(tasks.moveTask(QStringLiteral("s"), QStringLiteral("WAITING"), &reason));  // mundur selalu boleh
+    QVERIFY(tasks.moveTask(QStringLiteral("s"), QStringLiteral("SPECIFIER"), &reason)); // WAITING tanpa gate
+
+    tasks.recordRun(QStringLiteral("s"), stageRun(QStringLiteral("SPECIFIER"), true, QStringLiteral("spek")));
+    QVERIFY(!tasks.moveTask(QStringLiteral("s"), QStringLiteral("WAITING"), &reason));  // menunggu review: lewat drawer
+    QVERIFY(reason.contains(QStringLiteral("review")));
+
+    QVERIFY(tasks.approve(QStringLiteral("s"), QString()));
+    QVERIFY(tasks.moveTask(QStringLiteral("s"), QStringLiteral("SPECIFIER"), &reason));  // CODER -> SPECIFIER
+    QVERIFY(tasks.moveTask(QStringLiteral("s"), QStringLiteral("QA"), &reason));         // gate SPECIFIER sudah lolos
+    QVERIFY(!tasks.moveTask(QStringLiteral("s"), QStringLiteral("DONE"), &reason));      // gate QA belum
+}
+
+void TestSwarm::composerBuildsHandoffPrompt() {
+    const TaskPromptComposer composer;
+    TaskItem task = makeTask(QStringLiteral("1"), QStringLiteral("SPECIFIER"));
+
+    // Putaran revisi SPECIFIER
+    StageRun spec1 = stageRun(QStringLiteral("SPECIFIER"), true, QStringLiteral("Spek v1"));
+    spec1.decision = ReviewDecision::Revise;
+    spec1.reviewNote = QStringLiteral("Kalkulator jangan dihapus");
+    task.runs = {spec1};
+    QString prompt = composer.compose(task);
+    QVERIFY(prompt.startsWith(QStringLiteral("# Task\nJudul: Task 1\n")));
+    QVERIFY(prompt.contains(QStringLiteral("# Dokumen sebelumnya (untuk direvisi)\n\nSpek v1")));
+    QVERIFY(prompt.contains(QStringLiteral("Catatan revisi:\nKalkulator jangan dihapus")));
+    QVERIFY(!prompt.contains(QStringLiteral("Spesifikasi yang disetujui")));
+
+    // CODER setelah spesifikasi disetujui
+    StageRun spec2 = stageRun(QStringLiteral("SPECIFIER"), true, QStringLiteral("Spek v2"));
+    spec2.decision = ReviewDecision::Approved;
+    spec2.reviewNote = QStringLiteral("Newsletter tetap");
+    task.runs = {spec1, spec2};
+    task.stage = QStringLiteral("CODER");
+    prompt = composer.compose(task);
+    QVERIFY(prompt.contains(QStringLiteral("# Spesifikasi yang disetujui (SPECIFIER)\n\nSpek v2")));
+    QVERIFY(prompt.contains(QStringLiteral("Catatan saat disetujui:\nNewsletter tetap")));
+    QVERIFY(!prompt.contains(QStringLiteral("Spek v1")));
+    QVERIFY(!prompt.contains(QStringLiteral("Hasil stage sebelumnya")));
+
+    // CLEANER melihat hasil CODER
+    const StageRun coder = stageRun(QStringLiteral("CODER"), true, QStringLiteral("Ubah welcome_message.php"));
+    task.runs = {spec1, spec2, coder};
+    task.stage = QStringLiteral("CLEANER");
+    prompt = composer.compose(task);
+    QVERIFY(prompt.contains(QStringLiteral("# Spesifikasi yang disetujui (SPECIFIER)")));
+    QVERIFY(prompt.contains(QStringLiteral("# Hasil stage sebelumnya (CODER)\n\nUbah welcome_message.php")));
+
+    // CODER setelah dikembalikan QA
+    StageRun qa = stageRun(QStringLiteral("QA"), true, QStringLiteral("Kriteria 3 gagal"));
+    qa.decision = ReviewDecision::SentBack;
+    qa.reviewNote = QStringLiteral("Perbaiki anchor footer");
+    task.runs = {spec1, spec2, coder, qa};
+    task.stage = QStringLiteral("CODER");
+    prompt = composer.compose(task);
+    QVERIFY(prompt.contains(QStringLiteral("# Spesifikasi yang disetujui (SPECIFIER)")));
+    QVERIFY(prompt.contains(QStringLiteral("# Hasil stage sebelumnya (QA)\n\nKriteria 3 gagal")));
+    QVERIFY(prompt.contains(QStringLiteral("Catatan saat dikembalikan:\nPerbaiki anchor footer")));
+}
+
+void TestSwarm::fileManagerRoundTripsRunsAndState() {
+    // Test mode QStandardPaths: tidak menyentuh AppData asli
+    const QString base = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    QVERIFY2(base.contains(QStringLiteral("qttest"), Qt::CaseInsensitive), qPrintable(base));
+
+    TaskItem task = makeTask(QStringLiteral("r1"), QStringLiteral("SPECIFIER"), QStringLiteral("RoundTrip"));
+    task.state = TaskState::AwaitingReview;
+    StageRun run = stageRun(QStringLiteral("SPECIFIER"), true, QStringLiteral("# Judul\n\n| a | b |\n|---|---|"));
+    run.result.sessionId = QStringLiteral("sesi-1");
+    run.result.durationMs = 84000;
+    run.result.totalTokens = 302000;
+    run.result.costUsd = 0.87;
+    run.result.deniedTools = QStringList({"Bash"});
+    run.decision = ReviewDecision::Revise;
+    run.reviewNote = QStringLiteral("catatan");
+    task.runs = {run};
+
+    QString error;
+    {
+        FileManager writer;
+        writer.setWorkingDirectory(QStringLiteral("RoundTrip"), QStringLiteral("C:/repo"));
+        QVERIFY2(writer.saveTasks(QStringLiteral("RoundTrip"), {task}, &error), qPrintable(error));
+    }
+
+    FileManager reader;
+    const QList<TaskItem> loaded = reader.loadTasks(QStringLiteral("RoundTrip"), &error);
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    QCOMPARE(int(loaded.size()), 1);
+    const TaskItem &back = loaded.first();
+    QVERIFY(back.state == TaskState::AwaitingReview);
+    QCOMPARE(int(back.runs.size()), 1);
+    const StageRun &restored = back.runs.first();
+    QCOMPARE(restored.stage, QStringLiteral("SPECIFIER"));
+    QVERIFY(restored.result.success);
+    QCOMPARE(restored.result.message, run.result.message);
+    QCOMPARE(restored.result.sessionId, QStringLiteral("sesi-1"));
+    QCOMPARE(restored.result.durationMs, qint64(84000));
+    QCOMPARE(restored.result.totalTokens, qint64(302000));
+    QCOMPARE(restored.result.costUsd, 0.87);
+    QCOMPARE(restored.result.deniedTools, QStringList({"Bash"}));
+    QCOMPARE(restored.decision, ReviewDecision::Revise);
+    QCOMPARE(restored.reviewNote, QStringLiteral("catatan"));
+    QCOMPARE(restored.finishedAt.toSecsSinceEpoch(), run.finishedAt.toSecsSinceEpoch());
+    QCOMPARE(reader.workingDirectory(QStringLiteral("RoundTrip")), QStringLiteral("C:/repo"));
+
+    // File lama tanpa "state"/"runs" (dan dengan "badge") tetap terbaca
+    QVERIFY(QDir().mkpath(base + QStringLiteral("/projects/Legacy")));
+    QFile legacy(base + QStringLiteral("/projects/Legacy/session.json"));
+    QVERIFY(legacy.open(QIODevice::WriteOnly));
+    legacy.write(R"({"schemaVersion":1,"projectId":"Legacy","tasks":[{"id":"old","projectId":"Legacy",)"
+                 R"("stage":"CODER","category":"x","title":"Lama","subtext":"","badge":"2"}]})");
+    legacy.close();
+    const QList<TaskItem> old = reader.loadTasks(QStringLiteral("Legacy"), &error);
+    QCOMPARE(int(old.size()), 1);
+    QVERIFY(old.first().state == TaskState::Idle);
+    QVERIFY(old.first().runs.isEmpty());
+
+    QDir(base + QStringLiteral("/projects")).removeRecursively();
+}
+
+void TestSwarm::mermaidHelpers() {
+    const QString code = QStringLiteral("graph TD; A-->B");
+    QCOMPARE(MermaidRenderer::keyFor(code), MermaidRenderer::keyFor(QStringLiteral("  graph TD; A-->B\n")));
+    QVERIFY(MermaidRenderer::keyFor(code) != MermaidRenderer::keyFor(QStringLiteral("graph TD; A-->C")));
+    QCOMPARE(int(MermaidRenderer::keyFor(code).size()), 40);
+
+    // Tepi transparan dipotong, sisakan margin 4 piksel
+    QImage canvas(200, 100, QImage::Format_ARGB32);
+    canvas.fill(Qt::transparent);
+    for (int y = 20; y < 60; ++y) {
+        for (int x = 50; x < 80; ++x) {
+            canvas.setPixelColor(x, y, Qt::red);
+        }
+    }
+    QCOMPARE(EdgeMermaidRenderer::trimTransparent(canvas, 4).size(), QSize(30 + 8, 40 + 8));
+    QImage empty(10, 10, QImage::Format_ARGB32);
+    empty.fill(Qt::transparent);
+    QVERIFY(EdgeMermaidRenderer::trimTransparent(empty).isNull());
+
+    // Kode diagram tidak bisa menyisipkan tag, dan "%2" di dalamnya tidak diganti konfigurasi
+    const QString page = EdgeMermaidRenderer::pageHtml(QStringLiteral("graph TD\n A-->B</pre><script>alert(1)</script>"));
+    QVERIFY(!page.contains(QStringLiteral("<script>alert(1)")));
+    QVERIFY(page.contains(QStringLiteral("&lt;/pre&gt;&lt;script&gt;")));
+    QVERIFY(page.contains(QStringLiteral("securityLevel: 'strict'")));
+    QVERIFY(EdgeMermaidRenderer::pageHtml(QStringLiteral("graph TD; A[%2]-->B")).contains(QStringLiteral("A[%2]")));
+}
+
+void TestSwarm::realEdgeRendersMermaid() {
+    if (qEnvironmentVariableIsEmpty("LASSOMOIR_REAL_MERMAID")) {
+        QSKIP("Set LASSOMOIR_REAL_MERMAID=1 untuk merender dengan Edge sungguhan (tanpa token)");
+    }
+
+    QTemporaryDir cache;
+    EdgeMermaidRenderer renderer(EdgeMermaidRenderer::findBrowser(), cache.path());
+    QString reason;
+    QVERIFY2(renderer.isAvailable(&reason), qPrintable(reason));
+
+    QList<QImage> images;
+    QStringList errors;
+    connect(&renderer, &MermaidRenderer::rendered, this,
+            [&images](const QString &, const QImage &image) { images.append(image); });
+    connect(&renderer, &MermaidRenderer::failed, this,
+            [&errors](const QString &, const QString &error) { errors.append(error); });
+
+    const QString code = QStringLiteral("graph TD\n  A[SPECIFIER] -->|Setujui| B[CODER]\n  B --> C[QA]");
+    QElapsedTimer timer;
+    timer.start();
+    renderer.render(code);
+    QTRY_VERIFY_WITH_TIMEOUT(!images.isEmpty() || !errors.isEmpty(), 60000);
+    QVERIFY2(errors.isEmpty(), qPrintable(errors.join(QStringLiteral(", "))));
+    qInfo("render pertama: %lld ms", timer.elapsed());
+
+    const QImage image = images.first();
+    QVERIFY(image.width() > 50 && image.height() > 50);
+    QVERIFY(image.width() < 2800);   // kanvas 2800x4800 sudah dipotong ke isi diagram
+    QCOMPARE(image.devicePixelRatio(), 2.0);
+    QVERIFY(QFileInfo::exists(cache.filePath(MermaidRenderer::keyFor(code) + QStringLiteral(".png"))));
+    const QString out = qEnvironmentVariable("LASSOMOIR_REAL_MERMAID_OUT");
+    if (!out.isEmpty()) {
+        image.save(out);
+    }
+
+    // Render kedua langsung dari cache
+    timer.restart();
+    renderer.render(code);
+    QTRY_COMPARE_WITH_TIMEOUT(int(images.size()), 2, 5000);
+    QVERIFY(timer.elapsed() < 1000);
+}
+
+int main(int argc, char *argv[]) {
+    // Test FileManager menulis ke lokasi khusus test, bukan AppData asli
+    QStandardPaths::setTestModeEnabled(true);
+    QCoreApplication app(argc, argv);
+    QCoreApplication::setApplicationName(QStringLiteral("LassomoirTest"));
+
+    const QString fakeMode = qEnvironmentVariable(kFakeClaudeEnv);
+    if (!fakeMode.isEmpty()) {
+        return runFakeClaude(fakeMode);
+    }
+
+    TestSwarm test;
+    return QTest::qExec(&test, argc, argv);
+}
+
+#include "tst_swarm.moc"

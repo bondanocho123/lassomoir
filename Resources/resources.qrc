@@ -7,7 +7,16 @@
         <file>icons/plus-white.svg</file>
         <file>icons/sidebar.svg</file>
         <file>icons/run.svg</file>
+        <file>icons/stop.svg</file>
+        <file>icons/review.svg</file>
         <file>icons/trash.svg</file>
         <file>icons/trash-white.svg</file>
+        <file>prompts/SPECIFIER.md</file>
+        <file>prompts/CODER.md</file>
+        <file>prompts/CLEANER.md</file>
+        <file>prompts/ARCHITECT.md</file>
+        <file>prompts/HARDENER.md</file>
+        <file>prompts/QA.md</file>
+        <file>vendor/mermaid.min.js</file>
     </qresource>
 </RCC>

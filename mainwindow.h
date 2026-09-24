@@ -9,6 +9,10 @@
 #include <QPointer>
 #include <QString>
 
+// Tipe lengkap dibutuhkan moc untuk parameter slot run agent
+#include "AgentTypes.h"
+#include "TaskItem.h"
+
 QT_BEGIN_NAMESPACE
 namespace Ui {
 class MainWindow;
@@ -19,16 +23,25 @@ QT_END_NAMESPACE
 class SwimlaneWidget;
 class KanbanCardWidget;
 class FileManager;
+class MermaidRenderer;
+class ResponseDrawer;
+class SplitterPaneAnimator;
+class StageCatalog;
+class SwarmCoordinator;
+class TaskManager;
 class QListWidgetItem;
+class QSplitter;
 class QVariantAnimation;
-struct TaskItem;
 
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
 
 public:
-    explicit MainWindow(QWidget *parent = nullptr);
+    // Katalog stage, pemilik data task, coordinator agent, dan renderer diagram
+    // dirakit di main.cpp (composition root)
+    MainWindow(const StageCatalog &catalog, TaskManager &tasks, SwarmCoordinator &swarm,
+               MermaidRenderer &mermaid, QWidget *parent = nullptr);
     ~MainWindow() override;
 
     // Fungsi untuk menambah baris proyek/swimlane baru
@@ -43,6 +56,9 @@ private slots:
 
     // Slot saat tombol "New Task" di klik pada swimlane tertentu
     void handleNewTaskRequested(const QString &projectId);
+
+    // Slot saat kartu diklik dua kali: buka form task terisi data kartu, lalu terapkan perubahannya
+    void handleEditTaskRequested(const QString &projectId, const QString &taskId);
 
     // Slot saat tombol "Close" di header swimlane diklik
     void handleCloseProjectRequested(const QString &projectId);
@@ -60,9 +76,37 @@ private slots:
     // Ciutkan / lebarkan panel sidebar
     void toggleSidebar();
 
+    // Kejadian run agent dari SwarmCoordinator: perbarui kartu, drawer, dan konsol
+    void handleRunQueued(const TaskItem &task);
+    void handleRunStarted(const TaskItem &task, const AgentLaunch &launch);
+    void handleRunEvent(const TaskItem &task, const AgentEvent &event);
+    void handleRunFinished(const TaskItem &task, const AgentResult &result);
+
+    // Perubahan data dari TaskManager: kartu, drawer, dan file sesi mengikuti
+    void handleTaskAdded(const TaskItem &task);
+    void handleTaskChanged(const TaskItem &task);
+    void handleTaskMoved(const TaskItem &task, const QString &fromStage);
+    void handleTaskMoveRejected(const QString &taskId, const QString &fromStage, const QString &reason);
+
+    // Keputusan review dari drawer
+    void handleApproveRequested(const QString &taskId, const QString &note);
+    void handleRevisionRequested(const QString &taskId, const QString &note);
+    void handleSendBackRequested(const QString &taskId, const QString &stage, const QString &note);
+
 private:
     Ui::MainWindow *ui;
+    const StageCatalog &m_catalog;
+    TaskManager &m_tasks;
+    SwarmCoordinator &m_swarm;
     FileManager *m_fileManager;
+    // Drawer hasil agent, di splitter [board | drawer] yang menggantikan boardStack di mainSplitter
+    QSplitter *m_boardSplitter = nullptr;
+    ResponseDrawer *m_drawer = nullptr;
+    SplitterPaneAnimator *m_drawerAnimator = nullptr;
+    // Saat memuat dari disk tidak perlu menulis ulang session.json per task
+    bool m_loading = false;
+    // Perpindahan yang dipicu pengguna (drag / keputusan review) sudah dicatat pemanggilnya
+    bool m_userMoveInProgress = false;
     // Daftar swimlane yang aktif (Key: projectId, misal "TTT", "spacewar")
     QMap<QString, SwimlaneWidget*> m_swimlanes;
     // Project yang sedang ditampilkan di board; kosong bila belum ada
@@ -82,7 +126,8 @@ private:
     void loadInitialMockData();
     // Muat semua project dari <AppData>/projects; return jumlah project yang dimuat
     int loadProjectsFromDisk();
-    QMap<QString, TaskItem> collectTasksForProject(const QString &projectId) const;
+    // Jadwalkan penulisan session.json project dari data TaskManager
+    void saveProject(const QString &projectId);
     // Cari baris sidebar milik projectId; -1 bila tidak ada
     int findProjectRow(const QString &projectId) const;
     // Jalankan animasi geser: opening=true melebarkan sidebar, false menciutkannya
@@ -97,6 +142,23 @@ private:
     void showDeleteConfirmPopup(const QString &projectId, QWidget *anchor);
     // Buang project dari sidebar + board (dipakai "Close" maupun "Hapus")
     void removeProjectFromUi(const QString &projectId);
+
+    // Buat kartu, sambungkan tombol & klik-nya, lalu taruh di kolom stage task
+    KanbanCardWidget *createCard(SwimlaneWidget *swimlane, const TaskItem &task);
+    // Samakan isi kartu (teks, badge ✓ N, status Review/Failed) dengan data task
+    void applyTaskToCard(KanbanCardWidget *card, const TaskItem &task);
+    // Kartu milik task; nullptr bila project/kartunya sudah tidak ada
+    KanbanCardWidget *cardFor(const TaskItem &task) const;
+    // Buka drawer untuk task (hanya bila sudah ada hasil run atau sedang berjalan)
+    void openDrawer(const QString &taskId);
+    // Segarkan drawer bila sedang menampilkan task ini
+    void refreshDrawer(const TaskItem &task);
+    // Tombol ▶ diklik: pastikan folder kerja ada, lalu serahkan ke SwarmCoordinator
+    void handleRunRequested(const QString &projectId, const QString &taskId);
+    // Folder kerja tersimpan yang masih ada; kalau tidak ada, tanya pengguna
+    QString ensureWorkingDirectory(const QString &projectId);
+    // Pemilih folder -> FileManager -> tombol header swimlane; kosong bila dibatalkan
+    QString chooseWorkingDirectory(const QString &projectId);
 
 protected:
     // Tukar icon tombol baris sidebar jadi putih selama kursor berada di atasnya,

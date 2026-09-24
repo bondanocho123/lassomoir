@@ -7,6 +7,11 @@ ConsolePanelWidget::ConsolePanelWidget(QWidget *parent)
 {
     ui->setupUi(this);
 
+    // Log hanya untuk dibaca. Output agent bisa panjang, jadi jumlah barisnya dibatasi
+    // (baris terlama dibuang lebih dulu) supaya memori tidak terus membengkak.
+    ui->textBrowserLog->setReadOnly(true);
+    ui->textBrowserLog->setMaximumBlockCount(5000);
+
     connect(ui->lineEditPrompt, &QLineEdit::returnPressed,
             this, &ConsolePanelWidget::onInputSubmitted);
 }

@@ -1,17 +1,13 @@
 #include "SwimlaneWidget.h"
 #include "KanbanColumnWidget.h"
 #include "KanbanCardWidget.h"
+#include "StageCatalog.h"
 #include "ui_SwimlaneWidget.h"
 
+#include <QDir>
 #include <QHBoxLayout>
 
-// Daftar nama 8 kolom pipeline kanban
-const QStringList PIPELINE_STAGES = {
-    "WAITING", "SPECIFIER", "CODER", "CLEANER",
-    "ARCHITECT", "HARDENER", "QA", "DONE"
-};
-
-SwimlaneWidget::SwimlaneWidget(const QString &projectId, QWidget *parent)
+SwimlaneWidget::SwimlaneWidget(const QString &projectId, const StageCatalog &catalog, QWidget *parent)
     : QWidget(parent),
     ui(new Ui::SwimlaneWidget),
     m_projectId(projectId) {
@@ -20,9 +16,13 @@ SwimlaneWidget::SwimlaneWidget(const QString &projectId, QWidget *parent)
     if (ui->btnClose) {
         connect(ui->btnClose, &QPushButton::clicked, this, &SwimlaneWidget::onCloseClicked);
     }
+    connect(ui->btnWorkingDir, &QPushButton::clicked, this, [this]() {
+        emit workingDirectoryChangeRequested(m_projectId);
+    });
 
-    initializeColumns();
+    initializeColumns(catalog);
     setProjectTitle(m_projectId);
+    setWorkingDirectory(QString());
 }
 
 SwimlaneWidget::~SwimlaneWidget() {
@@ -35,7 +35,42 @@ void SwimlaneWidget::setProjectTitle(const QString &title) {
     }
 }
 
-void SwimlaneWidget::initializeColumns() {
+void SwimlaneWidget::setWorkingDirectory(const QString &path) {
+    if (path.isEmpty()) {
+        ui->btnWorkingDir->setText("Pilih folder kerja");
+        ui->btnWorkingDir->setToolTip("Folder tempat agent Claude Code bekerja untuk project ini");
+        return;
+    }
+
+    const QString name = QDir(path).dirName();
+    ui->btnWorkingDir->setText(QString("Folder: %1").arg(name.isEmpty() ? path : name));
+    ui->btnWorkingDir->setToolTip(QString("Folder kerja agent: %1\nKlik untuk mengganti")
+                                      .arg(QDir::toNativeSeparators(path)));
+}
+
+KanbanCardWidget *SwimlaneWidget::cardById(const QString &taskId) const {
+    for (KanbanColumnWidget *column : m_columns) {
+        for (KanbanCardWidget *card : column->cards()) {
+            if (card->id() == taskId) {
+                return card;
+            }
+        }
+    }
+    return nullptr;
+}
+
+QString SwimlaneWidget::stageOf(const KanbanCardWidget *card) const {
+    for (KanbanColumnWidget *column : m_columns) {
+        for (KanbanCardWidget *candidate : column->cards()) {
+            if (candidate == card) {
+                return column->stageName();
+            }
+        }
+    }
+    return QString();
+}
+
+void SwimlaneWidget::initializeColumns(const StageCatalog &catalog) {
     QLayout *layout = ui->columnsContainer->layout();
     auto *hLayout = qobject_cast<QHBoxLayout*>(layout);
 
@@ -47,11 +82,16 @@ void SwimlaneWidget::initializeColumns() {
     }
 
 
-    // Bangun 8 kolom KanbanColumnWidget
-    for (const QString &stage : PIPELINE_STAGES) {
+    // Satu KanbanColumnWidget per stage, urut sesuai pipeline
+    const QStringList stages = catalog.keys();
+    for (const QString &stage : stages) {
         auto *colWidget = new KanbanColumnWidget(this);
         colWidget->setFixedWidth(400);
         colWidget->setStageName(stage);
+
+        // Tombol run kartu hanya aktif di stage yang punya agent
+        const StageProfile *profile = catalog.profile(stage);
+        colWidget->setRunnable(profile && profile->agent());
 
         // Sambungkan sinyal drop kartu antar-kolom
         connect(colWidget, &KanbanColumnWidget::cardDropped,

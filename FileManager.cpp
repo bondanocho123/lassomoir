@@ -13,6 +13,43 @@
 
 namespace {
 constexpr int kSaveDebounceMs = 500;
+
+QJsonObject runToJson(const StageRun &run) {
+    QJsonObject obj;
+    obj[QStringLiteral("stage")] = run.stage;
+    obj[QStringLiteral("finishedAt")] = run.finishedAt.toString(Qt::ISODate);
+    obj[QStringLiteral("success")] = run.result.success;
+    obj[QStringLiteral("outcome")] = run.result.outcome;
+    obj[QStringLiteral("message")] = run.result.message;
+    obj[QStringLiteral("sessionId")] = run.result.sessionId;
+    obj[QStringLiteral("durationMs")] = run.result.durationMs;
+    obj[QStringLiteral("totalTokens")] = run.result.totalTokens;
+    obj[QStringLiteral("costUsd")] = run.result.costUsd;
+    obj[QStringLiteral("deniedTools")] = QJsonArray::fromStringList(run.result.deniedTools);
+    obj[QStringLiteral("decision")] = run.decision;
+    obj[QStringLiteral("reviewNote")] = run.reviewNote;
+    return obj;
+}
+
+StageRun runFromJson(const QJsonObject &obj) {
+    StageRun run;
+    run.stage = obj.value(QStringLiteral("stage")).toString();
+    run.finishedAt = QDateTime::fromString(obj.value(QStringLiteral("finishedAt")).toString(), Qt::ISODate);
+    run.result.success = obj.value(QStringLiteral("success")).toBool();
+    run.result.outcome = obj.value(QStringLiteral("outcome")).toString();
+    run.result.message = obj.value(QStringLiteral("message")).toString();
+    run.result.sessionId = obj.value(QStringLiteral("sessionId")).toString();
+    run.result.durationMs = obj.value(QStringLiteral("durationMs")).toInteger();
+    run.result.totalTokens = obj.value(QStringLiteral("totalTokens")).toInteger();
+    run.result.costUsd = obj.value(QStringLiteral("costUsd")).toDouble();
+    const QJsonArray denied = obj.value(QStringLiteral("deniedTools")).toArray();
+    for (const QJsonValue &tool : denied) {
+        run.result.deniedTools.append(tool.toString());
+    }
+    run.decision = obj.value(QStringLiteral("decision")).toString();
+    run.reviewNote = obj.value(QStringLiteral("reviewNote")).toString();
+    return run;
+}
 }
 
 FileManager::FileManager(QObject *parent) :
@@ -22,18 +59,20 @@ FileManager::FileManager(QObject *parent) :
     m_saveTimer(new QTimer(this))
 {
     m_saveTimer->setSingleShot(true);
+    connect(m_saveTimer, &QTimer::timeout, this, &FileManager::flushPendingSaves);
+}
 
-    connect(m_saveTimer, &QTimer::timeout, this, [this]{
-        for (auto it = m_pendingSaves.constBegin(); it != m_pendingSaves.constEnd(); ++it) {
-            QString error;
-            if (!saveTasks(it.key(), it.value(), &error)) {
-                qWarning() << "[FileManager] Gagal menyimpan proyek" << it.key() << ":" << error;
-            }
+void FileManager::flushPendingSaves() {
+    m_saveTimer->stop();
+    for (auto it = m_pendingSaves.constBegin(); it != m_pendingSaves.constEnd(); ++it) {
+        QString error;
+        if (!saveTasks(it.key(), it.value(), &error)) {
+            qWarning() << "[FileManager] Gagal menyimpan proyek" << it.key() << ":" << error;
         }
+    }
 
-        m_pendingSaves.clear();
-        m_pendingProjects.clear();
-    });
+    m_pendingSaves.clear();
+    m_pendingProjects.clear();
 }
 
 QString FileManager::projectFilePath(const QString &projectId) {
@@ -86,6 +125,11 @@ QList<TaskItem> FileManager::loadTasks(const QString &projectId, QString *error)
         return result;
     }
 
+    const QString workingDirectory = root.value(QStringLiteral("workingDirectory")).toString();
+    if (!workingDirectory.isEmpty()) {
+        m_workingDirs.insert(projectId, workingDirectory);
+    }
+
     const QJsonArray tasksArray = root.value(QStringLiteral("tasks")).toArray();
     result.reserve(tasksArray.size());
     for(const QJsonValue &value : tasksArray){
@@ -104,7 +148,7 @@ QList<TaskItem> FileManager::loadTasks(const QString &projectId, QString *error)
 
 }
 
-bool FileManager::saveTasks(const QString &projectId, const QMap<QString, TaskItem> tasks, QString *error){
+bool FileManager::saveTasks(const QString &projectId, const QList<TaskItem> &tasks, QString *error){
     QJsonArray taskArray;
     for(const TaskItem &task : tasks){
         taskArray.append(taskToJson(task));
@@ -113,6 +157,11 @@ bool FileManager::saveTasks(const QString &projectId, const QMap<QString, TaskIt
     QJsonObject root;
     root[QStringLiteral("schemaVersion")] = m_schemaVersion;
     root[QStringLiteral("projectId")] = projectId;
+    // Field tambahan: file lama tanpa field ini tetap terbaca, jadi schemaVersion tidak naik
+    const QString workingDirectory = m_workingDirs.value(projectId);
+    if (!workingDirectory.isEmpty()) {
+        root[QStringLiteral("workingDirectory")] = workingDirectory;
+    }
     root[QStringLiteral("tasks")] = taskArray;
 
     const QString path = projectFilePath(projectId);
@@ -140,7 +189,14 @@ QJsonObject FileManager::taskToJson(TaskItem task){
     obj[QStringLiteral("category")] = task.category;
     obj[QStringLiteral("title")] = task.title;
     obj[QStringLiteral("subtext")] = task.subtext;
-    obj[QStringLiteral("badge")] = task.badge;
+    obj[QStringLiteral("state")] = taskStateKey(task.state);
+
+    // Riwayat run: dokumen hasil agent + keputusan review, dipakai untuk prompt stage berikutnya
+    QJsonArray runs;
+    for (const StageRun &run : task.runs) {
+        runs.append(runToJson(run));
+    }
+    obj[QStringLiteral("runs")] = runs;
 
     return obj;
 }
@@ -160,7 +216,13 @@ TaskItem FileManager::taskFromJson(QJsonObject obj, QString *error){
     result.category = obj.value(QStringLiteral("category")).toString();
     result.title = obj.value(QStringLiteral("title")).toString();
     result.subtext = obj.value(QStringLiteral("subtext")).toString();
-    result.badge = obj.value(QStringLiteral("badge")).toString();
+    // File lama tanpa field di bawah tetap terbaca: status Idle, riwayat kosong.
+    // Field "badge" lama diabaikan; badge sekarang dihitung dari riwayat run.
+    result.state = taskStateFromKey(obj.value(QStringLiteral("state")).toString());
+    const QJsonArray runs = obj.value(QStringLiteral("runs")).toArray();
+    for (const QJsonValue &run : runs) {
+        result.runs.append(runFromJson(run.toObject()));
+    }
 
     return result;
 }
@@ -175,7 +237,7 @@ bool FileManager::writeAtomic(const QString &path, const QByteArray &data){
     return file.commit();
 }
 
-void FileManager::scheduleSave(const QString &projectId, const QMap<QString, TaskItem> &tasks){
+void FileManager::scheduleSave(const QString &projectId, const QList<TaskItem> &tasks){
     m_pendingSaves[projectId] = tasks;
     m_pendingProjects.insert(projectId);
     m_saveTimer->start(kSaveDebounceMs);
@@ -186,6 +248,7 @@ bool FileManager::deleteProject(const QString &projectId, QString *error){
     // session.json beberapa ratus milidetik setelah foldernya dihapus.
     m_pendingSaves.remove(projectId);
     m_pendingProjects.remove(projectId);
+    m_workingDirs.remove(projectId);
 
     QDir projectDir(QStringLiteral("%1/projects/%2").arg(m_basePath, projectId));
     if (!projectDir.exists()) {
@@ -201,4 +264,12 @@ bool FileManager::deleteProject(const QString &projectId, QString *error){
     }
 
     return true;
+}
+
+QString FileManager::workingDirectory(const QString &projectId) const {
+    return m_workingDirs.value(projectId);
+}
+
+void FileManager::setWorkingDirectory(const QString &projectId, const QString &dir) {
+    m_workingDirs.insert(projectId, dir);
 }

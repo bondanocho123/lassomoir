@@ -7,7 +7,14 @@
 #include "ConsolePanelWidget.h"
 #include "FileManager.h"
 #include "NewTaskDialog.h"
+#include "ResponseDrawer.h"
+#include "RunLogFormatter.h"
+#include "SplitterPaneAnimator.h"
+#include "StageCatalog.h"
+#include "SwarmCoordinator.h"
+#include "TaskManager.h"
 
+#include <QFileDialog>
 #include <QInputDialog>
 #include <QDateTime>
 #include <QAbstractAnimation>
@@ -32,11 +39,67 @@
 #include <QVariantAnimation>
 #include <QDir>
 
-MainWindow::MainWindow(QWidget *parent)
+namespace {
+
+QString badgeText(const TaskItem &task) {
+    return QString("✓ %1").arg(task.approvedGates());
+}
+
+// Alasan run terakhir gagal, untuk tooltip "Coba lagi" di kartu
+QString failureDetail(const TaskItem &task) {
+    const StageRun *run = task.latestRun(task.stage);
+    if (task.state != TaskState::Failed || !run) {
+        return QString();
+    }
+    QString detail = run->result.outcome;
+    if (!run->result.message.isEmpty()) {
+        detail += QStringLiteral(": ") + run->result.message.left(160);
+    }
+    return detail;
+}
+
+}
+
+MainWindow::MainWindow(const StageCatalog &catalog, TaskManager &tasks, SwarmCoordinator &swarm,
+                       MermaidRenderer &mermaid, QWidget *parent)
     : QMainWindow(parent),
-    ui(new Ui::MainWindow) {
+    ui(new Ui::MainWindow),
+    m_catalog(catalog),
+    m_tasks(tasks),
+    m_swarm(swarm) {
     m_fileManager = new FileManager(this);
     ui->setupUi(this);
+
+    // Semua kejadian run agent (dari gerombolan stage mana pun) lewat coordinator
+    connect(&m_swarm, &SwarmCoordinator::runQueued, this, &MainWindow::handleRunQueued);
+    connect(&m_swarm, &SwarmCoordinator::runStarted, this, &MainWindow::handleRunStarted);
+    connect(&m_swarm, &SwarmCoordinator::runEvent, this, &MainWindow::handleRunEvent);
+    connect(&m_swarm, &SwarmCoordinator::runFinished, this, &MainWindow::handleRunFinished);
+
+    // Kartu dan file sesi mengikuti TaskManager, satu-satunya pemilik data task
+    connect(&m_tasks, &TaskManager::taskAdded, this, &MainWindow::handleTaskAdded);
+    connect(&m_tasks, &TaskManager::taskChanged, this, &MainWindow::handleTaskChanged);
+    connect(&m_tasks, &TaskManager::taskMoved, this, &MainWindow::handleTaskMoved);
+    connect(&m_tasks, &TaskManager::taskMoveRejected, this, &MainWindow::handleTaskMoveRejected);
+
+    // Drawer hasil agent: splitter bersarang [board | drawer] menggantikan boardStack di
+    // mainSplitter, sehingga mainSplitter tetap tiga pane dan animasi sidebar (indeks 0/1/2) aman
+    m_boardSplitter = new QSplitter(Qt::Horizontal);
+    m_boardSplitter->setObjectName("boardSplitter");
+    m_boardSplitter->setHandleWidth(6);
+    m_boardSplitter->setChildrenCollapsible(false);
+    ui->mainSplitter->replaceWidget(1, m_boardSplitter);
+    m_boardSplitter->addWidget(ui->boardStack);
+    m_drawer = new ResponseDrawer(&mermaid, m_boardSplitter);
+    m_boardSplitter->addWidget(m_drawer);
+    m_boardSplitter->setStretchFactor(0, 1);
+    m_drawer->hide();
+    m_drawerAnimator = new SplitterPaneAnimator(m_boardSplitter, 1, this);
+
+    connect(m_drawer, &ResponseDrawer::closeRequested, m_drawerAnimator, &SplitterPaneAnimator::close);
+    connect(m_drawer, &ResponseDrawer::approveRequested, this, &MainWindow::handleApproveRequested);
+    connect(m_drawer, &ResponseDrawer::revisionRequested, this, &MainWindow::handleRevisionRequested);
+    connect(m_drawer, &ResponseDrawer::sendBackRequested, this, &MainWindow::handleSendBackRequested);
 
     // Simpan lebar minimum asli sidebar (dari .ui) sebelum animasi bisa mengubahnya
     m_sidebarMinWidth = ui->sidebarPanel->minimumWidth();
@@ -91,7 +154,7 @@ MainWindow::MainWindow(QWidget *parent)
             }
 
             addSwimlane(projectId);
-            m_fileManager->scheduleSave(projectId, collectTasksForProject(projectId));
+            saveProject(projectId);
 
             // Project baru langsung ditampilkan di board
             setActiveProject(projectId);
@@ -126,19 +189,19 @@ int MainWindow::loadProjectsFromDisk() {
         auto *swimlane = m_swimlanes.value(projectId, nullptr);
         if (!swimlane) continue;
 
+        // Kartu dibuat oleh handleTaskAdded(); file yang baru dibaca tidak perlu ditulis ulang
+        m_loading = true;
         for (const TaskItem &task : tasks) {
             if (!swimlane->column(task.stage)) {
                 ui->consolePanel->appendLog(QString("[LOAD WARN] %1: stage '%2' tidak dikenal, task '%3' dilewati")
                                                 .arg(projectId, task.stage, task.title));
                 continue;
             }
-            auto *card = new KanbanCardWidget(swimlane);
-            card->setCardData(task.id, task.category, task.title, task.subtext, task.badge);
-            connect(card, &KanbanCardWidget::runRequested, this, [this](const QString &cardId) {
-                ui->consolePanel->appendLog("[SYSTEM] Run task: " + cardId);
-            });
-            swimlane->addCardToStage(task.stage, card);
+            TaskItem item = task;
+            item.projectId = projectId;   // folder project yang menentukan, bukan isi file
+            m_tasks.addTask(item);
         }
+        m_loading = false;
     }
 
     if (!projectIds.isEmpty()) {
@@ -149,17 +212,27 @@ int MainWindow::loadProjectsFromDisk() {
 }
 
 MainWindow::~MainWindow() {
+    // Perubahan yang masih menunggu debounce (mis. hasil run barusan) jangan sampai hilang
+    m_fileManager->flushPendingSaves();
     delete ui;
+}
+
+void MainWindow::saveProject(const QString &projectId) {
+    m_fileManager->scheduleSave(projectId, m_tasks.tasksForProject(projectId));
 }
 
 void MainWindow::addSwimlane(const QString &projectId) {
     if (m_swimlanes.contains(projectId)) return;
 
-    auto *swimlane = new SwimlaneWidget(projectId, this);
+    auto *swimlane = new SwimlaneWidget(projectId, m_catalog, this);
+    swimlane->setWorkingDirectory(m_fileManager->workingDirectory(projectId));
 
     // Tangkap interaksi dari swimlane
     connect(swimlane, &SwimlaneWidget::cardMoved, this, &MainWindow::handleCardMoved);
     connect(swimlane, &SwimlaneWidget::closeProjectRequested, this, &MainWindow::handleCloseProjectRequested);
+    connect(swimlane, &SwimlaneWidget::workingDirectoryChangeRequested, this, [this](const QString &id) {
+        chooseWorkingDirectory(id);
+    });
 
     // Board hanya menampilkan satu project; sisanya menganggur di dalam stack
     ui->boardStack->addWidget(swimlane);
@@ -437,17 +510,25 @@ void MainWindow::animateSidebar(bool opening) {
 }
 
 void MainWindow::handleCardMoved(const QString &projectId, KanbanCardWidget *card, const QString &targetStage, int targetIndex) {
+    // Kolom sudah memindahkan widget-nya; TaskManager yang memutuskan boleh atau tidak.
+    // Bila ditolak (mis. maju melewati gate yang belum disetujui), handleTaskMoveRejected()
+    // mengembalikan kartu ke kolom asalnya.
+    m_userMoveInProgress = true;
+    const bool moved = m_tasks.moveTask(card->id(), targetStage);
+    m_userMoveInProgress = false;
+    if (!moved) {
+        return;
+    }
+
     QString timeStr = QDateTime::currentDateTime().toString("hh:mm:ss");
     QString logEntry = QString("[%1] [%2] '%3' moved to %4 (index %5)")
                            .arg(timeStr, projectId, card->title(), targetStage)
                            .arg(targetIndex);
-    m_fileManager->scheduleSave(projectId, collectTasksForProject(projectId));
-
     ui->consolePanel->appendLog(logEntry);
 }
 
 void MainWindow::handleNewTaskRequested(const QString &projectId) {
-    NewTaskDialog dialog(projectId, this);
+    NewTaskDialog dialog(projectId, m_catalog.keys(), this);
     if (dialog.exec() != QDialog::Accepted) {
         return;
     }
@@ -461,22 +542,44 @@ void MainWindow::handleNewTaskRequested(const QString &projectId) {
         return;
     }
 
-    auto *card = new KanbanCardWidget(swimlane);
-    card->setCardData(item.id, item.category, item.title, item.subtext, item.badge);
-    connect(card, &KanbanCardWidget::runRequested, this, [this](const QString &cardId) {
-        ui->consolePanel->appendLog("[SYSTEM] Run task: " + cardId);
-    });
-    swimlane->addCardToStage(item.stage, card);
-
-    // Task baru ikut dipersistenkan; tanpa ini kartu hilang saat aplikasi ditutup
-    m_fileManager->scheduleSave(projectId, collectTasksForProject(projectId));
+    // Kartu dibuat dan task dipersistenkan oleh handleTaskAdded()
+    m_tasks.addTask(item);
 
     ui->consolePanel->appendLog(QString("[TASK CREATED] %1 -> %2: '%3'").arg(projectId, item.stage, item.title));
+}
+
+void MainWindow::handleEditTaskRequested(const QString &projectId, const QString &taskId) {
+    const std::optional<TaskItem> task = m_tasks.task(taskId);
+    if (!task) return;
+
+    NewTaskDialog dialog(*task, m_catalog.keys(), this);
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    // Kartu dan file sesi ikut diperbarui lewat sinyal taskChanged
+    const TaskItem item = dialog.resultTask();
+    if (!m_tasks.updateDetails(taskId, item.title, item.category, item.subtext)) {
+        return;
+    }
+
+    ui->consolePanel->appendLog(QString("[TASK EDITED] %1 -> %2: '%3'").arg(projectId, item.stage, item.title));
 }
 
 void MainWindow::removeProjectFromUi(const QString &projectId) {
     auto *widget = m_swimlanes.value(projectId, nullptr);
     if (!widget) return;
+
+    // Agent yang masih antre/berjalan untuk project ini ikut dihentikan
+    m_swarm.cancelProject(projectId);
+
+    // Drawer yang menampilkan task project ini ditutup; data task dibuang dari memori
+    // (untuk "Close", session.json di disk tetap ada)
+    const std::optional<TaskItem> shown = m_tasks.task(m_drawer->taskId());
+    if (shown && shown->projectId == projectId) {
+        m_drawerAnimator->close();
+    }
+    m_tasks.removeProject(projectId);
 
     // Hapus baris sidebar lebih dulu: QListWidget otomatis memindahkan seleksi
     // ke baris tetangga, dan handleProjectSelected() yang menukar halaman board.
@@ -539,24 +642,247 @@ void MainWindow::loadInitialMockData() {
     ui->consolePanel->appendLog("Ready for instructions.");
 }
 
-QMap<QString, TaskItem> MainWindow::collectTasksForProject(const QString &projectId) const {
-    QMap<QString, TaskItem> tasks;
-    auto *swimlane = m_swimlanes.value(projectId, nullptr);
-    if (!swimlane) return tasks;
+KanbanCardWidget *MainWindow::createCard(SwimlaneWidget *swimlane, const TaskItem &task) {
+    auto *card = new KanbanCardWidget(swimlane);
+    applyTaskToCard(card, task);
 
-    for (KanbanColumnWidget *column : swimlane->columns()) {
-        for (KanbanCardWidget *card : column->cards()) {
-            TaskItem item;
-            item.id = card->id();
-            item.projectId = projectId;
-            item.stage = column->stageName();
-            item.category = card->category();
-            item.title = card->title();
-            item.subtext = card->subtext();
-            item.badge = card->badge();
-            tasks.insert(item.id, item);
+    const QString projectId = swimlane->projectId();
+    connect(card, &KanbanCardWidget::runRequested, this, [this, projectId](const QString &taskId) {
+        handleRunRequested(projectId, taskId);
+    });
+    connect(card, &KanbanCardWidget::cancelRequested, this, [this](const QString &taskId) {
+        m_swarm.cancel(taskId);
+    });
+    connect(card, &KanbanCardWidget::editRequested, this, [this, projectId](const QString &taskId) {
+        handleEditTaskRequested(projectId, taskId);
+    });
+    // 📋 (menunggu review) dan klik biasa pada kartu sama-sama membuka drawer hasil agent
+    connect(card, &KanbanCardWidget::reviewRequested, this, &MainWindow::openDrawer);
+    connect(card, &KanbanCardWidget::detailsRequested, this, &MainWindow::openDrawer);
+
+    swimlane->addCardToStage(task.stage, card);
+    return card;
+}
+
+void MainWindow::applyTaskToCard(KanbanCardWidget *card, const TaskItem &task) {
+    card->setCardData(task.id, task.category, task.title, task.subtext, badgeText(task));
+    card->setTaskState(task.state, failureDetail(task));
+}
+
+KanbanCardWidget *MainWindow::cardFor(const TaskItem &task) const {
+    auto *swimlane = m_swimlanes.value(task.projectId, nullptr);
+    return swimlane ? swimlane->cardById(task.id) : nullptr;
+}
+
+void MainWindow::openDrawer(const QString &taskId) {
+    const std::optional<TaskItem> task = m_tasks.task(taskId);
+    if (!task) return;
+
+    // Klik pada kartu yang belum pernah dijalankan tidak membuka apa-apa
+    const RunState runState = m_swarm.state(taskId);
+    if (task->runs.isEmpty() && runState == RunState::Idle) return;
+
+    m_drawer->showTask(*task, runState, m_tasks.nextStage(task->stage), m_tasks.sendBackTargets(task->stage));
+    const int boardWidth = m_boardSplitter->width();
+    m_drawerAnimator->open(qBound(420, boardWidth * 45 / 100, 720));
+}
+
+void MainWindow::refreshDrawer(const TaskItem &task) {
+    if (!m_drawerAnimator->isOpen() || m_drawer->taskId() != task.id) return;
+    m_drawer->showTask(task, m_swarm.state(task.id), m_tasks.nextStage(task.stage),
+                       m_tasks.sendBackTargets(task.stage));
+}
+
+void MainWindow::handleTaskAdded(const TaskItem &task) {
+    auto *swimlane = m_swimlanes.value(task.projectId, nullptr);
+    if (!swimlane) return;
+
+    createCard(swimlane, task);
+    if (!m_loading) {
+        // Task baru ikut dipersistenkan; tanpa ini kartu hilang saat aplikasi ditutup
+        saveProject(task.projectId);
+    }
+}
+
+void MainWindow::handleTaskChanged(const TaskItem &task) {
+    if (KanbanCardWidget *card = cardFor(task)) {
+        if (card->taskState() != TaskState::AwaitingReview && task.state == TaskState::AwaitingReview) {
+            ui->consolePanel->appendLog(RunLogFormatter::gateLine(
+                task, QString("menunggu review di %1 — klik 📋 di kartu").arg(task.stage)));
+        }
+        applyTaskToCard(card, task);
+    }
+    refreshDrawer(task);
+    saveProject(task.projectId);
+}
+
+void MainWindow::handleTaskMoved(const TaskItem &task, const QString &fromStage) {
+    auto *swimlane = m_swimlanes.value(task.projectId, nullptr);
+    KanbanCardWidget *card = swimlane ? swimlane->cardById(task.id) : nullptr;
+    if (!card) return;
+
+    // Drag manual sudah memindahkan widget-nya; perpindahan lain (maju otomatis, keputusan review) belum
+    if (swimlane->stageOf(card) != task.stage) {
+        swimlane->addCardToStage(task.stage, card);
+    }
+    if (!m_userMoveInProgress) {
+        ui->consolePanel->appendLog(QString("[TASK] %1/%2 %3 → %4")
+                                        .arg(task.projectId, task.title, fromStage, task.stage));
+    }
+}
+
+void MainWindow::handleTaskMoveRejected(const QString &taskId, const QString &fromStage, const QString &reason) {
+    const std::optional<TaskItem> task = m_tasks.task(taskId);
+    if (!task) return;
+
+    // Kolom tujuan sudah menerima widget saat drop; kembalikan ke kolom asal
+    auto *swimlane = m_swimlanes.value(task->projectId, nullptr);
+    if (KanbanCardWidget *card = swimlane ? swimlane->cardById(taskId) : nullptr) {
+        if (swimlane->stageOf(card) != fromStage) {
+            swimlane->addCardToStage(fromStage, card);
         }
     }
+    ui->consolePanel->appendLog(RunLogFormatter::gateLine(*task, QString("tidak bisa dipindah: %1").arg(reason)));
+}
 
-    return tasks;
+void MainWindow::handleApproveRequested(const QString &taskId, const QString &note) {
+    const std::optional<TaskItem> before = m_tasks.task(taskId);
+    if (!before) return;
+
+    QString reason;
+    m_userMoveInProgress = true;
+    const bool approved = m_tasks.approve(taskId, note, &reason);
+    m_userMoveInProgress = false;
+    if (!approved) {
+        ui->consolePanel->appendLog(RunLogFormatter::gateLine(*before, QString("gagal disetujui: %1").arg(reason)));
+        return;
+    }
+    const std::optional<TaskItem> after = m_tasks.task(taskId);
+    ui->consolePanel->appendLog(RunLogFormatter::gateLine(
+        *before, QString("%1 disetujui → %2%3")
+                     .arg(before->stage, after ? after->stage : QString(),
+                          note.isEmpty() ? QString() : QStringLiteral(" (dengan catatan)"))));
+}
+
+void MainWindow::handleRevisionRequested(const QString &taskId, const QString &note) {
+    const std::optional<TaskItem> task = m_tasks.task(taskId);
+    if (!task) return;
+
+    QString reason;
+    if (!m_tasks.requestRevision(taskId, note, &reason)) {
+        ui->consolePanel->appendLog(RunLogFormatter::gateLine(*task, QString("revisi gagal: %1").arg(reason)));
+        return;
+    }
+    ui->consolePanel->appendLog(RunLogFormatter::gateLine(
+        *task, QString("revisi diminta; %1 dijalankan lagi dengan catatan").arg(task->stage)));
+    // Revisi adalah permintaan eksplisit pengguna, jadi langsung dijalankan
+    handleRunRequested(task->projectId, taskId);
+}
+
+void MainWindow::handleSendBackRequested(const QString &taskId, const QString &stage, const QString &note) {
+    const std::optional<TaskItem> task = m_tasks.task(taskId);
+    if (!task) return;
+
+    QString reason;
+    m_userMoveInProgress = true;
+    const bool sent = m_tasks.sendBack(taskId, stage, note, &reason);
+    m_userMoveInProgress = false;
+    ui->consolePanel->appendLog(RunLogFormatter::gateLine(
+        *task, sent ? QString("dikembalikan dari %1 ke %2").arg(task->stage, stage)
+                    : QString("gagal dikembalikan: %1").arg(reason)));
+}
+
+void MainWindow::handleRunRequested(const QString &projectId, const QString &taskId) {
+    // Data task (termasuk riwayat run untuk prompt serah-terima) diambil dari TaskManager
+    const std::optional<TaskItem> found = m_tasks.task(taskId);
+    if (!found) return;
+    const TaskItem task = *found;
+
+    const QString workingDirectory = ensureWorkingDirectory(projectId);
+    if (workingDirectory.isEmpty()) {
+        ui->consolePanel->appendLog(RunLogFormatter::rejectedLine(task, "folder kerja belum dipilih"));
+        return;
+    }
+
+    // Kartu baru berubah status lewat sinyal runQueued/runStarted dari coordinator
+    QString reason;
+    if (!m_swarm.run(task, workingDirectory, &reason)) {
+        ui->consolePanel->appendLog(RunLogFormatter::rejectedLine(task, reason));
+    }
+}
+
+QString MainWindow::ensureWorkingDirectory(const QString &projectId) {
+    const QString saved = m_fileManager->workingDirectory(projectId);
+    if (!saved.isEmpty() && QDir(saved).exists()) {
+        return saved;
+    }
+    if (!saved.isEmpty()) {
+        ui->consolePanel->appendLog(QString("[SYSTEM] Folder kerja %1 tidak ditemukan: %2").arg(projectId, saved));
+    }
+    return chooseWorkingDirectory(projectId);
+}
+
+QString MainWindow::chooseWorkingDirectory(const QString &projectId) {
+    // `claude -p` melewati dialog workspace trust, jadi agent hanya boleh jalan
+    // di folder yang dipilih pengguna sendiri di sini
+    const QString current = m_fileManager->workingDirectory(projectId);
+    const QString dir = QFileDialog::getExistingDirectory(
+        this, QString("Folder kerja agent untuk %1").arg(projectId),
+        current.isEmpty() ? QDir::homePath() : current);
+    if (dir.isEmpty()) {
+        return QString();
+    }
+
+    m_fileManager->setWorkingDirectory(projectId, dir);
+    saveProject(projectId);
+    if (auto *swimlane = m_swimlanes.value(projectId, nullptr)) {
+        swimlane->setWorkingDirectory(dir);
+    }
+    ui->consolePanel->appendLog(QString("[SYSTEM] Folder kerja %1: %2").arg(projectId, dir));
+    return dir;
+}
+
+void MainWindow::handleRunQueued(const TaskItem &task) {
+    if (KanbanCardWidget *card = cardFor(task)) {
+        card->setRunState(RunState::Queued);
+    }
+    ui->consolePanel->appendLog(RunLogFormatter::queuedLine(task));
+}
+
+void MainWindow::handleRunStarted(const TaskItem &task, const AgentLaunch &launch) {
+    if (KanbanCardWidget *card = cardFor(task)) {
+        card->setRunState(RunState::Running);
+    }
+    for (const QString &line : RunLogFormatter::startLines(task, launch)) {
+        ui->consolePanel->appendLog(line);
+    }
+
+    // Drawer yang sedang menampilkan task ini beralih ke output Live
+    if (m_drawerAnimator->isOpen() && m_drawer->taskId() == task.id) {
+        if (const std::optional<TaskItem> current = m_tasks.task(task.id)) {
+            m_drawer->showTask(*current, RunState::Running, m_tasks.nextStage(current->stage),
+                               m_tasks.sendBackTargets(current->stage));
+        }
+        m_drawer->startLive();
+    }
+}
+
+void MainWindow::handleRunEvent(const TaskItem &task, const AgentEvent &event) {
+    const QString workingDirectory = m_fileManager->workingDirectory(task.projectId);
+    const QString line = RunLogFormatter::eventLine(task, event, workingDirectory);
+    if (!line.isEmpty()) {
+        ui->consolePanel->appendLog(line);
+    }
+    if (m_drawer->taskId() == task.id) {
+        m_drawer->appendLive(event, workingDirectory);
+    }
+}
+
+void MainWindow::handleRunFinished(const TaskItem &task, const AgentResult &result) {
+    // Status task (maju / review / gagal) sudah diputuskan TaskManager::recordRun lewat
+    // sambungan di main.cpp; di sini tinggal status run kartu dan baris konsol
+    if (KanbanCardWidget *card = cardFor(task)) {
+        card->setRunState(RunState::Idle);
+    }
+    ui->consolePanel->appendLog(RunLogFormatter::finishLine(task, result));
 }

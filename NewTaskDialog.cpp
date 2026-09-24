@@ -10,18 +10,12 @@
 #include <QVBoxLayout>
 
 namespace {
-// Harus persis sama dengan key yang dikenal StageProfile (lihat StageProfile.h),
-// supaya task baru tidak pernah dibuat dengan stage yang tidak valid.
-const QStringList kStageKeys = {
-    "WAITING", "SPECIFIER", "CODER", "CLEANER",
-    "ARCHITECT", "HARDENER", "QA", "DONE"
-};
 const QStringList kCategoryPresets = {
     "component", "utility", "design", "bug", "feature"
 };
 }
 
-NewTaskDialog::NewTaskDialog(const QString &projectId, QWidget *parent)
+NewTaskDialog::NewTaskDialog(const QString &projectId, const QStringList &stageKeys, QWidget *parent)
     : QDialog(parent), m_projectId(projectId) {
     setObjectName("NewTaskDialog");
     setWindowTitle("New Task");
@@ -55,7 +49,8 @@ NewTaskDialog::NewTaskDialog(const QString &projectId, QWidget *parent)
 
     m_stageInput = new QComboBox(this);
     m_stageInput->setObjectName("taskFormCombo");
-    m_stageInput->addItems(kStageKeys);
+    // Pilihan stage datang dari StageCatalog, jadi task baru tidak pernah memakai key yang tidak dikenal
+    m_stageInput->addItems(stageKeys);
     m_stageInput->setCurrentText("WAITING");
 
     auto *fieldRow = new QHBoxLayout();
@@ -63,43 +58,6 @@ NewTaskDialog::NewTaskDialog(const QString &projectId, QWidget *parent)
     fieldRow->addWidget(buildField("CATEGORY", m_categoryInput));
     fieldRow->addWidget(buildField("STAGE", m_stageInput));
     root->addLayout(fieldRow);
-
-    auto *approvalsLabel = new QLabel("APPROVALS REQUIRED", this);
-    approvalsLabel->setObjectName("taskFormFieldLabel");
-    root->addWidget(approvalsLabel);
-
-    auto *btnMinus = new QPushButton("-", this);
-    btnMinus->setObjectName("btnTaskFormStepper");
-    btnMinus->setFixedSize(28, 28);
-    btnMinus->setCursor(Qt::PointingHandCursor);
-    connect(btnMinus, &QPushButton::clicked, this, [this]() { changeApprovals(-1); });
-
-    m_approvalsValueLabel = new QLabel("0", this);
-    m_approvalsValueLabel->setObjectName("taskFormApprovalsValue");
-    m_approvalsValueLabel->setAlignment(Qt::AlignCenter);
-    m_approvalsValueLabel->setFixedSize(40, 28);
-
-    auto *btnPlus = new QPushButton("+", this);
-    btnPlus->setObjectName("btnTaskFormStepper");
-    btnPlus->setFixedSize(28, 28);
-    btnPlus->setCursor(Qt::PointingHandCursor);
-    connect(btnPlus, &QPushButton::clicked, this, [this]() { changeApprovals(1); });
-
-    auto *previewCaption = new QLabel("Preview:", this);
-    previewCaption->setObjectName("taskFormPreviewCaption");
-
-    m_badgePreviewLabel = new QLabel(this);
-    m_badgePreviewLabel->setObjectName("labelBadge"); // pakai persis gaya badge kartu kanban asli
-
-    auto *stepperRow = new QHBoxLayout();
-    stepperRow->setSpacing(8);
-    stepperRow->addWidget(btnMinus);
-    stepperRow->addWidget(m_approvalsValueLabel);
-    stepperRow->addWidget(btnPlus);
-    stepperRow->addStretch(1);
-    stepperRow->addWidget(previewCaption);
-    stepperRow->addWidget(m_badgePreviewLabel);
-    root->addLayout(stepperRow);
 
     root->addWidget(buildDivider());
 
@@ -124,8 +82,22 @@ NewTaskDialog::NewTaskDialog(const QString &projectId, QWidget *parent)
     connect(m_titleInput, &QLineEdit::returnPressed, this, [this]() {
         if (m_btnCreate->isEnabled()) m_btnCreate->click();
     });
+}
 
-    updateBadgePreview();
+NewTaskDialog::NewTaskDialog(const TaskItem &task, const QStringList &stageKeys, QWidget *parent)
+    : NewTaskDialog(task.projectId, stageKeys, parent) {
+    m_editing = true;
+    m_original = task;
+
+    setWindowTitle("Edit Task");
+    m_btnCreate->setText("Simpan");
+
+    m_titleInput->setText(task.title);
+    m_subtextInput->setText(task.subtext);
+    m_categoryInput->setCurrentText(task.category);
+
+    m_stageInput->setCurrentText(task.stage);
+    m_stageInput->setEnabled(false);
 }
 
 QWidget *NewTaskDialog::buildField(const QString &labelText, QWidget *inputWidget) {
@@ -150,29 +122,19 @@ QFrame *NewTaskDialog::buildDivider() {
     return line;
 }
 
-void NewTaskDialog::changeApprovals(int delta) {
-    m_approvals = qMax(0, m_approvals + delta);
-    m_approvalsValueLabel->setText(QString::number(m_approvals));
-    updateBadgePreview();
-}
-
-void NewTaskDialog::updateBadgePreview() {
-    m_badgePreviewLabel->setText(QString("✓ %1").arg(m_approvals));
-}
-
 void NewTaskDialog::updateCreateButtonEnabled() {
     m_btnCreate->setEnabled(!m_titleInput->text().trimmed().isEmpty());
 }
 
 TaskItem NewTaskDialog::resultTask() const {
-    TaskItem item;
-    item.id = QString::number(QDateTime::currentMSecsSinceEpoch());
-    item.projectId = m_projectId;
+    TaskItem item = m_original;
+    if (!m_editing) {
+        item.id = QString::number(QDateTime::currentMSecsSinceEpoch());
+        item.projectId = m_projectId;
+    }
     item.stage = m_stageInput->currentText();
     item.category = m_categoryInput->currentText().trimmed();
     item.title = m_titleInput->text().trimmed();
     item.subtext = m_subtextInput->text().trimmed();
-    item.approvals = m_approvals;
-    item.badge = QString("✓ %1").arg(m_approvals);
     return item;
 }

@@ -1,0 +1,191 @@
+#include "ClaudeCodeRuntime.h"
+#include "StreamJsonParser.h"
+
+#include <QFileInfo>
+
+ClaudeCodeRuntime::ClaudeCodeRuntime(QString program)
+    : m_program(std::move(program)) {
+}
+
+bool ClaudeCodeRuntime::isAvailable(QString *reason) const {
+    if (m_program.isEmpty() || !QFileInfo::exists(m_program)) {
+        if (reason) {
+            *reason = QStringLiteral("claude tidak ditemukan di PATH maupun ~/.local/bin");
+        }
+        return false;
+    }
+    return true;
+}
+
+AgentSession *ClaudeCodeRuntime::createSession(const AgentLaunch &launch, QObject *parent) {
+    return new ClaudeCodeSession(m_program, launch, parent);
+}
+
+ClaudeCodeSession::ClaudeCodeSession(QString program, AgentLaunch launch, QObject *parent)
+    : AgentSession(parent),
+      m_program(std::move(program)),
+      m_launch(std::move(launch)) {
+    m_timeout.setSingleShot(true);
+    connect(&m_timeout, &QTimer::timeout, this, &ClaudeCodeSession::onTimeout);
+}
+
+ClaudeCodeSession::~ClaudeCodeSession() {
+    // Pemilik session sedang dibongkar (mis. aplikasi ditutup): matikan proses tanpa memancarkan sinyal
+    if (m_process && m_process->state() != QProcess::NotRunning) {
+        m_process->disconnect(this);
+        m_process->kill();
+        m_process->waitForFinished(2000);
+    }
+}
+
+void ClaudeCodeSession::start() {
+    if (m_process || m_done) {
+        return;   // start() hanya berlaku sekali
+    }
+    if (m_program.isEmpty()) {
+        finish(AgentResult::failure(QStringLiteral("failed_to_start"),
+                                    QStringLiteral("claude tidak ditemukan")));
+        return;
+    }
+
+    m_process = new QProcess(this);
+    m_process->setProgram(m_program);
+    m_process->setArguments(ClaudeCli::arguments(m_launch.agent));
+    m_process->setWorkingDirectory(m_launch.workingDirectory);
+
+    connect(m_process, &QProcess::started, this, &ClaudeCodeSession::onStarted);
+    connect(m_process, &QProcess::readyReadStandardOutput, this, &ClaudeCodeSession::onReadyReadStdout);
+    connect(m_process, &QProcess::readyReadStandardError, this, &ClaudeCodeSession::onReadyReadStderr);
+    connect(m_process, &QProcess::finished, this, &ClaudeCodeSession::onProcessFinished);
+    connect(m_process, &QProcess::errorOccurred, this, &ClaudeCodeSession::onProcessError);
+
+    m_timeout.start(m_launch.agent.timeoutMs);
+    m_process->start();
+}
+
+void ClaudeCodeSession::cancel() {
+    if (m_done) {
+        return;
+    }
+    m_cancelled = true;
+    if (m_process && m_process->state() != QProcess::NotRunning) {
+        // kill(), bukan terminate(): di Windows terminate() tidak menghentikan aplikasi konsol.
+        // finished("cancelled") menyusul dari onProcessFinished().
+        m_process->kill();
+    } else {
+        finish(AgentResult::failure(QStringLiteral("cancelled"), QStringLiteral("dibatalkan")));
+    }
+}
+
+bool ClaudeCodeSession::isRunning() const {
+    return m_process && !m_done;
+}
+
+void ClaudeCodeSession::onStarted() {
+    // Prompt lewat stdin: aman dari masalah quoting dan batas panjang command line
+    m_process->write(m_launch.prompt.toUtf8());
+    m_process->closeWriteChannel();
+}
+
+void ClaudeCodeSession::onReadyReadStdout() {
+    m_stdoutBuffer += m_process->readAllStandardOutput();
+    qsizetype newline;
+    while ((newline = m_stdoutBuffer.indexOf('\n')) >= 0) {
+        const QByteArray line = m_stdoutBuffer.left(newline);
+        m_stdoutBuffer.remove(0, newline + 1);
+        handleLine(line);
+    }
+}
+
+void ClaudeCodeSession::onReadyReadStderr() {
+    m_stderrBuffer += m_process->readAllStandardError();
+    qsizetype newline;
+    while ((newline = m_stderrBuffer.indexOf('\n')) >= 0) {
+        const QByteArray line = m_stderrBuffer.left(newline);
+        m_stderrBuffer.remove(0, newline + 1);
+        handleStderrLine(line);
+    }
+}
+
+void ClaudeCodeSession::onProcessFinished(int exitCode, QProcess::ExitStatus status) {
+    Q_UNUSED(status);
+
+    // Ambil sisa output; baris terakhir bisa saja tidak diakhiri '\n'
+    onReadyReadStdout();
+    onReadyReadStderr();
+    if (!m_stdoutBuffer.isEmpty()) {
+        handleLine(m_stdoutBuffer);
+        m_stdoutBuffer.clear();
+    }
+    if (!m_stderrBuffer.isEmpty()) {
+        handleStderrLine(m_stderrBuffer);
+        m_stderrBuffer.clear();
+    }
+
+    if (m_cancelled) {
+        finish(AgentResult::failure(QStringLiteral("cancelled"), QStringLiteral("dibatalkan")));
+    } else if (m_timedOut) {
+        const int timeoutMs = m_launch.agent.timeoutMs;
+        const QString limit = timeoutMs >= 60000
+                                  ? QStringLiteral("%1 menit").arg(timeoutMs / 60000)
+                                  : QStringLiteral("%1 detik").arg(timeoutMs / 1000.0, 0, 'f', 1);
+        finish(AgentResult::failure(QStringLiteral("timeout"), QStringLiteral("melewati batas %1").arg(limit)));
+    } else if (m_result) {
+        finish(*m_result);
+    } else {
+        // Tanpa event result, pesan stderr terakhir biasanya menjelaskan sebabnya (mis. belum login)
+        const QString message = m_lastStderr.isEmpty()
+                                    ? QStringLiteral("claude berhenti dengan exit code %1").arg(exitCode)
+                                    : m_lastStderr;
+        finish(AgentResult::failure(QStringLiteral("no_result"), message));
+    }
+}
+
+void ClaudeCodeSession::onProcessError(QProcess::ProcessError error) {
+    // Error lain (mis. Crashed setelah kill) selalu disusul finished(); hanya gagal start yang tidak
+    if (error == QProcess::FailedToStart) {
+        finish(AgentResult::failure(QStringLiteral("failed_to_start"),
+                                    QStringLiteral("claude gagal dijalankan: %1").arg(m_process->errorString())));
+    }
+}
+
+void ClaudeCodeSession::onTimeout() {
+    if (m_done || !m_process) {
+        return;
+    }
+    m_timedOut = true;
+    m_process->kill();
+}
+
+void ClaudeCodeSession::handleLine(const QByteArray &line) {
+    const QList<AgentEvent> events = StreamJsonParser::parseLine(line);
+    for (const AgentEvent &event : events) {
+        if (event.kind == AgentEvent::Kind::Result) {
+            m_result = event.result;
+        } else if (!m_done) {
+            emit eventReceived(event);
+        }
+    }
+}
+
+void ClaudeCodeSession::handleStderrLine(const QByteArray &line) {
+    const QString text = QString::fromUtf8(line).trimmed();
+    if (text.isEmpty() || m_done) {
+        return;
+    }
+    m_lastStderr = text;
+
+    AgentEvent event;
+    event.kind = AgentEvent::Kind::Stderr;
+    event.text = text;
+    emit eventReceived(event);
+}
+
+void ClaudeCodeSession::finish(const AgentResult &result) {
+    if (m_done) {
+        return;
+    }
+    m_done = true;
+    m_timeout.stop();
+    emit finished(result);
+}

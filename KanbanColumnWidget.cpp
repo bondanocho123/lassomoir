@@ -40,17 +40,27 @@ void KanbanColumnWidget::setStageName(const QString &name){
     }
 }
 
+void KanbanColumnWidget::setRunnable(bool runnable) {
+    m_runnable = runnable;
+    for (KanbanCardWidget *card : cards()) {
+        card->setRunEnabled(m_runnable);
+    }
+}
+
 void KanbanColumnWidget::addCard(KanbanCardWidget *card) {
     if (!card || !m_cardListLayout) return;
     //Sisipkan sebelum spacer terbawah (Jika ada spacer di index terakhir)
     int targetIndex = qMax(0, m_cardListLayout->count()-1);
     m_cardListLayout->insertWidget(targetIndex, card);
+    card->setRunEnabled(m_runnable);
     card->show();
 }
 
 void KanbanColumnWidget::insertCard(int index, KanbanCardWidget *card){
     if (!card || !m_cardListLayout) return;
     m_cardListLayout->insertWidget(index, card);
+    // Kartu yang di-drop ke kolom lain ikut menyesuaikan tombol run-nya
+    card->setRunEnabled(m_runnable);
     card->show();
 }
 

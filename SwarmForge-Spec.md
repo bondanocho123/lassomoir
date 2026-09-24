@@ -75,7 +75,7 @@ TaskItem + TaskManager                  sudah ditulis, belum dipakai di mana pun
 | *Open Project* | `mainwindow.ui` | 🟡 | Tombol ada, belum ada `connect` |
 | Persistensi | — | ⬜ | M2 |
 | Runner agent | — | ⬜ | M3 |
-| Gate review | — | ⬜ | M4 |
+| Gate review | `TaskManager`, `ResponseDrawer` | 🟡 | M4: review di drawer, Setujui/Revisi/Kembalikan, serah-terima prompt antar stage; gate per proyek belum |
 | Bridge MCP | — | ⬜ | M5 |
 
 > **Penting:** saat ini **widget kartu adalah sumber kebenaran** (`KanbanCardWidget` menyimpan `m_id`, `m_title`, dst.), bukan `TaskManager`. Drag & drop juga memindahkan widget **lebih dulu**, baru memberi tahu lewat sinyal — jadi tidak ada titik untuk menolak perpindahan. Dua hal ini yang pertama diubah (M1).
@@ -121,8 +121,8 @@ Konvensi nama sinyal di kode sudah tepat dan dipertahankan: **peristiwa** dalam 
 │                            ▲                                                                  │
 │                         ┌──┴────────────────────┬─────────────────────────┐                   │
 │                         │                       │                         │                   │
-│  INFRA            SessionStore             StageRunner              BridgeServer              │
-│                (QSaveFile + JSON)          (QProcess)            (QLocalServer, M5)           │
+│  INFRA            SessionStore           SwarmCoordinator           BridgeServer              │
+│                (QSaveFile + JSON)     (StageSwarm/stage)         (QLocalServer, M5)           │
 │                         │                       │                         ▲                   │
 └─────────────────────────┼───────────────────────┼─────────────────────────┼───────────────────┘
                           ▼                       │ stdin: prompt           │ JSON Lines
@@ -135,7 +135,7 @@ Konvensi nama sinyal di kode sudah tepat dan dipertahankan: **peristiwa** dalam 
 
 - View mengirim *intent* ke `TaskManager` dan hanya berubah karena sinyal darinya.
 - `SessionStore` memuat state saat proyek dibuka dan menyimpan setiap kali ada sinyal perubahan.
-- `StageRunner` menjalankan `claude -p`, meneruskan log ke konsol, lalu melapor ke `TaskManager`.
+- `SwarmCoordinator` mengarahkan task ke gerombolan (`StageSwarm`) milik stage-nya; tiap run menjalankan satu proses `claude -p` lewat `AgentRuntime`, log diteruskan ke konsol (M4: juga melapor ke `TaskManager`).
 - (M5) `claude` menjalankan bridge MCP sebagai proses anak lewat stdio; bridge meneruskan request ke `BridgeServer`, yang memanggil `TaskManager`.
 
 ### 3.3 Tanggung jawab kelas
@@ -147,10 +147,20 @@ Konvensi nama sinyal di kode sudah tepat dan dipertahankan: **peristiwa** dalam 
 | `KanbanColumnWidget` | View | Target drop, menghitung indeks sisip | Memindahkan kartu sebelum model setuju |
 | `KanbanCardWidget` | View | Menampilkan satu task, sumber drag | Menyimpan data selain `taskId` + cache tampilan |
 | `ConsolePanelWidget` | View | Log read-only + input perintah | Menjalankan perintah sendiri |
-| `ReviewDialog` ⬜ | View | Menampilkan hasil stage; *Approve* / *Reject* + catatan | — |
+| `ResponseDrawer` ✅ | View | Drawer hasil agent (pengganti ReviewDialog): pilih run / Live, metrik, dokumen, keputusan Setujui · Revisi · Kembalikan | Mengubah state sendiri (kirim intent ke `TaskManager`) |
+| `MarkdownView` ✅ | View | Markdown dialek GitHub + blok ```mermaid``` sebagai gambar lewat `MermaidRenderer` | Tahu cara menggambar diagram |
+| `MermaidRenderer` / `EdgeMermaidRenderer` ✅ | Infra | Kode Mermaid → PNG: Edge/Chrome headless + `mermaid.min.js` bundel (`:/vendor`), cache per diagram | — |
 | `TaskManager` | Domain | State task, validasi transisi, sinyal perubahan | Menyentuh file atau proses |
 | `SessionStore` ⬜ | Infra | Load/save JSON secara atomik, cek `schemaVersion` | Dipanggil langsung dari widget |
-| `StageRunner` ⬜ | Infra | Siklus hidup `QProcess` per run, parsing stream-json, timeout, cancel | Mengubah state tanpa `TaskManager` |
+| `StageProfile` ✅ | Domain | Satu stage = key + `AgentDefinition` opsional + `TransitionPolicy` | Menjalankan agent |
+| `StageCatalog` ✅ | Domain | Urutan & nilai awal 8 stage; satu-satunya sumber key stage | Diubah saat runtime |
+| `TransitionPolicy` ✅ | Domain | Gate keluar stage (`ApprovalGate`, `AutoAdvance`) | Tahu soal agent |
+| `SwarmCoordinator` ✅ | Infra | Prasyarat run, routing task ke `StageSwarm` stage-nya, cancel per project | Mengubah state tanpa `TaskManager` |
+| `StageSwarm` ✅ | Infra | Gerombolan satu stage: `maxConcurrent` run paralel, antrean FIFO | Tahu soal `QProcess` |
+| `WorkspaceGuard` ✅ | Infra | Paling banyak satu agent penulis per folder kerja | — |
+| `AgentRuntime` / `AgentSession` ✅ | Infra | Kontrak menjalankan satu agent; implementasi `ClaudeCodeRuntime`/`ClaudeCodeSession` (`QProcess`, stdin, timeout, cancel) | Parsing stream-json sendiri |
+| `ClaudeCli` · `StreamJsonParser` ✅ | Infra | Flag & lokasi CLI · format stream-json | Menyimpan state |
+| `RunLogFormatter` ✅ | View | Teks baris konsol untuk kejadian run | — |
 | `BridgeServer` ⬜ | Infra | `QLocalServer` untuk bridge MCP, validasi *run key* | Menulis file sesi |
 
 `TaskManager` dibuat di `main.cpp` lalu diteruskan ke `MainWindow` (mis. `MainWindow(TaskManager *tasks, QWidget *parent = nullptr)`), supaya logika domain bisa dites tanpa membuka jendela.
@@ -198,6 +208,8 @@ Aturan:
 - Pindah antar swimlane ditolak.
 
 ### 4.2 State di dalam stage
+
+> **Implementasi (M4-lite):** `TaskState` = `Idle` · `AwaitingReview` · `Failed` disimpan di `session.json`; `Queued`/`Running` adalah `RunState` runtime dari `SwarmCoordinator`. `TaskManager::recordRun` menerapkan tabel di bawah; keputusan review (`approve` · `requestRevision` · `sendBack`) tercatat di `StageRun.decision` + `reviewNote`, dan `TaskPromptComposer` meneruskan dokumen yang disetujui serta hasil stage sebelumnya ke prompt stage berikutnya. Drag manual: mundur selalu boleh, maju melewati gate hanya bila gate itu sudah disetujui.
 
 ```text
                     (task masuk ke stage)
@@ -414,6 +426,8 @@ Dibanding draf sebelumnya (dokumen Gemini), ada lima perubahan:
 
 ### 5.2 Menjalankan Claude Code per stage
 
+> Sketsa `StageRunner` di bawah adalah rancangan awal. Implementasinya dipecah per tanggung jawab: `ClaudeCli` (argumen), `StreamJsonParser` (event), `ClaudeCodeSession` (proses), `StageSwarm` + `SwarmCoordinator` (antrean & routing) — lihat §3.3. Belum dipakai: `--json-schema`, `--add-dir`, `--max-budget-usd`, `--exclude-dynamic-system-prompt-sections`.
+
 Flag di bawah sudah dicek dengan `claude --help` (Claude Code 2.1.266):
 
 | Flag | Kegunaan |
@@ -544,16 +558,20 @@ Artefak: {{previousArtifacts}}
 
 ### 5.3 Profil stage (titik awal)
 
-| Stage | `--tools` | `--allowedTools` tambahan | Gate default | `--effort` |
-|---|---|---|---|---|
-| `SPECIFIER` | Read, Grep, Glob, Write | — | **Ya** | high |
-| `CODER` | Read, Grep, Glob, Edit, Write, Bash | `Bash(git *)` + perintah build/test proyek | Tidak | high |
-| `CLEANER` | Read, Grep, Glob, Edit, Bash | perintah test/coverage | Tidak | medium |
-| `ARCHITECT` | Read, Grep, Glob, Write | — | Tidak | high |
-| `HARDENER` | Read, Grep, Glob, Edit, Write, Bash | perintah test | Tidak | high |
-| `QA` | Read, Grep, Glob, Bash | perintah test | **Ya** | medium |
+| Stage | `--tools` | `--allowedTools` tambahan | Gate default | `--effort` | `maxConcurrent` |
+|---|---|---|---|---|---|
+| `SPECIFIER` | Read, Grep, Glob | — | **Ya** | high | 3 |
+| `CODER` | Read, Grep, Glob, Edit, Write, Bash | `Bash(git *)` + perintah build/test proyek | Tidak | high | 2 |
+| `CLEANER` | Read, Grep, Glob, Edit, Bash | perintah test/coverage | Tidak | medium | 1 |
+| `ARCHITECT` | Read, Grep, Glob | — | Tidak | high | 2 |
+| `HARDENER` | Read, Grep, Glob, Edit, Write, Bash | perintah test | Tidak | high | 1 |
+| `QA` | Read, Grep, Glob, Bash | perintah test | **Ya** | medium | 1 |
 
-Semua nilai ini titik awal untuk diukur, bukan aturan. Model default = default CLI.
+Semua nilai ini titik awal untuk diukur, bukan aturan. Model default = default CLI. Nilainya ada di `StageCatalog::standard()`; instruksi peran di `Resources/prompts/<STAGE>.md`.
+
+- `maxConcurrent` = ukuran gerombolan stage: run paralel maksimal; sisanya antre FIFO.
+- Agent dengan Edit/Write/Bash dianggap penulis: `WorkspaceGuard` hanya mengizinkan satu penulis per folder kerja, lintas stage.
+- `SPECIFIER` dan `ARCHITECT` sementara tanpa `Write` (folder artefak belum ada), jadi keduanya read-only dan bebas paralel.
 
 ### 5.4 Metrik, biaya, cache
 
@@ -867,7 +885,7 @@ Umum: radius 4px, padding 4px 10px, 11px bold, tinggi min. 24px, kursor tangan, 
 | Hover | Garis 1px `accent` | — |
 | Dragging | Kartu asal disembunyikan; *ghost* 75% (dengan DPR yang benar, K9) | — |
 | Running | Garis 1px running; chip `RUNNING`; subteks = durasi berjalan (diperbarui tiap detik) | Cancel; tidak bisa di-drag |
-| AwaitingReview | Garis **2px** review; chip `REVIEW` | Klik → ReviewDialog; tidak bisa di-drag |
+| AwaitingReview | Garis **2px** review; tombol 📋 | 📋 / klik kartu → drawer dengan panel keputusan; tidak bisa di-drag |
 | Failed | Garis 1px failed; chip `GAGAL`; subteks = alasan singkat | Retry, drag |
 
 - Judul satu baris; teks panjang dipotong dengan `QFontMetrics::elidedText` + tooltip judul lengkap (data mock `"geometry-epoc..."` sekarang dipotong manual).
@@ -1113,11 +1131,11 @@ git add KanbanColumnWidget.cpp
 
 | # | Pertanyaan | Usulan dokumen ini |
 |---|---|---|
-| 1 | Apa arti badge `✓ N`? `styles.qss` menyebutnya "badge prioritas", placeholder `.ui` berisi `High`, data mock berisi `✓ 0`–`✓ 2` | Jumlah gate yang sudah di-*Approve*; prioritas (bila perlu) jadi field terpisah |
+| 1 | Apa arti badge `✓ N`? `styles.qss` menyebutnya "badge prioritas", placeholder `.ui` berisi `High`, data mock berisi `✓ 0`–`✓ 2` | **Diputuskan:** jumlah gate yang run terakhirnya disetujui (`TaskItem::approvedGates()`); stepper "APPROVALS REQUIRED" dihapus |
 | 2 | Nama produk: judul jendela "SwarmForge", tetapi label top bar "L'Assomoir" (`mainwindow.ui:69`) | Pilih satu dan pakai di keduanya |
 | 3 | Palet final | Krem–coklat–navy dari `styles.qss` (dokumen ini mengasumsikannya) |
 | 4 | Stage ber-gate default | `SPECIFIER` dan `QA`; bisa diatur per proyek |
-| 5 | Setelah *Approve*, stage berikutnya langsung jalan? | Tidak di v1 — Run manual agar biaya terkendali |
+| 5 | Setelah *Approve*, stage berikutnya langsung jalan? | **Diputuskan:** kartu maju otomatis ke stage berikutnya, tetapi Run tetap manual (▶) agar biaya terkendali; *Revisi* langsung menjalankan ulang stage yang sama |
 | 6 | Lokasi data sesi & artefak | `%APPDATA%\SwarmForge\projects\<id>\`; repo target tetap bersih |
 | 7 | Bahasa bridge MCP | Python (FastMCP) dulu; mode `--mcp-stdio` di executable C++ bisa menyusul |
 | 8 | Kartu boleh pindah antar swimlane? | Tidak |
