@@ -8,6 +8,7 @@
 #include <QResizeEvent>
 #include <QScrollBar>
 #include <QStandardPaths>
+#include <QTextCursor>
 #include <QTextDocument>
 #include <QUrl>
 
@@ -120,9 +121,12 @@ void MarkdownView::rebuild() {
     }
     processed += m_markdown.mid(last);
 
-    // setMarkdown mengosongkan dokumen (termasuk cache gambar), lalu loadResource dipanggil ulang
+    // setMarkdown mengosongkan dokumen (termasuk cache gambar), lalu loadResource dipanggil ulang.
+    // Kursor teks dikembalikan ke awal: bila tertinggal di akhir dokumen, QTextEdit menggulir ke
+    // bawah untuk menampilkannya saat view berubah ukuran (mis. tab tersembunyi baru dibuka).
     const int scroll = verticalScrollBar()->value();
     document()->setMarkdown(processed, QTextDocument::MarkdownDialectGitHub);
+    setTextCursor(QTextCursor(document()));
     verticalScrollBar()->setValue(scroll);
 }
 

@@ -12,6 +12,7 @@
 #include <QLabel>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QScrollBar>
 #include <QShortcut>
 #include <QSignalBlocker>
@@ -27,6 +28,7 @@ constexpr int kLive = -2;   // output run yang sedang berjalan
 constexpr int kResultTab = 0;
 constexpr int kDiffTab = 1;
 constexpr int kMaintainabilityTab = 2;
+constexpr int kUmlTab = 3;
 
 QString decisionLabel(const QString &decision) {
     if (decision == ReviewDecision::Approved) return QStringLiteral("disetujui");
@@ -122,20 +124,27 @@ ResponseDrawer::ResponseDrawer(MermaidRenderer *renderer, QWidget *parent)
     m_diffView = new DiffView(this);
     connect(m_diffView, &DiffView::refreshRequested, this, &ResponseDrawer::requestDiff);
     m_maintainabilityView = new MaintainabilityView(this);
+    m_umlView = new MarkdownView(renderer, this);
+    m_umlView->setObjectName("umlView");
 
     m_pages = new QStackedWidget(this);
     m_pages->addWidget(resultPage);
     m_pages->addWidget(m_diffView);
     m_pages->addWidget(m_maintainabilityView);
+    m_pages->addWidget(m_umlView);
 
     m_tabs = new QTabBar(this);
     m_tabs->setObjectName("drawerTabs");
     m_tabs->setDrawBase(false);
     m_tabs->setExpanding(false);
     m_tabs->setFocusPolicy(Qt::NoFocus);
+    // Drawer sempit: teks tab dipendekkan, bukan disembunyikan di balik tombol gulir
+    m_tabs->setUsesScrollButtons(false);
+    m_tabs->setElideMode(Qt::ElideRight);
     m_tabs->addTab(QStringLiteral("Hasil agent"));
     m_tabs->addTab(QStringLiteral("Perubahan kode"));
     m_tabs->addTab(QStringLiteral("Maintainability"));
+    m_tabs->addTab(QStringLiteral("UML"));
     connect(m_tabs, &QTabBar::currentChanged, m_pages, &QStackedWidget::setCurrentIndex);
     m_tabs->hide();
 
@@ -289,6 +298,8 @@ void ResponseDrawer::showTask(const TaskItem &task, RunState runState, const QSt
 
     if (loadDiff) {
         requestDiff();
+    } else if (codeReview) {
+        refreshUml();   // run baru bisa membawa diagram dari agent
     }
 }
 
@@ -305,6 +316,13 @@ void ResponseDrawer::showDiff(const QString &taskId, const WorkspaceDiff &diff) 
     m_tabs->setTabText(kMaintainabilityTab, maintainability
                                                 ? QStringLiteral("Maintainability · %1").arg(*maintainability)
                                                 : QStringLiteral("Maintainability"));
+    m_diffLoading = false;
+    m_diffError = diff.error;
+    m_classDiagram = ClassDiagram::fromDiff(diff);
+    m_tabs->setTabText(kUmlTab, m_classDiagram.drawnTypes > 0
+                                    ? QStringLiteral("UML · %1").arg(m_classDiagram.drawnTypes)
+                                    : QStringLiteral("UML"));
+    refreshUml();
 }
 
 void ResponseDrawer::requestDiff() {
@@ -312,7 +330,64 @@ void ResponseDrawer::requestDiff() {
     m_maintainabilityView->showLoading();
     m_tabs->setTabText(kDiffTab, QStringLiteral("Perubahan kode"));
     m_tabs->setTabText(kMaintainabilityTab, QStringLiteral("Maintainability"));
+    m_tabs->setTabText(kUmlTab, QStringLiteral("UML"));
+    m_diffLoading = true;
+    m_diffError.clear();
+    m_classDiagram = ClassDiagram();
+    refreshUml();
     emit diffRequested(m_task.id);
+}
+
+void ResponseDrawer::refreshUml() {
+    QString markdown = QStringLiteral("### Diagram kelas dari kode\n\n");
+    if (m_diffLoading) {
+        markdown += QStringLiteral("_Membaca kode di folder kerja…_\n\n");
+    } else if (!m_diffError.isEmpty()) {
+        markdown += QStringLiteral("_Diagram kelas tidak bisa dibuat karena perubahan kode tidak terbaca "
+                                   "(lihat tab Perubahan kode)._\n\n");
+    } else if (m_classDiagram.code.isEmpty()) {
+        markdown += QStringLiteral("_Perubahan ini tidak memuat tipe C#. Diagram kelas otomatis saat ini "
+                                   "dibuat dari kode C#._\n\n");
+    } else {
+        markdown += QStringLiteral("```mermaid\n%1\n```\n\n").arg(m_classDiagram.code);
+        markdown += QStringLiteral("_Hijau = tipe baru · kuning = tipe berubah · krem = tidak berubah · abu-abu = "
+                                   "tipe terkait di luar perubahan._\n\n");
+        if (m_classDiagram.omittedTypes > 0) {
+            markdown += QStringLiteral("_%1 tipe lain tidak digambar supaya diagram tetap terbaca._\n\n")
+                            .arg(m_classDiagram.omittedTypes);
+        }
+    }
+
+    markdown += QStringLiteral("### Diagram dari agent %1\n\n").arg(m_task.stage);
+    const QStringList diagrams = agentDiagrams();
+    if (diagrams.isEmpty()) {
+        markdown += QStringLiteral("_Belum ada. Agent %1 diminta menyertakan diagram Mermaid (classDiagram, "
+                                   "sequenceDiagram); hasilnya tampil di sini setelah agent dijalankan._\n")
+                        .arg(m_task.stage);
+    }
+    for (const QString &code : diagrams) {
+        markdown += QStringLiteral("```mermaid\n%1\n```\n\n").arg(code);
+    }
+    m_umlView->showMarkdown(markdown);
+}
+
+// Blok ```mermaid dari hasil sukses terakhir agent di stage ini
+QStringList ResponseDrawer::agentDiagrams() const {
+    static const QRegularExpression fence(
+        QStringLiteral(R"(^[ \t]*```[ \t]*mermaid[^\n]*\n(.*?)^[ \t]*```[ \t]*$)"),
+        QRegularExpression::MultilineOption | QRegularExpression::DotMatchesEverythingOption);
+    for (auto run = m_task.runs.crbegin(); run != m_task.runs.crend(); ++run) {
+        if (run->stage != m_task.stage || !run->result.success) {
+            continue;
+        }
+        QStringList diagrams;
+        QRegularExpressionMatchIterator it = fence.globalMatch(run->result.message);
+        while (it.hasNext()) {
+            diagrams.append(it.next().captured(1).trimmed());
+        }
+        return diagrams;
+    }
+    return {};
 }
 
 void ResponseDrawer::startLive() {

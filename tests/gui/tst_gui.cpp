@@ -38,6 +38,7 @@
 #include <QTreeWidget>
 #include <QtTest>
 
+#include <algorithm>
 #include <functional>
 #include <memory>
 
@@ -125,6 +126,7 @@ private slots:
     void markdownViewRendersMermaid();
     void architectDrawerShowsCodeChanges();
     void maintainabilityViewShowsCSharpMembers();
+    void umlTabShowsClassAndAgentDiagrams();
 
 private:
     // Dialog modal membuka event loop sendiri di dalam handler klik; timer ini jalan di loop itu
@@ -815,6 +817,59 @@ void TestGui::maintainabilityViewShowsCSharpMembers() {
     QVERIFY(!tree->isColumnHidden(6));
     QVERIFY(place->parent()->isExpanded());
     QVERIFY(view.findChild<QLabel *>(QStringLiteral("miLegend"))->text().contains(QStringLiteral("C#:")));
+}
+
+void TestGui::umlTabShowsClassAndAgentDiagrams() {
+    FakeMermaidRenderer renderer;
+    ResponseDrawer panel(&renderer);
+
+    TaskItem task;
+    task.id = QStringLiteral("u1");
+    task.projectId = QStringLiteral("Demo");
+    task.stage = QStringLiteral("ARCHITECT");
+    task.title = QStringLiteral("Tinjau struktur");
+    task.runs = {StageRun::finished(QStringLiteral("ARCHITECT"), successResult(QStringLiteral(
+        "Temuan.\n\n```mermaid\nsequenceDiagram\n  Kasir->>OrderService: Place\n```\n")))};
+
+    QSignalSpy requested(&panel, &ResponseDrawer::diffRequested);
+    panel.showTask(task, RunState::Idle, QStringLiteral("HARDENER"), {QStringLiteral("CODER")});
+    QCOMPARE(requested.count(), 1);
+
+    auto *tabs = panel.findChild<QTabBar *>(QStringLiteral("drawerTabs"));
+    QVERIFY(tabs);
+    QCOMPARE(tabs->count(), 4);
+    QCOMPARE(tabs->tabText(3), QStringLiteral("UML"));
+    auto *uml = panel.findChild<QTextBrowser *>(QStringLiteral("umlView"));
+    QVERIFY(uml);
+    QVERIFY(uml->toPlainText().contains(QStringLiteral("Membaca kode")));
+    // Diagram dari hasil agent ARCHITECT langsung diminta ke renderer
+    QVERIFY(renderer.requests.contains(QStringLiteral("sequenceDiagram\n  Kasir->>OrderService: Place")));
+
+    FileDiff file;
+    file.path = QStringLiteral("Models/Order.cs");
+    file.status = FileDiff::Status::Added;
+    file.after = CodeMetrics::measure(file.path, QStringLiteral(
+        "namespace Shop;\npublic class Order\n{\n    public int Id { get; set; }\n}\n"));
+    WorkspaceDiff diff;
+    diff.files = {file};
+    panel.showDiff(QStringLiteral("u1"), diff);
+
+    QCOMPARE(tabs->tabText(3), QStringLiteral("UML · 1"));
+    QVERIFY(uml->toPlainText().contains(QStringLiteral("Hijau = tipe baru")));
+    const auto classDiagram = std::find_if(renderer.requests.cbegin(), renderer.requests.cend(), [](const QString &code) {
+        return code.startsWith(QStringLiteral("classDiagram")) && code.contains(QStringLiteral("class Order {"))
+               && code.contains(QStringLiteral("+int Id"));
+    });
+    QVERIFY(classDiagram != renderer.requests.cend());
+
+    // Tanpa tipe C#: penjelasan, bukan diagram kosong
+    WorkspaceDiff text;
+    FileDiff notes;
+    notes.path = QStringLiteral("README.md");
+    text.files = {notes};
+    panel.showDiff(QStringLiteral("u1"), text);
+    QCOMPARE(tabs->tabText(3), QStringLiteral("UML"));
+    QVERIFY(uml->toPlainText().contains(QStringLiteral("tidak memuat tipe C#")));
 }
 
 int main(int argc, char *argv[]) {

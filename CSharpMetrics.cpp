@@ -74,11 +74,20 @@ struct TypeContext {
     QString namespaceName;
     QString name;                      // di dalam namespace, termasuk tipe induk
     QString simpleName;
+    bool isInterface = false;          // anggota tanpa modifier akses = public (bukan private)
     QSet<QString> excluded;            // bukan kopling: tipe ini, induk, bersarang, parameter generic
     QSet<QString> memberNames;         // "Items.Count" dengan Items milik tipe ini bukan akses tipe
     QSet<QString> coupled;             // atribut dan base list
     QList<TokenRange> nestedSpans;     // tipe bersarang punya metriknya sendiri
+    QList<TypeMember> outline;         // semua anggota untuk diagram kelas
 };
+
+const QSet<QString> &memberModifiers() {
+    static const QSet<QString> words = {"public", "private", "protected", "internal", "static", "readonly", "const",
+                                        "volatile", "virtual", "override", "abstract", "sealed", "extern", "unsafe",
+                                        "new", "partial", "async", "required", "file", "ref", "fixed", "event"};
+    return words;
+}
 
 struct PendingMember {
     MemberMetrics metrics;
@@ -113,6 +122,9 @@ private:
 
     QSet<QString> attributeNames(qsizetype open, qsizetype close) const;
     QString parameterTypes(qsizetype open, qsizetype close) const;
+    QString joinTokens(qsizetype from, qsizetype to) const;
+    void addOutline(TypeContext &type, qsizetype header, qsizetype terminator, qsizetype nameIndex,
+                    qsizetype parameters, qsizetype indexerWord, qsizetype end) const;
     int complexity(TokenRange range) const;
     bool isTernary(qsizetype question, qsizetype end) const;
     int switchArms(qsizetype open, qsizetype end) const;
@@ -288,6 +300,7 @@ qsizetype Parser::parseType(qsizetype start, qsizetype keyword, qsizetype end, c
     type.simpleName = at(k).text;
     type.namespaceName = outer ? outer->namespaceName : ns;
     type.name = outer ? outer->name + QLatin1Char('.') + type.simpleName : type.simpleName;
+    type.isInterface = metrics.kind == u"interface";
     if (outer) {
         type.excluded = outer->excluded;
         outer->excluded.insert(type.simpleName);
@@ -300,18 +313,58 @@ qsizetype Parser::parseType(qsizetype start, qsizetype keyword, qsizetype end, c
         for (qsizetype g = k + 1; g < (close > 0 ? close - 1 : k); ++g) {
             if (at(g).kind == Kind::Word && !at(g).isWord(u"in") && !at(g).isWord(u"out")) {
                 type.excluded.insert(at(g).text);
+                metrics.genericParameters.append(at(g).text);
             }
         }
         k = close > 0 ? close : k + 1;
     }
     if (at(k).is(u"(")) {
-        k = matching(k, end) + 1;   // primary constructor / record posisional
+        // Primary constructor; di record posisional tiap parameternya adalah property publik
+        const qsizetype close = matching(k, end);
+        if (metrics.kind.startsWith(u"record")) {
+            qsizetype partStart = k + 1;
+            int depth = 0;
+            for (qsizetype p = k + 1; p <= close; ++p) {
+                const SourceToken &t = m_t.at(p);
+                if (p < close && (t.is(u"(") || t.is(u"[") || t.is(u"<"))) {
+                    ++depth;
+                } else if (p < close && (t.is(u")") || t.is(u"]") || t.is(u">"))) {
+                    --depth;
+                } else if (p == close || (depth == 0 && t.is(u","))) {
+                    qsizetype first = partStart;
+                    while (first < p && at(first).is(u"[")) {
+                        first = matching(first, p) + 1;
+                    }
+                    qsizetype last = p;
+                    for (qsizetype q = first; q < p; ++q) {
+                        if (at(q).is(u"=")) {
+                            last = q;
+                            break;
+                        }
+                    }
+                    if (last - 1 > first && at(last - 1).kind == Kind::Word) {
+                        TypeMember property;
+                        property.kind = TypeMember::Kind::Property;
+                        property.visibility = QLatin1Char('+');
+                        property.name = at(last - 1).text;
+                        property.type = joinTokens(first, last - 1);
+                        type.outline.append(property);
+                    }
+                    partStart = p + 1;
+                }
+            }
+        }
+        k = close + 1;
     }
     for (qsizetype a = start; a < keyword; ++a) {
         if (at(a).is(u"[")) {
             const qsizetype close = matching(a, keyword);
             type.coupled += attributeNames(a, close);
             a = close;
+        } else if (at(a).isWord(u"abstract")) {
+            metrics.isAbstract = true;
+        } else if (at(a).isWord(u"static")) {
+            metrics.isStatic = true;
         }
     }
 
@@ -338,6 +391,8 @@ qsizetype Parser::parseType(qsizetype start, qsizetype keyword, qsizetype end, c
                 const bool classKind = metrics.kind == u"class" || metrics.kind == u"record";
                 if (first && classKind && !looksLikeInterface(last)) {
                     metrics.baseClass = last;
+                } else {
+                    metrics.interfaces.append(last);
                 }
             }
             first = false;
@@ -360,8 +415,31 @@ qsizetype Parser::parseType(qsizetype start, qsizetype keyword, qsizetype end, c
         const qsizetype close = matching(k, end);
         if (metrics.kind != u"enum") {
             members = parseMembers(k + 1, close, type);
+        } else {
+            // Nilai enum: nama di awal tiap entri; atribut dan "= nilai" dilewati
+            bool expectName = true;
+            int depth = 0;
+            for (qsizetype e = k + 1; e < close; ++e) {
+                const SourceToken &t = m_t.at(e);
+                if (t.is(u"(") || t.is(u"[") || t.is(u"{")) {
+                    ++depth;
+                } else if (t.is(u")") || t.is(u"]") || t.is(u"}")) {
+                    --depth;
+                } else if (depth == 0 && t.is(u",")) {
+                    expectName = true;
+                } else if (depth == 0 && expectName && t.kind == Kind::Word) {
+                    TypeMember value;
+                    value.kind = TypeMember::Kind::EnumValue;
+                    value.name = t.text;
+                    metrics.outline.append(value);
+                    expectName = false;
+                }
+            }
         }
         typeEnd = at(close + 1).is(u";") ? close + 1 : close;
+    }
+    if (metrics.kind != u"enum") {
+        metrics.outline = type.outline;   // juga record posisional tanpa badan
     }
 
     // Token milik tipe ini sendiri, tanpa tipe bersarang
@@ -526,6 +604,8 @@ QList<PendingMember> Parser::parseMembers(qsizetype begin, qsizetype end, TypeCo
         }
 
         PendingMember member;
+        qsizetype nameIndex = -1;
+        bool inOutline = true;   // operator dan destructor tidak ikut diagram kelas
         if (parameters >= 0) {
             const qsizetype close = matching(parameters, end);
             const QString list = parameterTypes(parameters, close);
@@ -535,6 +615,7 @@ QList<PendingMember> Parser::parseMembers(qsizetype begin, qsizetype end, TypeCo
                     symbol += m_t.at(k).text;
                 }
                 member.metrics.name = QStringLiteral("operator %1(%2)").arg(symbol, list);
+                inOutline = false;
             } else {
                 qsizetype name = parameters - 1;
                 if (at(name).is(u">")) {
@@ -550,11 +631,13 @@ QList<PendingMember> Parser::parseMembers(qsizetype begin, qsizetype end, TypeCo
                     }
                     --name;
                 }
+                nameIndex = name;
                 const QString base = at(name).text;
                 type.memberNames.insert(base);
                 QString prefix;
                 if (at(name - 1).is(u"~")) {
                     prefix = QStringLiteral("~");
+                    inOutline = false;
                 } else if (isStatic && base == type.simpleName) {
                     prefix = QStringLiteral("static ");
                 }
@@ -563,14 +646,19 @@ QList<PendingMember> Parser::parseMembers(qsizetype begin, qsizetype end, TypeCo
         } else if (indexerWord >= 0) {
             const qsizetype open = indexerWord + 1;
             member.metrics.name = QStringLiteral("this[%1]").arg(parameterTypes(open, matching(open, end)));
+            nameIndex = indexerWord;
         } else {
             for (qsizetype k = terminator - 1; k >= i; --k) {
                 if (m_t.at(k).kind == Kind::Word && !reservedWords().contains(m_t.at(k).text)) {
                     member.metrics.name = m_t.at(k).text;
+                    nameIndex = k;
                     break;
                 }
             }
             type.memberNames.insert(member.metrics.name);
+        }
+        if (inOutline && nameIndex >= 0) {
+            addOutline(type, i, terminator, nameIndex, parameters, indexerWord, end);
         }
 
         if (hasCode) {
@@ -588,6 +676,97 @@ QList<PendingMember> Parser::parseMembers(qsizetype begin, qsizetype end, TypeCo
         i = memberEnd + 1;
     }
     return members;
+}
+
+// Teks tipe dari token: "List<Order>", "Dictionary<string, int>", "int?", "string[]",
+// "(bool Ok, string? Error)"
+QString Parser::joinTokens(qsizetype from, qsizetype to) const {
+    QString text;
+    for (qsizetype k = from; k < to; ++k) {
+        const SourceToken &t = m_t.at(k);
+        const SourceToken &previous = at(k - 1);
+        if (k > from && t.kind == Kind::Word
+            && (previous.kind == Kind::Word || previous.is(u"?") || previous.is(u"]") || previous.is(u">"))) {
+            text += QLatin1Char(' ');
+        }
+        text += t.text;
+        if (t.is(u",")) {
+            text += QLatin1Char(' ');
+        }
+    }
+    return text;
+}
+
+void Parser::addOutline(TypeContext &type, qsizetype header, qsizetype terminator, qsizetype nameIndex,
+                        qsizetype parameters, qsizetype indexerWord, qsizetype end) const {
+    TypeMember member;
+    QSet<QString> modifiers;
+    qsizetype typeStart = header;
+    while (typeStart < terminator && m_t.at(typeStart).kind == Kind::Word
+           && memberModifiers().contains(m_t.at(typeStart).text)) {
+        modifiers.insert(m_t.at(typeStart).text);
+        ++typeStart;
+    }
+    if (modifiers.contains(QStringLiteral("public"))) {
+        member.visibility = QLatin1Char('+');
+    } else if (modifiers.contains(QStringLiteral("protected"))) {
+        member.visibility = QLatin1Char('#');
+    } else if (modifiers.contains(QStringLiteral("internal"))) {
+        member.visibility = QLatin1Char('~');
+    } else if (modifiers.contains(QStringLiteral("private"))) {
+        member.visibility = QLatin1Char('-');
+    } else {
+        member.visibility = QLatin1Char(type.isInterface ? '+' : '-');
+    }
+    member.isStatic = modifiers.contains(QStringLiteral("static")) || modifiers.contains(QStringLiteral("const"));
+    member.isAbstract = modifiers.contains(QStringLiteral("abstract"));
+
+    if (indexerWord >= 0) {
+        member.kind = TypeMember::Kind::Property;
+        member.name = QStringLiteral("this");
+        member.type = joinTokens(typeStart, indexerWord);
+        member.parameters = parameterTypes(indexerWord + 1, matching(indexerWord + 1, end));
+        type.outline.append(member);
+        return;
+    }
+    if (parameters >= 0) {
+        // "void IDisposable.Dispose()": nama interface bukan bagian tipe kembalian
+        qsizetype nameStart = nameIndex;
+        while (at(nameStart - 1).is(u".") && at(nameStart - 2).kind == Kind::Word) {
+            nameStart -= 2;
+        }
+        member.name = m_t.at(nameIndex).text;
+        member.type = joinTokens(typeStart, nameStart);
+        member.parameters = parameterTypes(parameters, matching(parameters, end));
+        member.kind = member.type.isEmpty() && member.name == type.simpleName ? TypeMember::Kind::Constructor
+                                                                             : TypeMember::Kind::Method;
+        type.outline.append(member);
+        return;
+    }
+
+    const SourceToken &ending = m_t.at(terminator);
+    member.kind = modifiers.contains(QStringLiteral("event")) ? TypeMember::Kind::Event
+                  : (ending.is(u"{") || ending.is(u"=>"))     ? TypeMember::Kind::Property
+                                                               : TypeMember::Kind::Field;
+    // Satu deklarasi bisa memuat beberapa field: "int a, b;"
+    QList<qsizetype> names;
+    int depth = 0;
+    for (qsizetype k = typeStart; k < terminator; ++k) {
+        const SourceToken &t = m_t.at(k);
+        if (t.is(u"(") || t.is(u"[") || t.is(u"<")) {
+            ++depth;
+        } else if (t.is(u")") || t.is(u"]") || t.is(u">")) {
+            --depth;
+        } else if (depth == 0 && t.is(u",") && at(k - 1).kind == Kind::Word) {
+            names.append(k - 1);
+        }
+    }
+    names.append(nameIndex);
+    member.type = joinTokens(typeStart, names.first());
+    for (qsizetype index : std::as_const(names)) {
+        member.name = m_t.at(index).text;
+        type.outline.append(member);
+    }
 }
 
 QSet<QString> Parser::attributeNames(qsizetype open, qsizetype close) const {
@@ -649,16 +828,8 @@ QString Parser::parameterTypes(qsizetype open, qsizetype close) const {
         if (stop - 1 > first && m_t.at(current.at(stop - 1)).kind == Kind::Word) {
             --stop;   // nama parameter
         }
-        QString text;
-        for (qsizetype j = first; j < stop; ++j) {
-            const SourceToken &t = m_t.at(current.at(j));
-            text += t.text;
-            if (t.is(u",")) {
-                text += QLatin1Char(' ');
-            }
-        }
-        if (!text.isEmpty()) {
-            types.append(text);
+        if (first < stop) {
+            types.append(joinTokens(current.at(first), current.at(stop - 1) + 1));
         }
         current.clear();
     };
@@ -859,7 +1030,7 @@ QList<TypeMetrics> CSharpMetrics::analyze(const QList<SourceToken> &tokens) {
 
 QHash<QString, QString> CSharpMetrics::declaredBases(const QString &source) {
     static const QRegularExpression declaration(QStringLiteral(
-        R"(\b(class|interface|struct|record(?:\s+(?:class|struct))?)\s+(@?[A-Za-z_]\w*)\s*)"
+        R"(\b(class|interface|struct|enum|record(?:\s+(?:class|struct))?)\s+(@?[A-Za-z_]\w*)\s*)"
         R"((?:<[^<>;{}]*(?:<[^<>;{}]*>[^<>;{}]*)*>\s*)?(?:\([^)]*\)\s*)?(?::\s*([A-Za-z_][\w.]*))?)"));
     QHash<QString, QString> bases;
     QRegularExpressionMatchIterator it = declaration.globalMatch(source);
@@ -867,6 +1038,9 @@ QHash<QString, QString> CSharpMetrics::declaredBases(const QString &source) {
         const QRegularExpressionMatch match = it.next();
         const QString kind = match.captured(1);
         const QString name = match.captured(2);
+        if (reservedWords().contains(name) || name == u"where") {
+            continue;   // "where T : struct\n where U : ..." bukan deklarasi
+        }
         QString base = match.captured(3).section(QLatin1Char('.'), -1);
         const bool classKind = kind == u"class" || (kind.startsWith(u"record") && !kind.endsWith(u"struct"));
         if (!classKind || looksLikeInterface(base)) {

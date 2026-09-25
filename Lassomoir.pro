@@ -12,6 +12,7 @@ win32: RC_ICONS = Resources/app.ico
 SOURCES += \
     ClaudeCli.cpp \
     CSharpMetrics.cpp \
+    ClassDiagram.cpp \
     ClaudeCodeRuntime.cpp \
     CodeMetrics.cpp \
     ConsolePanelWidget.cpp \
@@ -48,6 +49,7 @@ HEADERS += \
     AgentTypes.h \
     ClaudeCli.h \
     CSharpMetrics.h \
+    ClassDiagram.h \
     ClaudeCodeRuntime.h \
     CodeMetrics.h \
     ConsolePanelWidget.h \

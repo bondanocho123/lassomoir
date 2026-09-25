@@ -14,6 +14,7 @@ SOURCES += \
     tst_gui.cpp \
     ../../ClaudeCli.cpp \
     ../../CSharpMetrics.cpp \
+    ../../ClassDiagram.cpp \
     ../../ClaudeCodeRuntime.cpp \
     ../../CodeMetrics.cpp \
     ../../ConsolePanelWidget.cpp \
@@ -49,6 +50,7 @@ HEADERS += \
     ../../AgentTypes.h \
     ../../ClaudeCli.h \
     ../../CSharpMetrics.h \
+    ../../ClassDiagram.h \
     ../../ClaudeCodeRuntime.h \
     ../../CodeMetrics.h \
     ../../ConsolePanelWidget.h \

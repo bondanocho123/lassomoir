@@ -1,3 +1,4 @@
+#include "ClassDiagram.h"
 #include "ClaudeCli.h"
 #include "ClaudeCodeRuntime.h"
 #include "CodeMetrics.h"
@@ -337,6 +338,11 @@ private slots:
     void csharpMetricsHandlesStringsAndNullable();
     void csharpMetricsResolvesInheritance();
     void gitDiffMeasuresCSharpTypes();
+
+    // Diagram kelas UML (Mermaid) dari tipe C# yang berubah
+    void csharpMetricsRecordsOutline();
+    void classDiagramDrawsChangedTypes();
+    void classDiagramLimitsSize();
 
     // Claude Code sungguhan; hanya jalan bila LASSOMOIR_REAL_CLAUDE=1 (memakai token)
     void realClaudeRunsCoderTask();
@@ -1892,6 +1898,216 @@ void TestSwarm::gitDiffMeasuresCSharpTypes() {
     QCOMPARE(findMember(*after, QStringLiteral("Place(int)"))->complexity, 1 + 3);
     QVERIFY(!findMember(*before, QStringLiteral("Cancel(Order)")));
     QCOMPARE(findMember(*after, QStringLiteral("Cancel(Order)"))->coupling, 1);
+}
+
+namespace {
+
+// "method +abstract Place(Customer, int) : Order"
+QString outlineEntry(const TypeMember &member) {
+    static const QStringList kinds = {"field", "property", "event", "ctor", "method", "value"};
+    QString text = kinds.at(int(member.kind)) + QLatin1Char(' ');
+    if (!member.visibility.isNull()) {
+        text += member.visibility;
+    }
+    if (member.isStatic) {
+        text += QStringLiteral("static ");
+    }
+    if (member.isAbstract) {
+        text += QStringLiteral("abstract ");
+    }
+    text += member.name;
+    if (member.kind == TypeMember::Kind::Method || member.kind == TypeMember::Kind::Constructor
+        || member.name == QLatin1String("this")) {
+        text += QStringLiteral("(%1)").arg(member.parameters);
+    }
+    if (!member.type.isEmpty()) {
+        text += QStringLiteral(" : %1").arg(member.type);
+    }
+    return text;
+}
+
+QStringList outlineOf(const TypeMetrics &type) {
+    QStringList entries;
+    for (const TypeMember &member : type.outline) {
+        entries.append(outlineEntry(member));
+    }
+    return entries;
+}
+
+}
+
+void TestSwarm::csharpMetricsRecordsOutline() {
+    const QString source = QStringLiteral(R"cs(namespace Shop;
+
+public abstract class OrderService : ServiceBase, IOrderService, IDisposable
+{
+    private readonly IRepository<Order> _repository;
+    public const int MaxItems = 100;
+    private int _a, _b;
+    public event EventHandler Changed;
+    protected internal decimal Total { get; private set; }
+    public string this[int index] => index.ToString();
+
+    public OrderService(IRepository<Order> repository) { _repository = repository; }
+    static OrderService() { }
+    public abstract Order Place(Customer customer, int quantity);
+    public static List<Order> Filter(IEnumerable<Order> orders) => orders.ToList();
+    void IDisposable.Dispose() { }
+    ~OrderService() { }
+    public static Money operator +(Money a, Money b) => a;
+}
+
+public record Receipt(Guid Id, [property: Required] decimal Amount = 0);
+
+public enum OrderStatus { New = 1, [Description("x")] Paid, Shipped }
+
+public interface IRepository<T> where T : class
+{
+    void Save(T item);
+}
+)cs");
+    const QList<TypeMetrics> types = CodeMetrics::measure(QStringLiteral("OrderService.cs"), source).types;
+
+    // Semua anggota untuk diagram kelas, termasuk field dan tanpa-badan; operator dan destructor tidak
+    const TypeMetrics *service = findType(types, QStringLiteral("OrderService"));
+    QVERIFY(service);
+    QVERIFY(service->isAbstract);
+    QCOMPARE(service->baseClass, QStringLiteral("ServiceBase"));
+    QCOMPARE(service->interfaces, QStringList({"IOrderService", "IDisposable"}));
+    QCOMPARE(outlineOf(*service), QStringList({
+        "field -_repository : IRepository<Order>",
+        "field +static MaxItems : int",
+        "field -_a : int",
+        "field -_b : int",
+        "event +Changed : EventHandler",
+        "property #Total : decimal",
+        "property +this(int) : string",
+        "ctor +OrderService(IRepository<Order>)",
+        "ctor -static OrderService()",
+        "method +abstract Place(Customer, int) : Order",
+        "method +static Filter(IEnumerable<Order>) : List<Order>",
+        "method -Dispose() : void",
+    }));
+
+    // Parameter record posisional = property publik
+    QCOMPARE(outlineOf(*findType(types, QStringLiteral("Receipt"))),
+             QStringList({"property +Id : Guid", "property +Amount : decimal"}));
+    QCOMPARE(outlineOf(*findType(types, QStringLiteral("OrderStatus"))),
+             QStringList({"value New", "value Paid", "value Shipped"}));
+
+    // Anggota interface tanpa modifier = public
+    const TypeMetrics *repository = findType(types, QStringLiteral("IRepository"));
+    QCOMPARE(repository->genericParameters, QStringList({"T"}));
+    QCOMPARE(outlineOf(*repository), QStringList({"method +Save(T) : void"}));
+}
+
+void TestSwarm::classDiagramDrawsChangedTypes() {
+    const QString servicePath = QStringLiteral("Services/OrderService.cs");
+    FileDiff service;
+    service.path = servicePath;
+    service.before = CodeMetrics::measure(servicePath, QStringLiteral(
+        "namespace Shop;\n"
+        "public class OrderService : ServiceBase, IOrderService\n"
+        "{\n"
+        "    private readonly IRepository<Order> _repository;\n"
+        "    public Order Place(Customer customer) { return new Order(customer); }\n"
+        "}\n"
+        "public class Unchanged { public int Value; }\n"));
+    service.after = CodeMetrics::measure(servicePath, QStringLiteral(
+        "namespace Shop;\n"
+        "public class OrderService : ServiceBase, IOrderService\n"
+        "{\n"
+        "    private readonly IRepository<Order> _repository;\n"
+        "    public Order Place(Customer customer, int quantity) { if (quantity > 0) { return new Order(customer); } return null; }\n"
+        "    public static string Describe(Order order) => order.Status.ToString();\n"
+        "\n"
+        "    public class Snapshot { public DateTime TakenAt { get; init; } }\n"
+        "}\n"
+        "public class Unchanged { public int Value; }\n"));
+
+    const QString orderPath = QStringLiteral("Models/Order.cs");
+    FileDiff order;
+    order.path = orderPath;
+    order.status = FileDiff::Status::Added;
+    order.after = CodeMetrics::measure(orderPath, QStringLiteral(
+        "namespace Shop;\n"
+        "public class Order : Entity\n"
+        "{\n"
+        "    public OrderStatus Status { get; private set; }\n"
+        "    public List<OrderLine> Lines { get; } = new();\n"
+        "    public Dictionary<string, List<OrderLine>> ByCode { get; } = new();\n"
+        "    public void Add(OrderLine line) { Lines.Add(line); }\n"
+        "}\n"
+        "public enum OrderStatus { New, Paid }\n"));
+
+    WorkspaceDiff diff;
+    diff.files = {order, service};
+    // Tipe yang dideklarasikan di project (hasil pindai seluruh file .cs)
+    diff.csharpTypes = {{"OrderService", "ServiceBase"}, {"ServiceBase", "ControllerBase"}, {"IOrderService", ""},
+                        {"Customer", ""}, {"OrderLine", ""}, {"Order", "Entity"}, {"OrderStatus", ""}};
+
+    const ClassDiagram diagram = ClassDiagram::fromDiff(diff);
+    const QString code = diagram.code;
+    QVERIFY(code.startsWith(QStringLiteral("classDiagram\n")));
+    QCOMPARE(diagram.drawnTypes, 5);
+    QCOMPARE(diagram.omittedTypes, 0);
+
+    // Kelas yang berubah digambar lengkap; generic memakai ~T~, static ditandai $
+    QVERIFY(code.contains(QStringLiteral("    class OrderService {\n")));
+    QVERIFY(code.contains(QStringLiteral("        -IRepository~Order~ _repository\n")));
+    QVERIFY(code.contains(QStringLiteral("        +Place(Customer, int) Order\n")));
+    QVERIFY(code.contains(QStringLiteral("        +Describe(Order)$ string\n")));
+    QVERIFY(code.contains(QStringLiteral("    class OrderService_Snapshot[\"OrderService.Snapshot\"] {\n")));
+    QVERIFY(code.contains(QStringLiteral("        +List~OrderLine~ Lines\n")));
+    // Generic bersarang: hanya tingkat terluar memakai ~ (Mermaid salah membaca ~ bersarang)
+    QVERIFY(code.contains(QStringLiteral("        +Dictionary~string, List‹OrderLine›~ ByCode\n")));
+    QVERIFY(code.contains(QStringLiteral("    class OrderStatus {\n        <<enumeration>>\n        New\n        Paid\n")));
+
+    // Relasi: pewarisan (termasuk kelas dasar di luar project), implementasi, asosiasi, dependensi
+    QVERIFY(code.contains(QStringLiteral("    ServiceBase <|-- OrderService\n")));
+    QVERIFY(code.contains(QStringLiteral("    IOrderService <|.. OrderService\n")));
+    QVERIFY(code.contains(QStringLiteral("    Entity <|-- Order\n")));
+    QVERIFY(code.contains(QStringLiteral("    Order --> OrderStatus : Status\n")));
+    QVERIFY(code.contains(QStringLiteral("    Order --> \"*\" OrderLine : Lines\n")));
+    QVERIFY(code.contains(QStringLiteral("    OrderService ..> Customer\n")));
+    QVERIFY(code.contains(QStringLiteral("    OrderService ..> Order\n")));
+    QVERIFY(!code.contains(QStringLiteral("Order ..> OrderLine")));   // sudah ada asosiasinya
+    QVERIFY(!code.contains(QStringLiteral("IRepository <")));        // bukan tipe project
+    QVERIFY(code.contains(QStringLiteral("    class IOrderService {\n        <<interface>>\n    }\n")));
+
+    // Warna: baru hijau, berubah kuning, tidak berubah tanpa gaya, konteks abu-abu
+    QVERIFY(code.contains(QStringLiteral("    style Order fill:#e6ffec")));
+    QVERIFY(code.contains(QStringLiteral("    style OrderService_Snapshot fill:#e6ffec")));
+    QVERIFY(code.contains(QStringLiteral("    style OrderService fill:#fbeccf")));
+    QVERIFY(!code.contains(QStringLiteral("style Unchanged ")));
+    QVERIFY(code.contains(QStringLiteral("    style ServiceBase fill:#f4f1ec")));
+
+    // Tanpa tipe C#, tidak ada diagram
+    WorkspaceDiff python;
+    FileDiff script;
+    script.path = QStringLiteral("hitung.py");
+    script.after = CodeMetrics::measure(script.path, QStringLiteral("def f(x):\n    return x\n"));
+    python.files = {script};
+    QVERIFY(ClassDiagram::fromDiff(python).code.isEmpty());
+}
+
+void TestSwarm::classDiagramLimitsSize() {
+    QString source = QStringLiteral("namespace Big;\n");
+    for (int i = 0; i < 15; ++i) {
+        source += QStringLiteral("public class Part%1 { public int Value%1; }\n").arg(i);
+    }
+    FileDiff file;
+    file.path = QStringLiteral("Parts.cs");
+    file.status = FileDiff::Status::Added;
+    file.after = CodeMetrics::measure(file.path, source);
+    WorkspaceDiff diff;
+    diff.files = {file};
+
+    const ClassDiagram diagram = ClassDiagram::fromDiff(diff);
+    QCOMPARE(diagram.drawnTypes, 12);
+    QCOMPARE(diagram.omittedTypes, 3);
+    QVERIFY(diagram.code.contains(QStringLiteral("class Part11 {")));
+    QVERIFY(!diagram.code.contains(QStringLiteral("class Part12 {")));
 }
 
 void TestSwarm::realEdgeRendersMermaid() {

@@ -4,6 +4,7 @@
 #pragma once
 
 #include "AgentTypes.h"
+#include "ClassDiagram.h"
 #include "TaskItem.h"
 
 #include <QList>
@@ -25,7 +26,7 @@ class QTabBar;
 
 // Panel hasil agent untuk satu task: pemilih run (termasuk "Live" saat berjalan), metrik,
 // dokumen Markdown/Mermaid, dan panel keputusan saat task menunggu review. Di stage peninjauan
-// kode ada tab tambahan: perubahan kode folder kerja dan Maintainability Index-nya.
+// kode ada tab tambahan: perubahan kode folder kerja, Maintainability Index-nya, dan diagram UML.
 // Pasif: data datang dari MainWindow, keputusan dan permintaan diff dikirim balik lewat sinyal.
 class ResponseDrawer : public QWidget {
     Q_OBJECT
@@ -66,6 +67,9 @@ signals:
 
 private:
     void requestDiff();
+    // Tab UML: diagram kelas dari kode + diagram Mermaid dari hasil agent stage ini
+    void refreshUml();
+    QStringList agentDiagrams() const;
     void rebuildRunSelector(int selected);   // selected: indeks run, atau kLive
     void showSelected();
     void updateReviewPanel();
@@ -78,17 +82,21 @@ private:
     QString m_nextStage;
     QString m_liveMarkdown;
     bool m_expanded = false;
+    bool m_diffLoading = false;
+    QString m_diffError;
+    ClassDiagram m_classDiagram;
 
     QLabel *m_title;
     QLabel *m_status;
     QPushButton *m_expand;
     QTabBar *m_tabs;           // hanya tampil di stage peninjauan kode
-    QStackedWidget *m_pages;   // [hasil agent | perubahan kode], mengikuti m_tabs
+    QStackedWidget *m_pages;   // [hasil agent | perubahan kode | maintainability | UML], mengikuti m_tabs
     QComboBox *m_runSelector;
     QLabel *m_metrics;
     MarkdownView *m_view;
     DiffView *m_diffView;
     MaintainabilityView *m_maintainabilityView;
+    MarkdownView *m_umlView;
     QWidget *m_reviewPanel;
     QPlainTextEdit *m_note;
     QLabel *m_noteHint;

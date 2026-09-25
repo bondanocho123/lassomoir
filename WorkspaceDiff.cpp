@@ -220,12 +220,13 @@ void measureFiles(const QString &git, const QString &directory, const QString &b
 
 // DIT C# butuh kelas dasar dari seluruh project, bukan hanya file yang berubah. File tracked
 // dibaca dari folder kerja (sudah versi sesudah); file baru yang belum di-git add dari hasil ukurnya.
-void resolveCSharpInheritance(const QString &git, const QString &directory, QList<FileDiff> *files) {
+QHash<QString, QString> resolveCSharpInheritance(const QString &git, const QString &directory,
+                                                 QList<FileDiff> *files) {
     const bool anyTypes = std::any_of(files->cbegin(), files->cend(), [](const FileDiff &file) {
         return file.after && !file.after->types.isEmpty();
     });
     if (!anyTypes) {
-        return;
+        return {};
     }
 
     QHash<QString, QString> bases;
@@ -270,6 +271,7 @@ void resolveCSharpInheritance(const QString &git, const QString &directory, QLis
             CSharpMetrics::resolveInheritance(&file.after->types, bases);
         }
     }
+    return bases;
 }
 
 std::optional<int> weightedMaintainability(const QList<FileDiff> &files, std::optional<CodeMetrics> FileDiff::*side) {
@@ -464,7 +466,7 @@ WorkspaceDiff GitDiff::collect(const QString &workingDirectory) {
     }
 
     measureFiles(git, workingDirectory, result.baseCommit.isEmpty() ? QString() : base, &result.files);
-    resolveCSharpInheritance(git, workingDirectory, &result.files);
+    result.csharpTypes = resolveCSharpInheritance(git, workingDirectory, &result.files);
 
     std::sort(result.files.begin(), result.files.end(), [](const FileDiff &a, const FileDiff &b) {
         return QString::compare(a.path, b.path, Qt::CaseInsensitive) < 0;

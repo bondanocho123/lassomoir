@@ -12,6 +12,7 @@ SOURCES += \
     tst_swarm.cpp \
     ../ClaudeCli.cpp \
     ../CSharpMetrics.cpp \
+    ../ClassDiagram.cpp \
     ../ClaudeCodeRuntime.cpp \
     ../CodeMetrics.cpp \
     ../EdgeMermaidRenderer.cpp \
@@ -37,6 +38,7 @@ HEADERS += \
     ../AgentTypes.h \
     ../ClaudeCli.h \
     ../CSharpMetrics.h \
+    ../ClassDiagram.h \
     ../ClaudeCodeRuntime.h \
     ../CodeMetrics.h \
     ../EdgeMermaidRenderer.h \

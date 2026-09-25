@@ -5,6 +5,7 @@
 
 #include "CodeMetrics.h"
 
+#include <QHash>
 #include <QList>
 #include <QString>
 
@@ -45,6 +46,8 @@ struct WorkspaceDiff {
     QString baseCommit;        // hash pendek HEAD; kosong bila repository belum punya commit
     QList<FileDiff> files;     // urut path
     int omittedUntracked = 0;  // file baru di luar batas daftar
+    // C#: nama tipe yang dideklarasikan di project → kelas dasarnya (DIT, tipe konteks diagram kelas)
+    QHash<QString, QString> csharpTypes;
 
     int added() const;
     int removed() const;
