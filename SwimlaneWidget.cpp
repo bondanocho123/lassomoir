@@ -5,6 +5,7 @@
 #include "ui_SwimlaneWidget.h"
 
 #include <QDir>
+#include <QIcon>
 #include <QHBoxLayout>
 
 SwimlaneWidget::SwimlaneWidget(const QString &projectId, const StageCatalog &catalog, QWidget *parent)
@@ -16,6 +17,11 @@ SwimlaneWidget::SwimlaneWidget(const QString &projectId, const StageCatalog &cat
     if (ui->btnClose) {
         connect(ui->btnClose, &QPushButton::clicked, this, &SwimlaneWidget::onCloseClicked);
     }
+    // Ikon setinggi teks tombol. Font tombol baru berasal dari stylesheet setelah dipolish,
+    // jadi polish dulu supaya yang diukur bukan font default aplikasi
+    ui->btnWorkingDir->ensurePolished();
+    const int iconSide = ui->btnWorkingDir->fontMetrics().height();
+    ui->btnWorkingDir->setIconSize(QSize(iconSide, iconSide));
     connect(ui->btnWorkingDir, &QPushButton::clicked, this, [this]() {
         emit workingDirectoryChangeRequested(m_projectId);
     });
@@ -37,13 +43,15 @@ void SwimlaneWidget::setProjectTitle(const QString &title) {
 
 void SwimlaneWidget::setWorkingDirectory(const QString &path) {
     if (path.isEmpty()) {
-        ui->btnWorkingDir->setText("Pilih folder kerja");
+        ui->btnWorkingDir->setIcon(QIcon(":/icons/folder-add.svg"));
+        ui->btnWorkingDir->setText("Select");
         ui->btnWorkingDir->setToolTip("Folder tempat agent Claude Code bekerja untuk project ini");
         return;
     }
 
     const QString name = QDir(path).dirName();
-    ui->btnWorkingDir->setText(QString("Folder: %1").arg(name.isEmpty() ? path : name));
+    ui->btnWorkingDir->setIcon(QIcon(":/icons/folder.svg"));
+    ui->btnWorkingDir->setText(name.isEmpty() ? path : name);
     ui->btnWorkingDir->setToolTip(QString("Folder kerja agent: %1\nKlik untuk mengganti")
                                       .arg(QDir::toNativeSeparators(path)));
 }

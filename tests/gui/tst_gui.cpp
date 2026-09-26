@@ -113,6 +113,7 @@ private slots:
     void closingProjectStopsItsAgents();
 
     void cardShowsHandCursor();
+    void workingDirButtonShowsIconAndCaption();
     void doubleClickEditsTask();
     void cancelledEditKeepsTask();
 
@@ -243,7 +244,7 @@ void TestGui::runButtonDrivesCardAndConsole() {
     // Folder kerja tersimpan di session.json ditampilkan di header swimlane
     auto *workingDirButton = m_window->findChild<QPushButton *>(QStringLiteral("btnWorkingDir"));
     QVERIFY(workingDirButton);
-    QCOMPARE(workingDirButton->text(), QStringLiteral("Folder: %1").arg(QDir(m_workDir.path()).dirName()));
+    QCOMPARE(workingDirButton->text(), QDir(m_workDir.path()).dirName());
 
     KanbanCardWidget *coder = card(QStringLiteral("t1"));
     QPushButton *button = runButton(QStringLiteral("t1"));
@@ -352,6 +353,26 @@ void TestGui::cardShowsHandCursor() {
     auto *title = coder->findChild<QLabel *>(QStringLiteral("labelTitle"));
     QVERIFY(title);
     QCOMPARE(title->cursor().shape(), Qt::PointingHandCursor);
+}
+
+void TestGui::workingDirButtonShowsIconAndCaption() {
+    SwimlaneWidget lane(QStringLiteral("Icon"), m_catalog);
+    auto *button = lane.findChild<QPushButton *>(QStringLiteral("btnWorkingDir"));
+    QVERIFY(button);
+
+    // Belum ada folder: ajakan memilih. Ikon SVG harus benar-benar ter-render
+    QCOMPARE(button->text(), QStringLiteral("Select"));
+    const QSize side = button->iconSize();
+    QVERIFY(side.isValid() && side.width() > 0);
+    const QImage addIcon = button->icon().pixmap(side).toImage();
+    QVERIFY(!addIcon.isNull());
+
+    // Sudah ada folder: hanya nama foldernya, dengan ikon yang berbeda
+    lane.setWorkingDirectory(m_workDir.path());
+    QCOMPARE(button->text(), QDir(m_workDir.path()).dirName());
+    const QImage folderIcon = button->icon().pixmap(side).toImage();
+    QVERIFY(!folderIcon.isNull());
+    QVERIFY(folderIcon != addIcon);
 }
 
 void TestGui::doubleClickEditsTask() {
