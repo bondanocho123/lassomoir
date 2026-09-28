@@ -22,6 +22,7 @@ SOURCES += \
     ../../DiffView.cpp \
     ../../DocumentText.cpp \
     ../../FileManager.cpp \
+    ../../GitProcess.cpp \
     ../../KanbanCardWidget.cpp \
     ../../KanbanColumnWidget.cpp \
     ../../MaintainabilityView.cpp \
@@ -41,6 +42,7 @@ SOURCES += \
     ../../SwarmCoordinator.cpp \
     ../../SwimlaneWidget.cpp \
     ../../TaskAttachments.cpp \
+    ../../TaskGit.cpp \
     ../../TaskManager.cpp \
     ../../TransitionPolicy.cpp \
     ../../WorkspaceDiff.cpp \
@@ -49,6 +51,7 @@ SOURCES += \
 
 HEADERS += \
     ../FakeAgentRuntime.h \
+    ../GitSandbox.h \
     ../../AgentDefinition.h \
     ../../AgentRuntime.h \
     ../../AgentTypes.h \
@@ -61,6 +64,7 @@ HEADERS += \
     ../../DiffView.h \
     ../../DocumentText.h \
     ../../FileManager.h \
+    ../../GitProcess.h \
     ../../KanbanCardWidget.h \
     ../../KanbanColumnWidget.h \
     ../../MaintainabilityView.h \
@@ -80,6 +84,7 @@ HEADERS += \
     ../../SwarmCoordinator.h \
     ../../SwimlaneWidget.h \
     ../../TaskAttachments.h \
+    ../../TaskGit.h \
     ../../TaskItem.h \
     ../../TaskManager.h \
     ../../TaskMaterials.h \

@@ -1,5 +1,6 @@
 #include "CodeMetrics.h"
 #include "FakeAgentRuntime.h"
+#include "GitSandbox.h"
 #include "KanbanCardWidget.h"
 #include "KanbanColumnWidget.h"
 #include "MaintainabilityView.h"
@@ -31,6 +32,7 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QMimeData>
 #include <QPlainTextEdit>
 #include <QPointer>
@@ -108,6 +110,11 @@ bool writeFile(const QString &path, const QByteArray &content) {
     return file.open(QIODevice::WriteOnly | QIODevice::Truncate) && file.write(content) == content.size();
 }
 
+QByteArray readFile(const QString &path) {
+    QFile file(path);
+    return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+}
+
 QImage solidImage(const QSize &size, const QColor &color) {
     QImage image(size, QImage::Format_RGB32);
     image.fill(color);
@@ -156,6 +163,7 @@ private slots:
     void workingDirButtonShowsIconAndCaption();
     void doubleClickEditsTask();
     void cancelledEditKeepsTask();
+    void deleteTaskFromCardMenu();
 
     // Review gate, drawer, dan viewer
     void specifierReviewApproveFlow();
@@ -167,6 +175,8 @@ private slots:
     void markdownViewRendersMermaid();
     void architectDrawerShowsCodeChanges();
     void coderDrawerShowsCodeChanges();
+    // Alur git: CODER di worktree -> QA (commit + push) -> dikembalikan -> QA lagi -> merge
+    void qaFlowCommitsPushesAndMerges();
     void maintainabilityViewShowsCSharpMembers();
     void umlTabShowsClassAndAgentDiagrams();
 
@@ -536,6 +546,67 @@ void TestGui::cancelledEditKeepsTask() {
     QVERIFY(!consoleText().contains(QStringLiteral("[TASK EDITED]")));
 }
 
+void TestGui::deleteTaskFromCardMenu() {
+    KanbanCardWidget *coder = card(QStringLiteral("t1"));
+    QVERIFY(coder);
+    const QString base = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    const QString attachments = base + QStringLiteral("/projects/Demo/attachments/t1");
+    QVERIFY(QDir().mkpath(attachments));
+    QVERIFY(writeFile(attachments + QStringLiteral("/data.csv"), "a,b\n"));
+
+    // Agent sedang berjalan dan hasilnya terbuka di drawer
+    runButton(QStringLiteral("t1"))->click();
+    QVERIFY(m_runtime.sessions.first()->isRunning());
+    QTest::mouseClick(coder, Qt::LeftButton);
+    QVERIFY(drawer() && !drawer()->isHidden());
+
+    // Klik kanan -> "Hapus task…" -> popup konfirmasi yang ditempel di kartu
+    const auto openConfirm = [this, coder]() -> QFrame * {
+        QContextMenuEvent event(QContextMenuEvent::Mouse, QPoint(10, 10), coder->mapToGlobal(QPoint(10, 10)));
+        QApplication::sendEvent(coder, &event);
+        auto *menu = coder->findChild<QMenu *>(QStringLiteral("cardContextMenu"));
+        auto *remove = menu ? menu->findChild<QAction *>(QStringLiteral("actionDeleteTask")) : nullptr;
+        if (!remove) {
+            return nullptr;
+        }
+        menu->close();
+        remove->trigger();
+        return coder->findChild<QFrame *>(QStringLiteral("deleteConfirmPopup"));
+    };
+
+    QFrame *popup = openConfirm();
+    QVERIFY(popup);
+    const QString question = popup->findChild<QLabel *>(QStringLiteral("deleteConfirmLabel"))->text();
+    QVERIFY(question.contains(QStringLiteral("Hapus task \"Tulis hello\"?")));
+    QVERIFY(question.contains(QStringLiteral("dihentikan")));
+
+    // Batal: tidak ada yang berubah
+    popup->findChild<QPushButton *>(QStringLiteral("btnDeleteConfirmCancel"))->click();
+    QTest::qWait(50);
+    QVERIFY(card(QStringLiteral("t1")));
+    QVERIFY(m_runtime.sessions.first()->isRunning());
+
+    popup = openConfirm();
+    QVERIFY(popup);
+    popup->findChild<QPushButton *>(QStringLiteral("btnDeleteConfirmYes"))->click();
+
+    QTRY_VERIFY(!card(QStringLiteral("t1")));
+    QVERIFY(!m_tasks->task(QStringLiteral("t1")));
+    // Session agent-nya sudah dibuang setelah berhenti; cukup lihat jejaknya di konsol
+    QVERIFY(consoleText().contains(QStringLiteral("[AGENT:CODER] ✗ cancelled")));
+    QVERIFY(consoleText().contains(QStringLiteral("[TASK DELETED] Demo/Tulis hello (CODER)")));
+    QVERIFY(!QFileInfo::exists(attachments));
+    QTRY_VERIFY(drawer()->isHidden());
+    QVERIFY(card(QStringLiteral("t2")) && card(QStringLiteral("t3")));
+
+    // Buka lagi: task tidak kembali dari session.json
+    m_window.reset();
+    m_tasks.reset();
+    createWindow();
+    QVERIFY(!card(QStringLiteral("t1")));
+    QVERIFY(card(QStringLiteral("t2")) && card(QStringLiteral("t3")));
+}
+
 void TestGui::specifierReviewApproveFlow() {
     KanbanCardWidget *spec = card(QStringLiteral("t3"));
     QPushButton *button = runButton(QStringLiteral("t3"));
@@ -857,6 +928,7 @@ void TestGui::coderDrawerShowsCodeChanges() {
     if (QStandardPaths::findExecutable(QStringLiteral("git")).isEmpty()) {
         QSKIP("git tidak ada di PATH");
     }
+    const GitSandbox sandbox;
 
     const QDir dir(m_workDir.path());
     auto removeRepository = qScopeGuard([dir]() {
@@ -897,48 +969,53 @@ void TestGui::coderDrawerShowsCodeChanges() {
     QCOMPARE(tabs->tabText(3), QStringLiteral("UML"));
     QVERIFY(m_mermaid.requests.isEmpty());
 
-    // Run dimulai: drawer beralih ke output Live
+    // Run dimulai: branch + worktree task disiapkan dulu (git di thread pool), lalu drawer beralih ke
+    // output Live. Agent bekerja di worktree, jadi perubahan yang belum di-commit di folder project tidak ikut.
     runButton(QStringLiteral("t1"))->click();
-    QCOMPARE(int(m_runtime.sessions.size()), 1);
+    QTRY_COMPARE_WITH_TIMEOUT(int(m_runtime.sessions.size()), 1, 20000);
     QCOMPARE(tabs->currentIndex(), 0);
     FakeAgentSession *session = m_runtime.sessions.last();
+    const QString workPath = session->launch().workingDirectory;
+    const QDir work(workPath);
+    QCOMPARE(workPath, m_tasks->task(QStringLiteral("t1"))->branch.worktree);
+    QTRY_COMPARE(files->topLevelItemCount(), 0);
     QSignalSpy requested(panel, &ResponseDrawer::diffRequested);
 
     // Tool baca tidak mengubah folder kerja, jadi membuka tab perubahan kode tidak membaca git lagi
     AgentEvent read;
     read.kind = AgentEvent::Kind::ToolUse;
     read.toolName = QStringLiteral("Read");
-    read.toolDetail = dir.filePath(QStringLiteral("hello.txt"));
+    read.toolDetail = work.filePath(QStringLiteral("hello.txt"));
     session->emitEvent(read);
     tabs->setCurrentIndex(1);
     QCOMPARE(requested.count(), 0);
-    QCOMPARE(files->topLevelItemCount(), 1);
+    QCOMPARE(files->topLevelItemCount(), 0);
     tabs->setCurrentIndex(0);
 
     // Agent menulis file: diff yang sudah dibaca basi dan dibaca ulang begitu tabnya dibuka
-    QVERIFY(writeFile(dir.filePath(QStringLiteral("dua.txt")), "x\n"));
+    QVERIFY(writeFile(work.filePath(QStringLiteral("dua.txt")), "x\n"));
     AgentEvent write;
     write.kind = AgentEvent::Kind::ToolUse;
     write.toolName = QStringLiteral("Write");
-    write.toolDetail = dir.filePath(QStringLiteral("dua.txt"));
+    write.toolDetail = work.filePath(QStringLiteral("dua.txt"));
     session->emitEvent(write);
     QCOMPARE(requested.count(), 0);   // belum ada yang melihat, jadi git belum dibaca
     tabs->setCurrentIndex(1);
     QCOMPARE(requested.count(), 1);
-    QTRY_COMPARE(files->topLevelItemCount(), 2);
-    QCOMPARE(tabs->tabText(1), QStringLiteral("Perubahan kode · 2"));
+    QTRY_COMPARE(files->topLevelItemCount(), 1);
+    QCOMPARE(tabs->tabText(1), QStringLiteral("Perubahan kode · 1"));
 
     // Run gagal setelah menulis lagi: kartu tetap di CODER dan diff yang sedang dilihat dibaca ulang
-    QVERIFY(writeFile(dir.filePath(QStringLiteral("tiga.txt")), "y\n"));
-    write.toolDetail = dir.filePath(QStringLiteral("tiga.txt"));
+    QVERIFY(writeFile(work.filePath(QStringLiteral("tiga.txt")), "y\n"));
+    write.toolDetail = work.filePath(QStringLiteral("tiga.txt"));
     session->emitEvent(write);
     session->finishWith(AgentResult::failure(QStringLiteral("error_max_turns"), QStringLiteral("Kehabisan giliran")));
     QCOMPARE(m_tasks->task(QStringLiteral("t1"))->stage, QStringLiteral("CODER"));
     QVERIFY(m_tasks->task(QStringLiteral("t1"))->state == TaskState::Failed);
     QCOMPARE(requested.count(), 2);
     QCOMPARE(tabs->currentIndex(), 1);
-    QTRY_COMPARE(files->topLevelItemCount(), 3);
-    QCOMPARE(tabs->tabText(1), QStringLiteral("Perubahan kode · 3"));
+    QTRY_COMPARE(files->topLevelItemCount(), 2);
+    QCOMPARE(tabs->tabText(1), QStringLiteral("Perubahan kode · 2"));
 
     // Dibuka lagi setelah gagal: yang tampil alasan gagalnya; diff tinggal satu klik
     panel->findChild<QPushButton *>(QStringLiteral("btnDrawerClose"))->click();
@@ -948,14 +1025,146 @@ void TestGui::coderDrawerShowsCodeChanges() {
     QCOMPARE(tabs->currentIndex(), 0);
     QVERIFY(panel->findChild<QTextBrowser *>(QStringLiteral("markdownView"))
                 ->toPlainText().contains(QStringLiteral("Run gagal (error_max_turns)")));
-    QTRY_COMPARE(files->topLevelItemCount(), 3);
+    QTRY_COMPARE(files->topLevelItemCount(), 2);
 
-    // Dicoba lagi dan sukses: kartu maju ke CLEANER, dan drawer yang mengikutinya tidak punya tab diff
+    // Dicoba lagi dan sukses: worktree sudah terpasang, jadi run langsung jalan di sana; kartu maju
+    // ke CLEANER, dan drawer yang mengikutinya tidak punya tab diff
     runButton(QStringLiteral("t1"))->click();
     QCOMPARE(int(m_runtime.sessions.size()), 2);
+    QCOMPARE(m_runtime.sessions.last()->launch().workingDirectory, workPath);
     m_runtime.sessions.last()->finishWith(successResult(QStringLiteral("Selesai")));
     QCOMPARE(m_tasks->task(QStringLiteral("t1"))->stage, QStringLiteral("CLEANER"));
     QVERIFY(tabs->isHidden());
+}
+
+void TestGui::qaFlowCommitsPushesAndMerges() {
+    if (QStandardPaths::findExecutable(QStringLiteral("git")).isEmpty()) {
+        QSKIP("git tidak ada di PATH");
+    }
+    const GitSandbox sandbox;
+    constexpr int kGitTimeoutMs = 20000;
+
+    // Folder kerja project Demo jadi repository di branch main, dengan remote origin (repository bare)
+    const QDir dir(m_workDir.path());
+    auto removeRepository = qScopeGuard([dir]() {
+        QDir(dir.filePath(QStringLiteral(".git"))).removeRecursively();
+        QFile::remove(dir.filePath(QStringLiteral("hello.txt")));
+        QFile::remove(dir.filePath(QStringLiteral("login.txt")));
+    });
+    QTemporaryDir remote;
+    const QString origin = QDir(remote.path()).filePath(QStringLiteral("origin.git"));
+    QVERIFY(runGit(remote.path(), {QStringLiteral("init"), QStringLiteral("-q"), QStringLiteral("--bare"), origin}));
+    QVERIFY(runGit(dir.path(), {QStringLiteral("init"), QStringLiteral("-q"), QStringLiteral("-b"), QStringLiteral("main")}));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("hello.txt")), "halo\n"));
+    QVERIFY(runGit(dir.path(), {QStringLiteral("add"), QStringLiteral("-A")}));
+    QVERIFY(runGit(dir.path(), {QStringLiteral("commit"), QStringLiteral("-q"), QStringLiteral("-m"), QStringLiteral("awal")}));
+    QVERIFY(runGit(dir.path(), {QStringLiteral("remote"), QStringLiteral("add"), QStringLiteral("origin"), origin}));
+    QVERIFY(runGit(dir.path(), {QStringLiteral("push"), QStringLiteral("-q"), QStringLiteral("origin"), QStringLiteral("main")}));
+
+    // Task yang spesifikasinya sudah disetujui, siap dikerjakan CODER
+    StageRun spec = StageRun::finished(QStringLiteral("SPECIFIER"), successResult(QStringLiteral("# Spek\n\n1. Ada form login")));
+    spec.decision = ReviewDecision::Approved;
+    TaskItem task;
+    task.id = QStringLiteral("t5");
+    task.projectId = QStringLiteral("Demo");
+    task.stage = QStringLiteral("CODER");
+    task.category = QStringLiteral("component");
+    task.title = QStringLiteral("Tambah login");
+    task.runs = {spec};
+    m_tasks->addTask(task);
+
+    // ▶ CODER: branch + worktree dibuat dulu dari main, lalu agent jalan di worktree itu
+    runButton(QStringLiteral("t5"))->click();
+    QTRY_COMPARE_WITH_TIMEOUT(int(m_runtime.sessions.size()), 1, kGitTimeoutMs);
+    const TaskBranch branch = m_tasks->task(QStringLiteral("t5"))->branch;
+    QCOMPARE(branch.name, QStringLiteral("lassomoir/t5-tambah-login"));
+    QCOMPARE(branch.base, QStringLiteral("main"));
+    const QString worktree = branch.worktree;
+    QVERIFY2(worktree.endsWith(QStringLiteral("/projects/Demo/worktrees/t5")), qPrintable(worktree));
+    QCOMPARE(m_runtime.sessions.last()->launch().workingDirectory, worktree);
+    QVERIFY(consoleText().contains(QStringLiteral("[GIT] Demo/Tambah login branch lassomoir/t5-tambah-login dari main")));
+    QVERIFY(writeFile(worktree + QStringLiteral("/login.txt"), "form\n"));
+    m_runtime.sessions.last()->finishWith(successResult(QStringLiteral("Menambah login.txt")));
+    QCOMPARE(m_tasks->task(QStringLiteral("t5"))->stage, QStringLiteral("CLEANER"));
+    QVERIFY(!QFileInfo::exists(dir.filePath(QStringLiteral("login.txt"))));   // folder project belum tersentuh
+
+    // Stage di antaranya dilewati; ▶ QA: kodenya di-commit + push dulu, baru agent QA jalan
+    QVERIFY(m_tasks->moveTask(QStringLiteral("t5"), QStringLiteral("QA")));
+    runButton(QStringLiteral("t5"))->click();
+    QTRY_COMPARE_WITH_TIMEOUT(int(m_runtime.sessions.size()), 2, kGitTimeoutMs);
+    QCOMPARE(m_runtime.sessions.last()->launch().workingDirectory, worktree);
+    QVERIFY(consoleText().contains(QStringLiteral("[GIT] Demo/Tambah login commit ")));
+    QVERIFY(consoleText().contains(QStringLiteral("[GIT] Demo/Tambah login push lassomoir/t5-tambah-login → origin")));
+    QCOMPARE(GitSandbox::output(origin, {QStringLiteral("rev-parse"), branch.name}),
+             GitSandbox::output(worktree, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}));
+    m_runtime.sessions.last()->finishWith(successResult(QStringLiteral("Kriteria 1 gagal: form tanpa validasi")));
+    QVERIFY(m_tasks->task(QStringLiteral("t5"))->state == TaskState::AwaitingReview);
+
+    // Drawer QA: tombol setuju sekaligus merge; QA menolak lewat "Kembalikan ke CODER"
+    runButton(QStringLiteral("t5"))->click();   // 📋
+    ResponseDrawer *panel = drawer();
+    QVERIFY(panel && !panel->isHidden());
+    QCOMPARE(panel->taskId(), QStringLiteral("t5"));
+    auto *approve = panel->findChild<QPushButton *>(QStringLiteral("btnDrawerApprove"));
+    QCOMPARE(approve->text(), QStringLiteral("Setujui && merge ke main"));
+    auto *branchLabel = panel->findChild<QLabel *>(QStringLiteral("drawerBranch"));
+    QCOMPARE(branchLabel->text(), QStringLiteral("Branch lassomoir/t5-tambah-login dari main"));
+    panel->findChild<QPlainTextEdit *>(QStringLiteral("drawerNote"))->setPlainText(QStringLiteral("Tambah validasi"));
+    QCOMPARE(panel->findChild<QComboBox *>(QStringLiteral("drawerSendBackTarget"))->currentText(), QStringLiteral("CODER"));
+    panel->findChild<QPushButton *>(QStringLiteral("btnDrawerSendBack"))->click();
+    QCOMPARE(m_tasks->task(QStringLiteral("t5"))->stage, QStringLiteral("CODER"));
+    QCOMPARE(card(QStringLiteral("t5"))->badge(), QStringLiteral("✓ 1 · ↺ 1"));
+
+    // Kartu yang sama dikerjakan lagi di worktree yang sama; sukses langsung kembali ke QA
+    runButton(QStringLiteral("t5"))->click();
+    QCOMPARE(int(m_runtime.sessions.size()), 3);   // worktree sudah terpasang: tanpa menunggu git
+    QCOMPARE(m_runtime.sessions.last()->launch().workingDirectory, worktree);
+    QVERIFY(m_runtime.sessions.last()->launch().prompt.contains(QStringLiteral("# Hasil stage sebelumnya (QA)")));
+    QVERIFY(writeFile(worktree + QStringLiteral("/login.txt"), "form\nvalidasi\n"));
+    m_runtime.sessions.last()->finishWith(successResult(QStringLiteral("Validasi ditambah")));
+    QCOMPARE(m_tasks->task(QStringLiteral("t5"))->stage, QStringLiteral("QA"));
+
+    // ▶ QA putaran 2: commit kedua, dan QA melihat laporannya yang dulu
+    runButton(QStringLiteral("t5"))->click();
+    QTRY_COMPARE_WITH_TIMEOUT(int(m_runtime.sessions.size()), 4, kGitTimeoutMs);
+    QVERIFY(m_runtime.sessions.last()->launch().prompt.contains(
+        QStringLiteral("# Hasil sebelumnya di stage ini (sebelum dikembalikan)\n\nKriteria 1 gagal")));
+    QVERIFY(GitSandbox::output(worktree, {QStringLiteral("log"), QStringLiteral("-1"), QStringLiteral("--format=%b")})
+                .contains(QStringLiteral("putaran 2")));
+    m_runtime.sessions.last()->finishWith(successResult(QStringLiteral("Semua kriteria lulus")));
+
+    // Setujui & merge: kode masuk main di folder kerja project, origin terbarui, worktree dibuang → DONE
+    runButton(QStringLiteral("t5"))->click();   // 📋
+    QVERIFY(!panel->isHidden());
+    QVERIFY(approve->isVisibleTo(panel));
+    approve->click();
+    QTRY_COMPARE_WITH_TIMEOUT(m_tasks->task(QStringLiteral("t5"))->stage, QStringLiteral("DONE"), kGitTimeoutMs);
+    QCOMPARE(readFile(dir.filePath(QStringLiteral("login.txt"))), QByteArray("form\nvalidasi\n"));
+    QCOMPARE(GitSandbox::output(origin, {QStringLiteral("rev-parse"), QStringLiteral("main")}),
+             GitSandbox::output(dir.path(), {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}));
+    QVERIFY(!QFileInfo::exists(worktree));
+    const TaskBranch merged = m_tasks->task(QStringLiteral("t5"))->branch;
+    QVERIFY(!merged.mergedCommit.isEmpty());
+    QVERIFY(!merged.hasWorktree());
+    QCOMPARE(card(QStringLiteral("t5"))->badge(), QStringLiteral("✓ 2 · ↺ 1"));
+    QVERIFY(consoleText().contains(QStringLiteral("[GIT] Demo/Tambah login merge lassomoir/t5-tambah-login → main")));
+    QVERIFY(consoleText().contains(QStringLiteral("[GATE] Demo/Tambah login QA disetujui → DONE")));
+    QVERIFY(branchLabel->text().startsWith(QStringLiteral("Di-merge ke main @ ") + merged.mergedCommit));
+
+    // Task lain yang dihapus: worktree-nya ikut dibuang, branch-nya tetap
+    TaskItem other = task;
+    other.id = QStringLiteral("t6");
+    other.title = QStringLiteral("Hapus saya");
+    m_tasks->addTask(other);
+    runButton(QStringLiteral("t6"))->click();
+    QTRY_COMPARE_WITH_TIMEOUT(int(m_runtime.sessions.size()), 5, kGitTimeoutMs);
+    const QString otherWorktree = m_runtime.sessions.last()->launch().workingDirectory;
+    QVERIFY(QFileInfo::exists(otherWorktree));
+    m_runtime.sessions.last()->finishWith(AgentResult::failure(QStringLiteral("cancelled"), QStringLiteral("dibatalkan")));
+    QVERIFY(m_tasks->removeTask(QStringLiteral("t6")));
+    QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo::exists(otherWorktree), kGitTimeoutMs);
+    QVERIFY(runGit(dir.path(), {QStringLiteral("show-ref"), QStringLiteral("--verify"), QStringLiteral("--quiet"),
+                                QStringLiteral("refs/heads/lassomoir/t6-hapus-saya")}));
 }
 
 void TestGui::maintainabilityViewShowsCSharpMembers() {

@@ -101,6 +101,17 @@ void TaskManager::removeProject(const QString &projectId) {
     }
 }
 
+bool TaskManager::removeTask(const QString &taskId) {
+    auto it = m_tasks.find(taskId);
+    if (it == m_tasks.end()) {
+        return false;
+    }
+    const TaskItem removed = *it;
+    m_tasks.erase(it);
+    emit taskRemoved(removed);
+    return true;
+}
+
 void TaskManager::recordRun(const QString &taskId, const StageRun &run) {
     auto it = m_tasks.find(taskId);
     if (it == m_tasks.end()) {
@@ -119,7 +130,7 @@ void TaskManager::recordRun(const QString &taskId, const StageRun &run) {
         } else if (profile && profile->exitPolicy().isGated()) {
             task.state = TaskState::AwaitingReview;
         } else {
-            const QString next = nextStage(task.stage);
+            const QString next = advanceTarget(task);
             if (!next.isEmpty()) {
                 moveTo(task, next);
             } else {
@@ -128,6 +139,16 @@ void TaskManager::recordRun(const QString &taskId, const StageRun &run) {
         }
     }
     emit taskChanged(task);
+}
+
+bool TaskManager::setBranch(const QString &taskId, const TaskBranch &branch) {
+    auto it = m_tasks.find(taskId);
+    if (it == m_tasks.end()) {
+        return false;
+    }
+    it->branch = branch;
+    emit taskChanged(*it);
+    return true;
 }
 
 bool TaskManager::approve(const QString &taskId, const QString &note, QString *reason) {
@@ -217,6 +238,21 @@ QStringList TaskManager::sendBackTargets(const QString &stageKey) const {
 
 int TaskManager::stageIndex(const QString &stageKey) const {
     return int(m_catalog.keys().indexOf(stageKey));
+}
+
+QString TaskManager::advanceTarget(const TaskItem &task) const {
+    // Run terakhir dari stage lain yang menentukan: bila itu pengembalian dari stage yang lebih
+    // belakang, perbaikannya langsung kembali ke sana tanpa mengulang stage di antaranya
+    for (auto it = task.runs.crbegin(); it != task.runs.crend(); ++it) {
+        if (it->stage == task.stage) {
+            continue;
+        }
+        if (it->decision == ReviewDecision::SentBack && stageIndex(it->stage) > stageIndex(task.stage)) {
+            return it->stage;
+        }
+        break;
+    }
+    return nextStage(task.stage);
 }
 
 StageRun *TaskManager::reviewedRun(TaskItem &task, QString *reason) {

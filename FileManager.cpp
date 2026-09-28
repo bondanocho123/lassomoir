@@ -50,6 +50,28 @@ StageRun runFromJson(const QJsonObject &obj) {
     run.reviewNote = obj.value(QStringLiteral("reviewNote")).toString();
     return run;
 }
+
+QJsonObject branchToJson(const TaskBranch &branch) {
+    QJsonObject obj;
+    obj[QStringLiteral("name")] = branch.name;
+    obj[QStringLiteral("base")] = branch.base;
+    obj[QStringLiteral("baseCommit")] = branch.baseCommit;
+    obj[QStringLiteral("worktree")] = branch.worktree;
+    obj[QStringLiteral("subdir")] = branch.subdir;
+    obj[QStringLiteral("mergedCommit")] = branch.mergedCommit;
+    return obj;
+}
+
+TaskBranch branchFromJson(const QJsonObject &obj) {
+    TaskBranch branch;
+    branch.name = obj.value(QStringLiteral("name")).toString();
+    branch.base = obj.value(QStringLiteral("base")).toString();
+    branch.baseCommit = obj.value(QStringLiteral("baseCommit")).toString();
+    branch.worktree = obj.value(QStringLiteral("worktree")).toString();
+    branch.subdir = obj.value(QStringLiteral("subdir")).toString();
+    branch.mergedCommit = obj.value(QStringLiteral("mergedCommit")).toString();
+    return branch;
+}
 }
 
 FileManager::FileManager(QObject *parent) :
@@ -229,6 +251,9 @@ QJsonObject FileManager::taskToJson(TaskItem task){
     if (!tuning.isEmpty()) {
         obj[QStringLiteral("tuning")] = tuning;
     }
+    if (!task.branch.isEmpty()) {
+        obj[QStringLiteral("branch")] = branchToJson(task.branch);
+    }
 
     return obj;
 }
@@ -270,6 +295,7 @@ TaskItem FileManager::taskFromJson(QJsonObject obj, QString *error){
             result.tuning.insert(it.key(), value);
         }
     }
+    result.branch = branchFromJson(obj.value(QStringLiteral("branch")).toObject());
 
     return result;
 }
@@ -340,4 +366,27 @@ QString FileManager::attachmentDirectory(const QString &projectId, const QString
         return QString();
     }
     return QStringLiteral("%1/projects/%2/attachments/%3").arg(m_basePath, projectId, taskId);
+}
+
+bool FileManager::deleteAttachments(const QString &projectId, const QString &taskId, QString *error) {
+    // Path kosong = QDir("") = folder kerja proses: jangan pernah dihapus
+    const QString path = attachmentDirectory(projectId, taskId);
+    if (path.isEmpty()) {
+        return true;
+    }
+    QDir dir(path);
+    if (!dir.exists() || dir.removeRecursively()) {
+        return true;
+    }
+    if (error) {
+        *error = QStringLiteral("Gagal menghapus folder lampiran %1").arg(dir.absolutePath());
+    }
+    return false;
+}
+
+QString FileManager::worktreeDirectory(const QString &projectId, const QString &taskId) const {
+    if (projectId.isEmpty() || taskId.isEmpty()) {
+        return QString();
+    }
+    return QStringLiteral("%1/projects/%2/worktrees/%3").arg(m_basePath, projectId, taskId);
 }

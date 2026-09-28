@@ -59,8 +59,10 @@ signals:
     void reviewRequested(const QString &cardId);
     // Kartu diklik sekali (tanpa drag): tampilkan hasil agent
     void detailsRequested(const QString &cardId);
-    // Kartu diklik dua kali: pengguna ingin mengubah isi task
+    // Kartu diklik dua kali (atau "Edit task" di menu klik kanan): pengguna ingin mengubah isi task
     void editRequested(const QString &cardId);
+    // "Hapus task" di menu klik kanan; konfirmasinya urusan penerima sinyal
+    void deleteRequested(const QString &cardId);
 
 protected:
     //Event penanganan drag and drop
@@ -68,6 +70,8 @@ protected:
     void mouseReleaseEvent(QMouseEvent *event) override;
     void mouseDoubleClickEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
+    // Klik kanan: menu Edit / Hapus task
+    void contextMenuEvent(QContextMenuEvent *event) override;
 
 private :
     Ui::KanbanCardWidget *ui;

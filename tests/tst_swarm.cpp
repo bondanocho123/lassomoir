@@ -6,6 +6,7 @@
 #include "EdgeMermaidRenderer.h"
 #include "FakeAgentRuntime.h"
 #include "FileManager.h"
+#include "GitSandbox.h"
 #include "MermaidRenderer.h"
 #include "PromptComposer.h"
 #include "RunLogFormatter.h"
@@ -13,6 +14,7 @@
 #include "StreamJsonParser.h"
 #include "SwarmCoordinator.h"
 #include "TaskAttachments.h"
+#include "TaskGit.h"
 #include "TaskItem.h"
 #include "TaskManager.h"
 #include "WorkspaceDiff.h"
@@ -248,6 +250,20 @@ bool writeFile(const QString &path, const QByteArray &content) {
     return file.open(QIODevice::WriteOnly | QIODevice::Truncate) && file.write(content) == content.size();
 }
 
+QByteArray readFile(const QString &path) {
+    QFile file(path);
+    return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+}
+
+// Repository uji dengan satu commit (app.txt) di branch tertentu
+bool initRepository(const QString &directory, const QString &branch) {
+    return QDir().mkpath(directory)
+           && runGit(directory, {QStringLiteral("init"), QStringLiteral("-q"), QStringLiteral("-b"), branch})
+           && writeFile(directory + QStringLiteral("/app.txt"), "satu\n")
+           && runGit(directory, {QStringLiteral("add"), QStringLiteral("-A")})
+           && runGit(directory, {QStringLiteral("commit"), QStringLiteral("-q"), QStringLiteral("-m"), QStringLiteral("awal")});
+}
+
 const TypeMetrics *findType(const QList<TypeMetrics> &types, const QString &name) {
     for (const TypeMetrics &type : types) {
         if (type.name == name) {
@@ -351,8 +367,11 @@ private slots:
     // Review gate & serah-terima antar stage
     void taskManagerAdvancesAndGates();
     void taskManagerReviewDecisions();
+    void taskManagerRemovesTask();
     void manualMoveRespectsGate();
+    void taskManagerReturnsToSender();
     void composerBuildsHandoffPrompt();
+    void composerAddsPreviousReportAfterSendBack();
     void fileManagerRoundTripsRunsAndState();
 
     // Mermaid (fungsi murni)
@@ -371,6 +390,12 @@ private slots:
     void csharpMetricsResolvesInheritance();
     void gitDiffMeasuresCSharpTypes();
     void gitDiffCanSkipMetrics();
+
+    // Alur git per task: branch + worktree, serah-terima ke QA, merge (git sungguhan)
+    void taskGitNamesBranches();
+    void taskGitWorktreeHandoffAndMerge();
+    void taskGitSkipsOrRejectsUnusableFolders();
+    void taskGitMergeStopsSafely();
 
     // Diagram kelas UML (Mermaid) dari tipe C# yang berubah
     void csharpMetricsRecordsOutline();
@@ -1049,6 +1074,35 @@ void TestSwarm::taskManagerReviewDecisions() {
     QCOMPARE(task.runs.last().decision, ReviewDecision::SentBack);
 }
 
+void TestSwarm::taskManagerRemovesTask() {
+    const StageCatalog catalog = StageCatalog::standard();
+    TaskManager tasks(catalog);
+    QList<TaskItem> removed;
+    connect(&tasks, &TaskManager::taskRemoved, &tasks, [&removed](const TaskItem &task) { removed.append(task); });
+
+    tasks.addTask(makeTask(QStringLiteral("a"), QStringLiteral("SPECIFIER")));
+    tasks.addTask(makeTask(QStringLiteral("b"), QStringLiteral("CODER")));
+    tasks.recordRun(QStringLiteral("a"), stageRun(QStringLiteral("SPECIFIER"), true, QStringLiteral("Spek")));
+
+    // Task yang menunggu review pun boleh dihapus; sinyal membawa data terakhirnya
+    QVERIFY(tasks.removeTask(QStringLiteral("a")));
+    QVERIFY(!tasks.task(QStringLiteral("a")));
+    QCOMPARE(int(removed.size()), 1);
+    QCOMPARE(removed.first().id, QStringLiteral("a"));
+    QVERIFY(removed.first().state == TaskState::AwaitingReview);
+    QCOMPARE(int(removed.first().runs.size()), 1);
+
+    // Task lain tidak tersentuh; id yang tidak ada ditolak tanpa sinyal
+    QVERIFY(tasks.task(QStringLiteral("b")));
+    QVERIFY(!tasks.removeTask(QStringLiteral("a")));
+    QCOMPARE(int(removed.size()), 1);
+
+    // Hasil run yang datang sesudah task dihapus (mis. agent yang baru berhenti) diabaikan
+    tasks.recordRun(QStringLiteral("a"), stageRun(QStringLiteral("SPECIFIER"), false, QStringLiteral("x"),
+                                                  QStringLiteral("cancelled")));
+    QVERIFY(!tasks.task(QStringLiteral("a")));
+}
+
 void TestSwarm::manualMoveRespectsGate() {
     const StageCatalog catalog = StageCatalog::standard();
     TaskManager tasks(catalog);
@@ -1132,6 +1186,82 @@ void TestSwarm::composerBuildsHandoffPrompt() {
     QVERIFY(prompt.contains(QStringLiteral("Catatan saat dikembalikan:\nPerbaiki anchor footer")));
 }
 
+void TestSwarm::taskManagerReturnsToSender() {
+    const StageCatalog catalog = StageCatalog::standard();
+    TaskManager tasks(catalog);
+    QString reason;
+
+    // Putaran pertama: CODER maju ke CLEANER seperti biasa
+    tasks.addTask(makeTask(QStringLiteral("q"), QStringLiteral("CODER")));
+    tasks.recordRun(QStringLiteral("q"), stageRun(QStringLiteral("CODER"), true, QStringLiteral("Implementasi")));
+    QCOMPARE(tasks.task(QStringLiteral("q"))->stage, QStringLiteral("CLEANER"));
+
+    // QA mengembalikan ke CODER: perbaikannya langsung kembali ke QA, CLEANER..HARDENER dilewati
+    QVERIFY(tasks.moveTask(QStringLiteral("q"), QStringLiteral("QA"), &reason));
+    tasks.recordRun(QStringLiteral("q"), stageRun(QStringLiteral("QA"), true, QStringLiteral("Kriteria 2 gagal")));
+    QVERIFY(tasks.sendBack(QStringLiteral("q"), QStringLiteral("CODER"), QStringLiteral("Tambah validasi"), &reason));
+    tasks.recordRun(QStringLiteral("q"), stageRun(QStringLiteral("CODER"), false, QStringLiteral("Kehabisan giliran")));
+    QCOMPARE(tasks.task(QStringLiteral("q"))->stage, QStringLiteral("CODER"));   // gagal: tetap di CODER
+    tasks.recordRun(QStringLiteral("q"), stageRun(QStringLiteral("CODER"), true, QStringLiteral("Validasi ditambah")));
+    QCOMPARE(tasks.task(QStringLiteral("q"))->stage, QStringLiteral("QA"));
+    QVERIFY(tasks.task(QStringLiteral("q"))->state == TaskState::Idle);
+    QCOMPARE(tasks.task(QStringLiteral("q"))->sentBackCount(), 1);
+
+    // Berlaku untuk gate lain juga: ARCHITECT -> CODER -> ARCHITECT
+    tasks.addTask(makeTask(QStringLiteral("a"), QStringLiteral("ARCHITECT")));
+    tasks.recordRun(QStringLiteral("a"), stageRun(QStringLiteral("ARCHITECT"), true, QStringLiteral("Pisahkan repository")));
+    QVERIFY(tasks.sendBack(QStringLiteral("a"), QStringLiteral("CODER"), QStringLiteral("Pisahkan dulu"), &reason));
+    tasks.recordRun(QStringLiteral("a"), stageRun(QStringLiteral("CODER"), true, QStringLiteral("Sudah dipisah")));
+    QCOMPARE(tasks.task(QStringLiteral("a"))->stage, QStringLiteral("ARCHITECT"));
+
+    // Spesifikasi dikembalikan lalu disetujui ulang: kodenya dikerjakan lagi lewat semua stage
+    tasks.addTask(makeTask(QStringLiteral("s"), QStringLiteral("QA")));
+    tasks.recordRun(QStringLiteral("s"), stageRun(QStringLiteral("QA"), true, QStringLiteral("Spesifikasi keliru")));
+    QVERIFY(tasks.sendBack(QStringLiteral("s"), QStringLiteral("SPECIFIER"), QStringLiteral("Kriteria 3 salah"), &reason));
+    tasks.recordRun(QStringLiteral("s"), stageRun(QStringLiteral("SPECIFIER"), true, QStringLiteral("Spek v2")));
+    QVERIFY(tasks.approve(QStringLiteral("s"), QString(), &reason));
+    QCOMPARE(tasks.task(QStringLiteral("s"))->stage, QStringLiteral("CODER"));
+    tasks.recordRun(QStringLiteral("s"), stageRun(QStringLiteral("CODER"), true, QStringLiteral("Implementasi v2")));
+    QCOMPARE(tasks.task(QStringLiteral("s"))->stage, QStringLiteral("CLEANER"));
+
+    // Keadaan branch disimpan TaskManager dan diumumkan seperti perubahan lain
+    int changed = 0;
+    connect(&tasks, &TaskManager::taskChanged, &tasks, [&changed](const TaskItem &) { ++changed; });
+    TaskBranch branch;
+    branch.name = QStringLiteral("lassomoir/q");
+    branch.base = QStringLiteral("main");
+    QVERIFY(tasks.setBranch(QStringLiteral("q"), branch));
+    QVERIFY(tasks.task(QStringLiteral("q"))->branch == branch);
+    QCOMPARE(changed, 1);
+    QVERIFY(!tasks.setBranch(QStringLiteral("tidak-ada"), branch));
+}
+
+void TestSwarm::composerAddsPreviousReportAfterSendBack() {
+    const TaskPromptComposer composer;
+    TaskItem task = makeTask(QStringLiteral("1"), QStringLiteral("QA"));
+
+    StageRun spec = stageRun(QStringLiteral("SPECIFIER"), true, QStringLiteral("Spek"));
+    spec.decision = ReviewDecision::Approved;
+    const StageRun coder = stageRun(QStringLiteral("CODER"), true, QStringLiteral("Implementasi awal"));
+    StageRun qa = stageRun(QStringLiteral("QA"), true, QStringLiteral("Kriteria 2 gagal"));
+    qa.decision = ReviewDecision::SentBack;
+    qa.reviewNote = QStringLiteral("Tambah validasi");
+    const StageRun fix = stageRun(QStringLiteral("CODER"), true, QStringLiteral("Validasi ditambah"));
+
+    // Putaran pertama QA: belum ada laporan lama
+    task.runs = {spec, coder};
+    QVERIFY(!composer.compose(task).contains(QStringLiteral("Hasil sebelumnya di stage ini")));
+
+    // QA putaran 2 memeriksa perbaikan dengan laporannya sendiri yang dulu
+    task.runs = {spec, coder, qa, fix};
+    const QString prompt = composer.compose(task);
+    QVERIFY(prompt.contains(QStringLiteral("# Spesifikasi yang disetujui (SPECIFIER)\n\nSpek")));
+    QVERIFY(prompt.contains(QStringLiteral("# Hasil stage sebelumnya (CODER)\n\nValidasi ditambah")));
+    QVERIFY(prompt.contains(QStringLiteral("# Hasil sebelumnya di stage ini (sebelum dikembalikan)\n\nKriteria 2 gagal"
+                                           "\n\nCatatan saat dikembalikan:\nTambah validasi")));
+    QVERIFY(!prompt.contains(QStringLiteral("Implementasi awal")));
+}
+
 void TestSwarm::fileManagerRoundTripsRunsAndState() {
     // Test mode QStandardPaths: tidak menyentuh AppData asli
     const QString base = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
@@ -1152,6 +1282,12 @@ void TestSwarm::fileManagerRoundTripsRunsAndState() {
     task.tuning.insert(QStringLiteral("SPECIFIER"), {QString(), QStringLiteral("low")});
     task.tuning.insert(QStringLiteral("QA"), AgentTuning());   // entri kosong tidak ditulis
     task.attachments = QStringList({"mockup.png", "Data Penjualan.xlsx"});
+    task.branch.name = QStringLiteral("lassomoir/r1-roundtrip");
+    task.branch.base = QStringLiteral("development");
+    task.branch.baseCommit = QStringLiteral("0123456789abcdef0123456789abcdef01234567");
+    task.branch.worktree = QStringLiteral("C:/data/worktrees/r1");
+    task.branch.subdir = QStringLiteral("src/app");
+    task.branch.mergedCommit = QStringLiteral("abc1234");
 
     QString error;
     {
@@ -1187,7 +1323,13 @@ void TestSwarm::fileManagerRoundTripsRunsAndState() {
     QVERIFY(back.tuning.value(QStringLiteral("SPECIFIER")).model.isEmpty());
     QCOMPARE(back.tuning.value(QStringLiteral("SPECIFIER")).effort, QStringLiteral("low"));
     QCOMPARE(back.attachments, QStringList({"mockup.png", "Data Penjualan.xlsx"}));
+    QVERIFY(back.branch == task.branch);
+    QCOMPARE(back.branch.directory(), QStringLiteral("C:/data/worktrees/r1/src/app"));
     QCOMPARE(reader.referenceDirectories(QStringLiteral("RoundTrip")), QStringList({"D:/lib", "E:/docs"}));
+    // Worktree per task di dalam folder project, jadi ikut terhapus bersama project
+    QCOMPARE(reader.worktreeDirectory(QStringLiteral("RoundTrip"), QStringLiteral("r1")),
+             base + QStringLiteral("/projects/RoundTrip/worktrees/r1"));
+    QVERIFY(reader.worktreeDirectory(QStringLiteral("RoundTrip"), QString()).isEmpty());
 
     // Folder lampiran per task di dalam folder project, jadi ikut terhapus bersama project
     const QString attachmentDir = reader.attachmentDirectory(QStringLiteral("RoundTrip"), QStringLiteral("r1"));
@@ -1198,6 +1340,17 @@ void TestSwarm::fileManagerRoundTripsRunsAndState() {
         FileManager remover;
         QVERIFY(remover.saveTasks(QStringLiteral("Hapus"), {}, &error));
         QVERIFY(writeFile(remover.attachmentDirectory(QStringLiteral("Hapus"), QStringLiteral("x")) + QStringLiteral("/a.csv"), "a"));
+        // Hapus task: hanya folder lampiran task itu yang hilang
+        const QString other = remover.attachmentDirectory(QStringLiteral("Hapus"), QStringLiteral("y"));
+        QVERIFY(writeFile(other + QStringLiteral("/b.csv"), "b"));
+        QVERIFY(remover.deleteAttachments(QStringLiteral("Hapus"), QStringLiteral("y"), &error));
+        QVERIFY(!QFileInfo::exists(other));
+        QVERIFY(QFileInfo::exists(remover.attachmentDirectory(QStringLiteral("Hapus"), QStringLiteral("x"))));
+        QVERIFY(remover.deleteAttachments(QStringLiteral("Hapus"), QStringLiteral("tanpa-lampiran"), &error));
+        // Tanpa id tidak ada yang dihapus (path kosong = folder kerja proses)
+        QVERIFY(remover.deleteAttachments(QStringLiteral("Hapus"), QString(), &error));
+        QVERIFY(QFileInfo::exists(base + QStringLiteral("/projects/Hapus/session.json")));
+
         QVERIFY(remover.deleteProject(QStringLiteral("Hapus"), &error));
         QVERIFY(!QFileInfo::exists(base + QStringLiteral("/projects/Hapus")));
     }
@@ -1212,6 +1365,7 @@ void TestSwarm::fileManagerRoundTripsRunsAndState() {
         const QByteArray json = plain.readAll();
         QVERIFY(!json.contains("referenceDirectories"));
         QVERIFY(!json.contains("attachments"));
+        QVERIFY(!json.contains("\"branch\""));
     }
 
     // File lama tanpa "state"/"runs" (dan dengan "badge") tetap terbaca
@@ -2052,6 +2206,271 @@ void TestSwarm::gitDiffCanSkipMetrics() {
     QVERIFY(plain.csharpTypes.isEmpty());
     QVERIFY(!plain.maintainabilityBefore());
     QVERIFY(!plain.maintainabilityAfter());
+}
+
+void TestSwarm::taskGitNamesBranches() {
+    TaskItem task = makeTask(QStringLiteral("1759051234567"), QStringLiteral("CODER"));
+    task.title = QStringLiteral("Tambah Login Admin!");
+    QCOMPARE(TaskGit::branchName(task), QStringLiteral("lassomoir/1759051234567-tambah-login-admin"));
+    // Huruf beraksen jadi huruf dasarnya; tanda baca beruntun jadi satu "-"
+    task.title = QStringLiteral("Perbaiki café & résumé — halaman #2");
+    QCOMPARE(TaskGit::branchName(task), QStringLiteral("lassomoir/1759051234567-perbaiki-cafe-resume-halaman-2"));
+    // Judul panjang dipotong tanpa "-" di ujung
+    task.title = QStringLiteral("Sangat panjang sekali judulnya melebihi empat puluh karakter pastinya");
+    QCOMPARE(TaskGit::branchName(task), QStringLiteral("lassomoir/1759051234567-sangat-panjang-sekali-judulnya-melebihi"));
+    // Tanpa huruf ASCII: cukup id
+    task.title = QStringLiteral("登录");
+    QCOMPARE(TaskGit::branchName(task), QStringLiteral("lassomoir/1759051234567"));
+
+    QVERIFY(TaskGit::isHandoffStage(QStringLiteral("QA")));
+    QVERIFY(!TaskGit::isHandoffStage(QStringLiteral("CODER")));
+
+    // Branch dimulai di stage yang menulis kode; stage baca dan task lama tidak
+    const StageCatalog catalog = StageCatalog::standard();
+    QVERIFY(TaskGit::startsBranch(makeTask(QStringLiteral("a"), QStringLiteral("CODER")), catalog));
+    QVERIFY(TaskGit::startsBranch(makeTask(QStringLiteral("a"), QStringLiteral("HARDENER")), catalog));
+    QVERIFY(!TaskGit::startsBranch(makeTask(QStringLiteral("a"), QStringLiteral("SPECIFIER")), catalog));
+    QVERIFY(!TaskGit::startsBranch(makeTask(QStringLiteral("a"), QStringLiteral("ARCHITECT")), catalog));
+    QVERIFY(!TaskGit::startsBranch(makeTask(QStringLiteral("a"), QStringLiteral("WAITING")), catalog));
+    TaskItem specified = makeTask(QStringLiteral("b"), QStringLiteral("CODER"));
+    specified.runs = {stageRun(QStringLiteral("SPECIFIER"), true, QStringLiteral("Spek"))};
+    QVERIFY(TaskGit::startsBranch(specified, catalog));
+    TaskItem legacy = makeTask(QStringLiteral("c"), QStringLiteral("CODER"));
+    legacy.runs = {stageRun(QStringLiteral("CODER"), false, QStringLiteral("Gagal"))};   // sudah menulis di folder project
+    QVERIFY(!TaskGit::startsBranch(legacy, catalog));
+    TaskItem branched = makeTask(QStringLiteral("d"), QStringLiteral("CODER"));
+    branched.branch.name = QStringLiteral("lassomoir/d");
+    QVERIFY(!TaskGit::startsBranch(branched, catalog));
+}
+
+void TestSwarm::taskGitWorktreeHandoffAndMerge() {
+    if (QStandardPaths::findExecutable(QStringLiteral("git")).isEmpty()) {
+        QSKIP("git tidak ada di PATH");
+    }
+    const GitSandbox sandbox;
+    QTemporaryDir root;
+    const QString repo = root.filePath(QStringLiteral("repo"));
+    const QString origin = root.filePath(QStringLiteral("origin.git"));
+    QVERIFY(initRepository(repo, QStringLiteral("development")));
+    QVERIFY(runGit(root.path(), {QStringLiteral("init"), QStringLiteral("-q"), QStringLiteral("--bare"), origin}));
+    QVERIFY(runGit(repo, {QStringLiteral("remote"), QStringLiteral("add"), QStringLiteral("origin"), origin}));
+    QVERIFY(runGit(repo, {QStringLiteral("push"), QStringLiteral("-q"), QStringLiteral("origin"), QStringLiteral("development")}));
+
+    TaskItem task = makeTask(QStringLiteral("t1"), QStringLiteral("CODER"), QStringLiteral("Demo"));
+    task.title = QStringLiteral("Tambah Login Admin");
+
+    // Branch baru dari branch yang aktif di folder kerja, di worktree sendiri
+    const QString path = root.filePath(QStringLiteral("worktrees/t1"));
+    const TaskGit::Result prepared = TaskGit::ensureWorktree(repo, path, task);
+    QVERIFY2(prepared.error.isEmpty(), qPrintable(prepared.error));
+    QVERIFY(!prepared.skipped);
+    const TaskBranch branch = prepared.branch;
+    QCOMPARE(branch.name, QStringLiteral("lassomoir/t1-tambah-login-admin"));
+    QCOMPARE(branch.base, QStringLiteral("development"));
+    QCOMPARE(branch.baseCommit, GitSandbox::output(repo, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}));
+    QVERIFY(branch.subdir.isEmpty());
+    QCOMPARE(branch.directory(), branch.worktree);
+    QCOMPARE(readFile(branch.worktree + QStringLiteral("/app.txt")), QByteArray("satu\n"));
+    QCOMPARE(GitSandbox::output(branch.worktree, {QStringLiteral("branch"), QStringLiteral("--show-current")}), branch.name);
+    QVERIFY(prepared.log.first().startsWith(QStringLiteral("branch lassomoir/t1-tambah-login-admin dari development (")));
+
+    // Sudah terpasang: tidak ada yang berubah
+    task.branch = branch;
+    const TaskGit::Result again = TaskGit::ensureWorktree(repo, path, task);
+    QVERIFY(again.error.isEmpty());
+    QVERIFY(again.branch == branch);
+    QVERIFY(again.log.isEmpty());
+
+    // Serah-terima ke QA: semua perubahan (termasuk file baru) di-commit lalu branch di-push
+    task.stage = QStringLiteral("QA");
+    QVERIFY(writeFile(branch.worktree + QStringLiteral("/app.txt"), "satu\ndua\n"));
+    QVERIFY(writeFile(branch.worktree + QStringLiteral("/login.txt"), "form\n"));
+    TaskGit::Result handed = TaskGit::handoff(task);
+    QVERIFY2(handed.error.isEmpty(), qPrintable(handed.error));
+    QVERIFY2(handed.warnings.isEmpty(), qPrintable(handed.warnings.join(QStringLiteral("; "))));
+    QCOMPARE(GitSandbox::output(branch.worktree, {QStringLiteral("log"), QStringLiteral("-1"), QStringLiteral("--format=%s")}),
+             QStringLiteral("Tambah Login Admin"));
+    QVERIFY(GitSandbox::output(branch.worktree, {QStringLiteral("log"), QStringLiteral("-1"), QStringLiteral("--format=%b")})
+                .contains(QStringLiteral("putaran 1")));
+    QVERIFY(GitSandbox::output(branch.worktree, {QStringLiteral("status"), QStringLiteral("--porcelain")}).isEmpty());
+    const QString firstCommit = GitSandbox::output(branch.worktree, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+    QCOMPARE(GitSandbox::output(origin, {QStringLiteral("rev-parse"), branch.name}), firstCommit);
+    QVERIFY(handed.log.join(QLatin1Char('\n')).contains(QStringLiteral("push lassomoir/t1-tambah-login-admin → origin")));
+
+    // Tanpa perubahan baru tidak ada commit kosong
+    handed = TaskGit::handoff(task);
+    QVERIFY(handed.error.isEmpty());
+    QCOMPARE(GitSandbox::output(branch.worktree, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}), firstCommit);
+    QVERIFY(handed.log.first().startsWith(QStringLiteral("tidak ada perubahan baru")));
+
+    // Putaran 2 setelah QA mengembalikan task
+    StageRun qa = stageRun(QStringLiteral("QA"), true, QStringLiteral("Kriteria 2 gagal"));
+    qa.decision = ReviewDecision::SentBack;
+    task.runs = {qa};
+    QVERIFY(writeFile(branch.worktree + QStringLiteral("/login.txt"), "form\nvalidasi\n"));
+    handed = TaskGit::handoff(task);
+    QVERIFY2(handed.error.isEmpty(), qPrintable(handed.error));
+    QVERIFY(GitSandbox::output(branch.worktree, {QStringLiteral("log"), QStringLiteral("-1"), QStringLiteral("--format=%b")})
+                .contains(QStringLiteral("putaran 2")));
+    QCOMPARE(GitSandbox::output(branch.worktree, {QStringLiteral("rev-list"), QStringLiteral("--count"),
+                                                  branch.baseCommit + QStringLiteral("..HEAD")}),
+             QStringLiteral("2"));
+
+    // Dibanding titik cabang, perubahan kedua putaran yang sudah di-commit tetap terlihat
+    const WorkspaceDiff sinceFork = GitDiff::collect(branch.directory(), false, branch.baseCommit);
+    QVERIFY2(sinceFork.error.isEmpty(), qPrintable(sinceFork.error));
+    QCOMPARE(diffPaths(sinceFork), QStringList({"app.txt", "login.txt"}));
+    QCOMPARE(sinceFork.baseCommit, branch.baseCommit.left(7));
+    QVERIFY(GitDiff::collect(branch.directory(), false).files.isEmpty());   // dibanding HEAD: bersih
+    QVERIFY(GitDiff::collect(branch.directory(), false, QStringLiteral("0000000000000000000000000000000000000000"))
+                .error.startsWith(QStringLiteral("Commit dasar 0000000 tidak ada")));
+
+    // Merge ke development di folder kerja project + push; worktree dan branch lokal dibuang
+    const TaskGit::Result merged = TaskGit::merge(repo, task);
+    QVERIFY2(merged.error.isEmpty(), qPrintable(merged.error));
+    QVERIFY2(merged.warnings.isEmpty(), qPrintable(merged.warnings.join(QStringLiteral("; "))));
+    QCOMPARE(readFile(repo + QStringLiteral("/login.txt")), QByteArray("form\nvalidasi\n"));
+    QCOMPARE(GitSandbox::output(repo, {QStringLiteral("log"), QStringLiteral("-1"), QStringLiteral("--format=%s")}),
+             QStringLiteral("Merge lassomoir/t1-tambah-login-admin: Tambah Login Admin"));
+    QCOMPARE(merged.branch.mergedCommit, GitSandbox::output(repo, {QStringLiteral("rev-parse"), QStringLiteral("--short"), QStringLiteral("HEAD")}));
+    QCOMPARE(GitSandbox::output(origin, {QStringLiteral("rev-parse"), QStringLiteral("development")}),
+             GitSandbox::output(repo, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}));
+    QVERIFY(!merged.branch.hasWorktree());
+    QVERIFY(!QFileInfo::exists(branch.worktree));
+    QVERIFY(!runGit(repo, {QStringLiteral("show-ref"), QStringLiteral("--verify"), QStringLiteral("--quiet"),
+                           QStringLiteral("refs/heads/") + branch.name}));
+    QVERIFY(runGit(origin, {QStringLiteral("show-ref"), QStringLiteral("--verify"), QStringLiteral("--quiet"),
+                            QStringLiteral("refs/heads/") + branch.name}));   // branch remote dibiarkan
+
+    // Dibuka lagi setelah merge: branch dengan nama yang sama dibuat ulang dari development terbaru
+    TaskItem reopened = task;
+    reopened.stage = QStringLiteral("CODER");
+    reopened.branch = merged.branch;
+    const TaskGit::Result reattached = TaskGit::ensureWorktree(repo, path, reopened);
+    QVERIFY2(reattached.error.isEmpty(), qPrintable(reattached.error));
+    QCOMPARE(reattached.branch.name, branch.name);
+    QVERIFY(reattached.branch.mergedCommit.isEmpty());
+    QCOMPARE(reattached.branch.baseCommit, GitSandbox::output(repo, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}));
+    QCOMPARE(readFile(reattached.branch.worktree + QStringLiteral("/login.txt")), QByteArray("form\nvalidasi\n"));
+}
+
+void TestSwarm::taskGitSkipsOrRejectsUnusableFolders() {
+    if (QStandardPaths::findExecutable(QStringLiteral("git")).isEmpty()) {
+        QSKIP("git tidak ada di PATH");
+    }
+    const GitSandbox sandbox;
+    QTemporaryDir root;
+    if (TaskGit::looksLikeRepository(root.path())) {
+        QSKIP("folder sementara berada di dalam repository git");
+    }
+    // Git tidak boleh naik ke folder induk yang kebetulan repository
+    qputenv("GIT_CEILING_DIRECTORIES", QFileInfo(root.path()).absolutePath().toUtf8());
+    auto restoreEnv = qScopeGuard([]() { qunsetenv("GIT_CEILING_DIRECTORIES"); });
+    const TaskItem task = makeTask(QStringLiteral("t2"), QStringLiteral("CODER"));
+
+    // Folder biasa: task baru jalan tanpa branch seperti dulu
+    const QString plain = root.filePath(QStringLiteral("plain"));
+    QVERIFY(QDir().mkpath(plain));
+    QVERIFY(!TaskGit::looksLikeRepository(plain));
+    TaskGit::Result result = TaskGit::ensureWorktree(plain, root.filePath(QStringLiteral("wt/a")), task);
+    QVERIFY(result.skipped);
+    QVERIFY(result.error.isEmpty());
+    QVERIFY(result.branch.isEmpty());
+    QVERIFY(result.log.first().startsWith(QStringLiteral("folder kerja bukan repository git")));
+
+    // Repository tanpa commit: sama, belum ada yang bisa dicabangkan
+    const QString fresh = root.filePath(QStringLiteral("fresh"));
+    QVERIFY(QDir().mkpath(fresh));
+    QVERIFY(runGit(fresh, {QStringLiteral("init"), QStringLiteral("-q")}));
+    QVERIFY(TaskGit::looksLikeRepository(fresh));
+    result = TaskGit::ensureWorktree(fresh, root.filePath(QStringLiteral("wt/b")), task);
+    QVERIFY(result.skipped);
+    QVERIFY(result.log.first().startsWith(QStringLiteral("repository di folder kerja belum punya commit")));
+
+    // Task yang sudah punya branch tidak boleh diam-diam jalan tanpa branch
+    TaskItem branched = task;
+    branched.branch.name = QStringLiteral("lassomoir/t2");
+    branched.branch.base = QStringLiteral("main");
+    result = TaskGit::ensureWorktree(plain, root.filePath(QStringLiteral("wt/c")), branched);
+    QVERIFY(!result.skipped);
+    QVERIFY(result.error.contains(QStringLiteral("padahal task ini punya branch lassomoir/t2")));
+
+    // Detached HEAD: tidak jelas branch tujuan merge-nya
+    const QString repo = root.filePath(QStringLiteral("repo"));
+    QVERIFY(initRepository(repo, QStringLiteral("main")));
+    QVERIFY(runGit(repo, {QStringLiteral("switch"), QStringLiteral("-q"), QStringLiteral("--detach")}));
+    result = TaskGit::ensureWorktree(repo, root.filePath(QStringLiteral("wt/d")), task);
+    QVERIFY(result.error.contains(QStringLiteral("detached HEAD")));
+    QVERIFY(!QFileInfo::exists(root.filePath(QStringLiteral("wt/d"))));
+
+    // Folder kerja berupa subfolder repository: agent bekerja di subfolder yang sama di dalam worktree
+    QVERIFY(runGit(repo, {QStringLiteral("switch"), QStringLiteral("-q"), QStringLiteral("main")}));
+    QVERIFY(writeFile(repo + QStringLiteral("/src/app/x.txt"), "x\n"));
+    QVERIFY(runGit(repo, {QStringLiteral("add"), QStringLiteral("-A")}));
+    QVERIFY(runGit(repo, {QStringLiteral("commit"), QStringLiteral("-q"), QStringLiteral("-m"), QStringLiteral("src")}));
+    result = TaskGit::ensureWorktree(repo + QStringLiteral("/src/app"), root.filePath(QStringLiteral("wt/e")), task);
+    QVERIFY2(result.error.isEmpty(), qPrintable(result.error));
+    QCOMPARE(result.branch.subdir, QStringLiteral("src/app"));
+    QCOMPARE(result.branch.directory(), result.branch.worktree + QStringLiteral("/src/app"));
+    QCOMPARE(readFile(result.branch.directory() + QStringLiteral("/x.txt")), QByteArray("x\n"));
+}
+
+void TestSwarm::taskGitMergeStopsSafely() {
+    if (QStandardPaths::findExecutable(QStringLiteral("git")).isEmpty()) {
+        QSKIP("git tidak ada di PATH");
+    }
+    const GitSandbox sandbox;
+    QTemporaryDir root;
+    const QString repo = root.filePath(QStringLiteral("repo"));
+    QVERIFY(initRepository(repo, QStringLiteral("main")));
+
+    TaskItem task = makeTask(QStringLiteral("t3"), QStringLiteral("QA"));
+    task.title = QStringLiteral("Ubah salam");
+    const TaskGit::Result prepared = TaskGit::ensureWorktree(repo, root.filePath(QStringLiteral("wt/t3")), task);
+    QVERIFY2(prepared.error.isEmpty(), qPrintable(prepared.error));
+    task.branch = prepared.branch;
+    const QString worktree = task.branch.worktree;
+
+    // Tanpa remote: commit tetap jalan, branch hanya ada di lokal
+    QVERIFY(writeFile(worktree + QStringLiteral("/app.txt"), "halo\n"));
+    const TaskGit::Result handed = TaskGit::handoff(task);
+    QVERIFY2(handed.error.isEmpty(), qPrintable(handed.error));
+    QVERIFY(handed.warnings.isEmpty());
+    QVERIFY(handed.log.last().startsWith(QStringLiteral("tidak ada remote origin")));
+
+    // Perubahan yang belum diuji QA menahan merge
+    QVERIFY(writeFile(worktree + QStringLiteral("/app.txt"), "halo lagi\n"));
+    TaskGit::Result merged = TaskGit::merge(repo, task);
+    QVERIFY(merged.error.contains(QStringLiteral("belum diuji QA (app.txt)")));
+    QVERIFY(runGit(worktree, {QStringLiteral("checkout"), QStringLiteral("--"), QStringLiteral("app.txt")}));
+
+    // Folder kerja project sedang di branch lain
+    QVERIFY(runGit(repo, {QStringLiteral("switch"), QStringLiteral("-q"), QStringLiteral("-c"), QStringLiteral("fitur-lain")}));
+    merged = TaskGit::merge(repo, task);
+    QVERIFY(merged.error.contains(QStringLiteral("sedang di fitur-lain, bukan main")));
+    QVERIFY(runGit(repo, {QStringLiteral("switch"), QStringLiteral("-q"), QStringLiteral("main")}));
+
+    // Konflik dengan main: merge dibatalkan bersih, worktree tetap ada untuk diperbaiki
+    QVERIFY(writeFile(repo + QStringLiteral("/app.txt"), "hai\n"));
+    QVERIFY(runGit(repo, {QStringLiteral("commit"), QStringLiteral("-q"), QStringLiteral("-am"), QStringLiteral("ubah di main")}));
+    const QString before = GitSandbox::output(repo, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+    merged = TaskGit::merge(repo, task);
+    QVERIFY(merged.error.startsWith(QStringLiteral("merge lassomoir/t3-ubah-salam ke main dibatalkan")));
+    QVERIFY2(merged.error.contains(QStringLiteral("CONFLICT")), qPrintable(merged.error));
+    QVERIFY(!runGit(repo, {QStringLiteral("rev-parse"), QStringLiteral("-q"), QStringLiteral("--verify"), QStringLiteral("MERGE_HEAD")}));
+    QCOMPARE(GitSandbox::output(repo, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}), before);
+    QVERIFY(GitSandbox::output(repo, {QStringLiteral("status"), QStringLiteral("--porcelain")}).isEmpty());
+    QVERIFY(merged.branch.mergedCommit.isEmpty());
+    QVERIFY(QFileInfo::exists(worktree));
+
+    // Task dihapus: worktree dibuang, branch-nya dibiarkan
+    const TaskGit::Result removed = TaskGit::removeWorktree(repo, task.branch);
+    QVERIFY2(removed.error.isEmpty(), qPrintable(removed.error));
+    QVERIFY(!removed.branch.hasWorktree());
+    QVERIFY(!QFileInfo::exists(worktree));
+    QVERIFY(runGit(repo, {QStringLiteral("show-ref"), QStringLiteral("--verify"), QStringLiteral("--quiet"),
+                          QStringLiteral("refs/heads/lassomoir/t3-ubah-salam")}));
+    QVERIFY(!GitSandbox::output(repo, {QStringLiteral("worktree"), QStringLiteral("list")}).contains(QStringLiteral("/wt/")));
 }
 
 namespace {

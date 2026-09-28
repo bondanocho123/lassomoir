@@ -79,6 +79,10 @@ QString RunLogFormatter::gateLine(const TaskItem &task, const QString &text) {
     return QStringLiteral("[GATE] %1 %2").arg(taskLabel(task), text);
 }
 
+QString RunLogFormatter::gitLine(const TaskItem &task, const QString &text) {
+    return QStringLiteral("[GIT] %1 %2").arg(taskLabel(task), text);
+}
+
 QString RunLogFormatter::toolLabel(const AgentEvent &event, const QString &workingDirectory) {
     return QStringLiteral("→ %1 %2")
         .arg(event.toolName, displayDetail(event.toolDetail, workingDirectory))

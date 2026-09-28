@@ -1,19 +1,17 @@
 #include "WorkspaceDiff.h"
+#include "GitProcess.h"
 
 #include <QDir>
 #include <QFile>
 #include <QHash>
 #include <QLocale>
-#include <QProcess>
 #include <QRegularExpression>
-#include <QStandardPaths>
 
 #include <algorithm>
 #include <cmath>
 
 namespace {
 
-constexpr int kGitTimeoutMs = 20000;
 constexpr qint64 kMaxUntrackedFileBytes = 256 * 1024;
 constexpr qint64 kMaxUntrackedTotalBytes = 2 * 1024 * 1024;
 constexpr int kMaxUntrackedFiles = 300;
@@ -22,63 +20,6 @@ constexpr int kMaxScannedSourceFiles = 5000;
 
 // Pohon kosong git: pembanding saat repository belum punya commit (semua file tampil sebagai baru)
 constexpr char kEmptyTree[] = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
-
-struct GitOutput {
-    bool finished = false;   // proses berjalan dan berhenti sendiri sebelum batas waktu
-    int exitCode = -1;
-    QByteArray out;
-    QString err;             // stderr git, atau alasan proses tidak selesai
-};
-
-GitOutput runGit(const QString &git, const QString &directory, const QStringList &arguments,
-                 const QByteArray &input = QByteArray()) {
-    GitOutput output;
-    QProcess process;
-    process.setProgram(git);
-    process.setArguments(arguments);
-    process.setWorkingDirectory(directory);
-
-    QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
-    // Hanya membaca: git tidak boleh menulis ulang index, supaya tidak berebut index.lock
-    // dengan git lain (agent atau pengguna) yang sedang jalan di folder yang sama
-    environment.insert(QStringLiteral("GIT_OPTIONAL_LOCKS"), QStringLiteral("0"));
-    // Pesan git berbahasa Inggris agar penyebab gagal bisa dikenali
-    environment.insert(QStringLiteral("LC_ALL"), QStringLiteral("C"));
-    process.setProcessEnvironment(environment);
-
-    process.start(input.isEmpty() ? QIODevice::ReadOnly : QIODevice::ReadWrite);
-    if (!process.waitForStarted(kGitTimeoutMs)) {
-        output.err = QStringLiteral("git gagal dijalankan: %1").arg(process.errorString());
-        return output;
-    }
-    if (!input.isEmpty()) {
-        process.write(input);
-        process.closeWriteChannel();
-    }
-    if (!process.waitForFinished(kGitTimeoutMs)) {
-        process.kill();
-        process.waitForFinished(2000);
-        output.err = QStringLiteral("git tidak selesai dalam %1 detik").arg(kGitTimeoutMs / 1000);
-        return output;
-    }
-    output.finished = process.exitStatus() == QProcess::NormalExit;
-    output.exitCode = process.exitCode();
-    output.out = process.readAllStandardOutput();
-    output.err = QString::fromUtf8(process.readAllStandardError()).trimmed();
-    return output;
-}
-
-QString describeFailure(const GitOutput &output) {
-    if (output.err.contains(QLatin1String("not a git repository"))) {
-        return QStringLiteral("Folder kerja bukan repository git, jadi perubahan kode tidak bisa dilacak. "
-                              "Jalankan git init lalu buat commit awal di folder kerja supaya perubahan "
-                              "dari agent bisa ditinjau di sini.");
-    }
-    if (!output.err.isEmpty()) {
-        return output.err;
-    }
-    return QStringLiteral("git berhenti dengan exit code %1").arg(output.exitCode);
-}
 
 // "a/<path> b/<path>" dari baris "diff --git". Kedua nama sama kecuali rename (namanya diambil
 // dari "rename from/to"), jadi path dibelah di tengah dan spasi di dalam path tetap aman.
@@ -152,7 +93,7 @@ QHash<QString, QByteArray> readBaseFiles(const QString &git, const QString &dire
         request += (base + QStringLiteral(":./") + path).toUtf8() + '\n';
     }
     // Gagal di sini hanya menghilangkan metrik "sebelum"; diff tetap tampil
-    const GitOutput output = runGit(git, directory, {QStringLiteral("cat-file"), QStringLiteral("--batch")}, request);
+    const GitOutput output = GitProcess::run(git, directory, {QStringLiteral("cat-file"), QStringLiteral("--batch")}, request);
     if (!output.finished || output.exitCode != 0) {
         return files;
     }
@@ -236,8 +177,8 @@ QHash<QString, QString> resolveCSharpInheritance(const QString &git, const QStri
             bases.insert(name, base);
         }
     };
-    const GitOutput tracked = runGit(git, directory, {QStringLiteral("ls-files"), QStringLiteral("-z"),
-                                                      QStringLiteral("--"), QStringLiteral("*.cs")});
+    const GitOutput tracked = GitProcess::run(git, directory, {QStringLiteral("ls-files"), QStringLiteral("-z"),
+                                                               QStringLiteral("--"), QStringLiteral("*.cs")});
     if (tracked.finished && tracked.exitCode == 0) {
         const QDir root(directory);
         int scanned = 0;
@@ -407,30 +348,34 @@ QList<FileDiff> GitDiff::parse(const QString &patch) {
     return files;
 }
 
-WorkspaceDiff GitDiff::collect(const QString &workingDirectory, bool withMetrics) {
-    const QString git = QStandardPaths::findExecutable(QStringLiteral("git"));
+WorkspaceDiff GitDiff::collect(const QString &workingDirectory, bool withMetrics, const QString &baseRevision) {
+    const QString git = GitProcess::executable();
     if (git.isEmpty()) {
         return WorkspaceDiff::failure(QStringLiteral("git tidak ditemukan di PATH, jadi perubahan kode tidak bisa dibaca."));
     }
 
     WorkspaceDiff result;
-    const GitOutput head = runGit(git, workingDirectory,
-                                  {QStringLiteral("rev-parse"), QStringLiteral("-q"), QStringLiteral("--verify"),
-                                   QStringLiteral("HEAD")});
+    const QString revision = baseRevision.isEmpty() ? QStringLiteral("HEAD")
+                                                    : baseRevision + QStringLiteral("^{commit}");
+    const GitOutput head = GitProcess::run(git, workingDirectory,
+                                           {QStringLiteral("rev-parse"), QStringLiteral("-q"), QStringLiteral("--verify"),
+                                            revision});
     QString base;
-    if (head.finished && head.exitCode == 0) {
-        base = QString::fromLatin1(head.out).trimmed();
+    if (head.ok()) {
+        base = head.text();
         result.baseCommit = base.left(7);
-    } else if (head.finished && head.exitCode == 1) {
+    } else if (head.finished && head.exitCode == 1 && baseRevision.isEmpty()) {
         // Repository baru: HEAD belum menunjuk commit apa pun
         base = QString::fromLatin1(kEmptyTree);
+    } else if (head.finished && head.exitCode == 1) {
+        return WorkspaceDiff::failure(QStringLiteral("Commit dasar %1 tidak ada di repository.").arg(baseRevision.left(7)));
     } else {
-        return WorkspaceDiff::failure(describeFailure(head));
+        return WorkspaceDiff::failure(GitProcess::describeFailure(head));
     }
 
     // --relative: hanya isi folder kerja (bisa subfolder repository) dengan path relatif terhadapnya.
     // Prefix, warna, dan diff eksternal dipaksa agar konfigurasi git pengguna tidak mengubah format.
-    const GitOutput patch = runGit(git, workingDirectory, {
+    const GitOutput patch = GitProcess::run(git, workingDirectory, {
         QStringLiteral("-c"), QStringLiteral("core.quotepath=off"),
         QStringLiteral("diff"), QStringLiteral("--relative"), QStringLiteral("--find-renames"),
         QStringLiteral("--no-color"), QStringLiteral("--no-ext-diff"),
@@ -438,17 +383,17 @@ WorkspaceDiff GitDiff::collect(const QString &workingDirectory, bool withMetrics
         base, QStringLiteral("--"),
     });
     if (!patch.finished || patch.exitCode != 0) {
-        return WorkspaceDiff::failure(describeFailure(patch));
+        return WorkspaceDiff::failure(GitProcess::describeFailure(patch));
     }
     result.files = parse(QString::fromUtf8(patch.out));
 
     // File baru yang belum di-git add tidak muncul di git diff; isinya dibaca langsung
-    const GitOutput others = runGit(git, workingDirectory, {
+    const GitOutput others = GitProcess::run(git, workingDirectory, {
         QStringLiteral("ls-files"), QStringLiteral("--others"), QStringLiteral("--exclude-standard"),
         QStringLiteral("-z"),
     });
     if (!others.finished || others.exitCode != 0) {
-        return WorkspaceDiff::failure(describeFailure(others));
+        return WorkspaceDiff::failure(GitProcess::describeFailure(others));
     }
     const QDir root(workingDirectory);
     qint64 budget = kMaxUntrackedTotalBytes;

@@ -327,7 +327,34 @@ QPushButton#btnReferenceAdd:hover {
     border: 1px solid #33517a;
 }
 
-/* ============ Popup konfirmasi hapus project ============ */
+/* ============ Menu klik kanan kartu (Edit / Hapus task) ============ */
+
+QMenu#cardContextMenu {
+    background-color: #ffffff;
+    border: 1px solid #e2d5c1;
+    border-radius: 6px;
+    padding: 4px 0px;
+    font-size: 11px;
+    color: #3d3730;
+}
+
+QMenu#cardContextMenu::item {
+    padding: 5px 16px 5px 12px;
+    background: transparent;
+}
+
+QMenu#cardContextMenu::item:selected {
+    background-color: #f2e3d1;
+    color: #3d3730;
+}
+
+QMenu#cardContextMenu::separator {
+    height: 1px;
+    background: #efe6d8;
+    margin: 3px 8px;
+}
+
+/* ============ Popup konfirmasi hapus project / task ============ */
 
 QFrame#deleteConfirmPopup {
     background-color: #ffffff;
@@ -756,6 +783,12 @@ QLabel#drawerMetrics {
     color: #6f6557;
 }
 
+QLabel#drawerBranch {
+    font-family: "Cascadia Mono", Consolas, monospace;
+    font-size: 11px;
+    color: #33517a;
+}
+
 QPushButton#btnDrawerClose,
 QPushButton#btnDrawerExpand {
     background: transparent;
@@ -806,6 +839,16 @@ QPlainTextEdit#drawerNote {
 QLabel#drawerNoteHint {
     color: #9b2c1f;
     font-size: 11px;
+}
+
+/* Merge saat QA disetujui: merah = alasan gagal, navy = sedang berjalan */
+QLabel#drawerGitActivity {
+    color: #9b2c1f;
+    font-size: 11px;
+}
+
+QLabel#drawerGitActivity[busy="true"] {
+    color: #33517a;
 }
 
 /* Setujui = aksi utama (coklat), Revisi/Kembalikan = sekunder (outline navy) */

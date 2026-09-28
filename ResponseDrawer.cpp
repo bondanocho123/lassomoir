@@ -3,9 +3,11 @@
 #include "MaintainabilityView.h"
 #include "MarkdownView.h"
 #include "RunLogFormatter.h"
+#include "TaskGit.h"
 #include "WorkspaceDiff.h"
 
 #include <QComboBox>
+#include <QDir>
 #include <QHBoxLayout>
 #include <QHash>
 #include <QIcon>
@@ -17,6 +19,7 @@
 #include <QShortcut>
 #include <QSignalBlocker>
 #include <QStackedWidget>
+#include <QStyle>
 #include <QTabBar>
 #include <QVBoxLayout>
 
@@ -70,6 +73,11 @@ ResponseDrawer::ResponseDrawer(MermaidRenderer *renderer, QWidget *parent)
     m_title->setWordWrap(true);
     m_status = new QLabel(this);
     m_status->setObjectName("drawerStatus");
+    m_branch = new QLabel(this);
+    m_branch->setObjectName("drawerBranch");
+    m_branch->setWordWrap(true);
+    m_branch->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_branch->hide();
 
     m_expand = new QPushButton(this);
     m_expand->setObjectName("btnDrawerExpand");
@@ -93,6 +101,7 @@ ResponseDrawer::ResponseDrawer(MermaidRenderer *renderer, QWidget *parent)
     titleBox->setSpacing(2);
     titleBox->addWidget(m_title);
     titleBox->addWidget(m_status);
+    titleBox->addWidget(m_branch);
     auto *header = new QHBoxLayout();
     header->setSpacing(2);
     header->addLayout(titleBox, 1);
@@ -168,6 +177,12 @@ ResponseDrawer::ResponseDrawer(MermaidRenderer *renderer, QWidget *parent)
     m_noteHint->setObjectName("drawerNoteHint");
     m_noteHint->hide();
     connect(m_note, &QPlainTextEdit::textChanged, m_noteHint, &QLabel::hide);
+    // Merge saat QA disetujui: progres atau alasan gagalnya
+    m_gitActivity = new QLabel(m_reviewPanel);
+    m_gitActivity->setObjectName("drawerGitActivity");
+    m_gitActivity->setWordWrap(true);
+    m_gitActivity->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_gitActivity->hide();
 
     m_approve = new QPushButton(m_reviewPanel);
     m_approve->setObjectName("btnDrawerApprove");
@@ -216,6 +231,7 @@ ResponseDrawer::ResponseDrawer(MermaidRenderer *renderer, QWidget *parent)
     reviewLayout->addWidget(reviewLabel);
     reviewLayout->addWidget(m_note);
     reviewLayout->addWidget(m_noteHint);
+    reviewLayout->addWidget(m_gitActivity);
     reviewLayout->addLayout(decisionRow);
     reviewLayout->addWidget(m_sendBackRow);
 
@@ -254,15 +270,31 @@ void ResponseDrawer::showTask(const TaskItem &task, RunState runState, const QSt
     // Drawer tersembunyi = sedang dibuka lagi (MainWindow::openDrawer), bukan penyegaran
     const bool opening = isHidden();
     const QString previousStage = m_task.stage;
+    const QString previousWorktree = m_task.branch.worktree;
     const int previousSelection = selectedRun();
     const RunState previousRunState = m_runState;
 
     m_task = task;
     m_runState = runState;
     m_nextStage = nextStage;
+    if (!sameTask) {
+        setGitActivity(task.id, QString(), false);
+    }
 
     m_title->setText(QStringLiteral("%1 / %2").arg(task.projectId, task.title));
     m_status->setText(QStringLiteral("%1 · %2").arg(task.stage, statusLabel(task.state, runState)));
+    QString branchText;
+    if (!task.branch.isEmpty()) {
+        branchText = task.branch.mergedCommit.isEmpty()
+                         ? QStringLiteral("Branch %1 dari %2").arg(task.branch.name, task.branch.base)
+                         : QStringLiteral("Di-merge ke %1 @ %2 (branch %3)")
+                               .arg(task.branch.base, task.branch.mergedCommit, task.branch.name);
+    }
+    m_branch->setText(branchText);
+    m_branch->setToolTip(task.branch.hasWorktree()
+                             ? QStringLiteral("Worktree: %1").arg(QDir::toNativeSeparators(task.branch.worktree))
+                             : QString());
+    m_branch->setVisible(!branchText.isEmpty());
 
     const bool running = runState != RunState::Idle;
     const int newest = int(task.runs.size()) - 1;
@@ -285,7 +317,9 @@ void ResponseDrawer::showTask(const TaskItem &task, RunState runState, const QSt
     // mengulangnya, kecuali agent menulis file sejak diff dibaca (m_diffStale)
     const bool codeChanges = showsCodeChanges(task.stage);
     const bool analysis = showsCodeAnalysis(task.stage);
-    const bool loadDiff = codeChanges && (opening || !sameTask || previousStage != task.stage);
+    // Worktree baru dipasang = folder kerja task pindah, jadi diff lama tidak berlaku lagi
+    const bool loadDiff = codeChanges && (opening || !sameTask || previousStage != task.stage
+                                          || previousWorktree != task.branch.worktree);
     m_tabs->setVisible(codeChanges);
     m_tabs->setTabVisible(kMaintainabilityTab, analysis);
     m_tabs->setTabVisible(kUmlTab, analysis);
@@ -298,8 +332,15 @@ void ResponseDrawer::showTask(const TaskItem &task, RunState runState, const QSt
         m_tabs->setCurrentIndex(wantsResult ? kResultTab : kDiffTab);
     }
 
-    m_approve->setText(nextStage.isEmpty() ? QStringLiteral("Setujui")
-                                           : QStringLiteral("Setujui → %1").arg(nextStage));
+    // QA pada task ber-branch: persetujuan sekaligus merge ke branch dasarnya
+    const bool merges = TaskGit::isHandoffStage(task.stage) && !task.branch.isEmpty()
+                        && task.branch.mergedCommit.isEmpty();
+    if (merges) {
+        m_approve->setText(QStringLiteral("Setujui && merge ke %1").arg(task.branch.base));
+    } else {
+        m_approve->setText(nextStage.isEmpty() ? QStringLiteral("Setujui")
+                                               : QStringLiteral("Setujui → %1").arg(nextStage));
+    }
     m_sendBackTarget->clear();
     m_sendBackTarget->addItems(sendBackStages);
     const qsizetype coder = sendBackStages.indexOf(QStringLiteral("CODER"));
@@ -323,6 +364,20 @@ void ResponseDrawer::showTask(const TaskItem &task, RunState runState, const QSt
             requestDiff();
         }
     }
+}
+
+void ResponseDrawer::setGitActivity(const QString &taskId, const QString &text, bool busy) {
+    if (taskId != m_task.id) {
+        return;
+    }
+    m_gitActivity->setText(text);
+    m_gitActivity->setProperty("busy", busy);
+    m_gitActivity->style()->unpolish(m_gitActivity);
+    m_gitActivity->style()->polish(m_gitActivity);
+    m_gitActivity->setVisible(!text.isEmpty());
+    m_approve->setEnabled(!busy);
+    m_revise->setEnabled(!busy);
+    m_sendBack->setEnabled(!busy);
 }
 
 void ResponseDrawer::showDiff(const QString &taskId, const WorkspaceDiff &diff) {

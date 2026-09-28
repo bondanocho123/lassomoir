@@ -40,10 +40,11 @@ struct FileDiff {
     std::optional<CodeMetrics> after;
 };
 
-// Semua perubahan yang belum di-commit di folder kerja (tracked + file baru)
+// Perubahan folder kerja (tracked + file baru) dibanding commit dasar: HEAD, atau titik cabang
+// branch task sehingga putaran yang sudah di-commit ikut terlihat
 struct WorkspaceDiff {
     QString error;             // kosong = berhasil dibaca
-    QString baseCommit;        // hash pendek HEAD; kosong bila repository belum punya commit
+    QString baseCommit;        // hash pendek commit dasar; kosong bila repository belum punya commit
     QList<FileDiff> files;     // urut path
     int omittedUntracked = 0;  // file baru di luar batas daftar
     // C#: nama tipe yang dideklarasikan di project → kelas dasarnya (DIT, tipe konteks diagram kelas)
@@ -66,8 +67,9 @@ QList<FileDiff> parse(const QString &patch);
 
 // Membaca perubahan lewat git (memblokir sampai git selesai): panggil di luar thread GUI.
 // withMetrics = false melewati pengukuran kode (Maintainability, tipe C# seluruh project)
-// bila yang ditampilkan hanya diff-nya.
-WorkspaceDiff collect(const QString &workingDirectory, bool withMetrics = true);
+// bila yang ditampilkan hanya diff-nya. baseRevision kosong = dibanding HEAD.
+WorkspaceDiff collect(const QString &workingDirectory, bool withMetrics = true,
+                      const QString &baseRevision = QString());
 
 }
 

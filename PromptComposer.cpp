@@ -169,6 +169,10 @@ QString TaskPromptComposer::compose(const TaskItem &task, const TaskMaterials &m
     if (own && own->decision == ReviewDecision::Revise) {
         sections.append(section(QStringLiteral("Dokumen sebelumnya (untuk direvisi)"), *own,
                                 QStringLiteral("Catatan revisi")));
+    } else if (own && own->decision == ReviewDecision::SentBack) {
+        // Stage ini yang dulu mengembalikan task: hasil lamanya jadi acuan memeriksa perbaikan
+        sections.append(section(QStringLiteral("Hasil sebelumnya di stage ini (sebelum dikembalikan)"), *own,
+                                QStringLiteral("Catatan saat dikembalikan")));
     }
 
     return sections.join(QStringLiteral("\n\n")) + '\n';

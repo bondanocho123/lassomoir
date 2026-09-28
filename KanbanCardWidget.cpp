@@ -2,8 +2,10 @@
 #include "ui_KanbanCardWidget.h"
 
 #include <QApplication>
+#include <QContextMenuEvent>
 #include <QMouseEvent>
 #include <QDrag>
+#include <QMenu>
 #include <QMimeData>
 #include <QPainter>
 #include <QPixmap>
@@ -221,6 +223,25 @@ void KanbanCardWidget::mouseDoubleClickEvent(QMouseEvent *event){
         return;
     }
     QWidget::mouseDoubleClickEvent(event);
+}
+
+void KanbanCardWidget::contextMenuEvent(QContextMenuEvent *event){
+    // popup() tidak memblokir (beda dengan exec()); menu membuang dirinya sendiri saat tertutup
+    auto *menu = new QMenu(this);
+    menu->setObjectName("cardContextMenu");
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+
+    QAction *edit = menu->addAction(QStringLiteral("Edit task…"));
+    edit->setObjectName("actionEditTask");
+    connect(edit, &QAction::triggered, this, [this]() { emit editRequested(m_id); });
+
+    menu->addSeparator();
+    QAction *remove = menu->addAction(QIcon(":/icons/trash.svg"), QStringLiteral("Hapus task…"));
+    remove->setObjectName("actionDeleteTask");
+    connect(remove, &QAction::triggered, this, [this]() { emit deleteRequested(m_id); });
+
+    menu->popup(event->globalPos());
+    event->accept();
 }
 
 void KanbanCardWidget::mouseMoveEvent(QMouseEvent *event){

@@ -55,6 +55,13 @@ public:
     // Ikut terhapus bersama project di deleteProject().
     QString attachmentDirectory(const QString &projectId, const QString &taskId) const;
 
+    // Hapus permanen folder lampiran satu task (saat task dihapus). Folder yang tidak ada = sukses.
+    bool deleteAttachments(const QString &projectId, const QString &taskId, QString *error);
+
+    // Folder git worktree satu task: <AppData>/projects/<projectId>/worktrees/<taskId>.
+    // Ikut terhapus bersama project di deleteProject().
+    QString worktreeDirectory(const QString &projectId, const QString &taskId) const;
+
 signals:
     void saveFailed(const QString &projectId, QString *reason);
 

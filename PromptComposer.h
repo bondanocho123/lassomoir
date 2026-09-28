@@ -27,7 +27,9 @@ public:
 // - "# Spesifikasi yang disetujui (<STAGE>)": dokumen gate terakhir yang disetujui + catatannya;
 // - "# Hasil stage sebelumnya (<STAGE>)": run terakhir dari stage lain (mis. hasil CODER untuk
 //   CLEANER, atau laporan QA saat task dikembalikan ke CODER);
-// - "# Dokumen sebelumnya (untuk direvisi)": bila keputusan terakhir di stage ini adalah revisi.
+// - "# Dokumen sebelumnya (untuk direvisi)": bila keputusan terakhir di stage ini adalah revisi;
+// - "# Hasil sebelumnya di stage ini (sebelum dikembalikan)": bila stage ini pernah mengembalikan
+//   task, mis. laporan QA putaran lalu saat QA memeriksa perbaikannya.
 class TaskPromptComposer final : public PromptComposer {
 public:
     using PromptComposer::compose;

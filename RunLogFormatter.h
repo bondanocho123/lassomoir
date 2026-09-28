@@ -19,6 +19,9 @@ QStringList startLines(const TaskItem &task, const AgentLaunch &launch);
 // "[GATE] TTT/Login <teks>" untuk keputusan review dan perpindahan yang ditolak gate
 QString gateLine(const TaskItem &task, const QString &text);
 
+// "[GIT] TTT/Login <teks>" untuk branch, worktree, commit, push, dan merge task
+QString gitLine(const TaskItem &task, const QString &text);
+
 // "→ Write src/a.cpp": nama tool + detail (path relatif terhadap folder kerja, maks. 100 karakter)
 QString toolLabel(const AgentEvent &event, const QString &workingDirectory);
 

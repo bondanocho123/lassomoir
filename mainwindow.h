@@ -7,7 +7,10 @@
 #include <QMainWindow>
 #include <QMap>
 #include <QPointer>
+#include <QSet>
 #include <QString>
+
+#include <functional>
 
 // Tipe lengkap dibutuhkan moc untuk parameter slot run agent
 #include "AgentTypes.h"
@@ -34,6 +37,9 @@ class QSplitter;
 class QVariantAnimation;
 namespace TaskAttachments {
 struct Draft;
+}
+namespace TaskGit {
+struct Result;
 }
 
 class MainWindow : public QMainWindow
@@ -70,6 +76,10 @@ private slots:
     // project dibuang dari UI sekaligus dihapus permanen dari disk
     void handleDeleteProjectRequested(const QString &projectId);
 
+    // Slot saat konfirmasi "Ya" pada popup hapus task ditekan: agent-nya dihentikan,
+    // task dibuang dari board dan session.json, folder lampirannya ikut dihapus
+    void handleDeleteTaskRequested(const QString &taskId);
+
     // Slot saat baris project di sidebar dipilih
     void handleProjectSelected(QListWidgetItem *current, QListWidgetItem *previous);
 
@@ -90,6 +100,7 @@ private slots:
     void handleTaskChanged(const TaskItem &task);
     void handleTaskMoved(const TaskItem &task, const QString &fromStage);
     void handleTaskMoveRejected(const QString &taskId, const QString &fromStage, const QString &reason);
+    void handleTaskRemoved(const TaskItem &task);
 
     // Keputusan review dari drawer
     void handleApproveRequested(const QString &taskId, const QString &note);
@@ -114,6 +125,11 @@ private:
     SplitterPaneAnimator *m_drawerAnimator = nullptr;
     // Nomor permintaan diff terbaru; hanya jawabannya yang ditampilkan di drawer
     int m_diffRequest = 0;
+    // Task yang sedang menunggu git (worktree, commit + push ke QA, merge); run dan keputusan
+    // berikutnya ditolak sampai selesai
+    QSet<QString> m_gitBusy;
+    // Tombol stop ditekan selagi git menyiapkan run: agent tidak dijalankan sesudahnya
+    QSet<QString> m_gitCancelled;
     // Saat memuat dari disk tidak perlu menulis ulang session.json per task
     bool m_loading = false;
     // Perpindahan yang dipicu pengguna (drag / keputusan review) sudah dicatat pemanggilnya
@@ -148,9 +164,10 @@ private:
     // Samakan warna label + icon tombol tiap baris sidebar dengan status seleksinya
     // (putih saat aktif/terpilih, warna default saat tidak)
     void refreshProjectRowStyles();
-    // Popup kecil berisi pertanyaan konfirmasi + tombol "Ya" / "Batal",
-    // ditempelkan tepat di bawah tombol hapus yang diklik
-    void showDeleteConfirmPopup(const QString &projectId, QWidget *anchor);
+    // Popup kecil berisi pertanyaan konfirmasi + tombol "Ya" / "Batal", ditempelkan tepat di
+    // bawah anchor (tombol hapus project atau kartu task). onConfirm dijalankan di siklus event
+    // berikutnya, jadi boleh membuang anchor-nya.
+    void showDeleteConfirmPopup(QWidget *anchor, const QString &question, std::function<void()> onConfirm);
     // Buang project dari sidebar + board (dipakai "Close" maupun "Hapus")
     void removeProjectFromUi(const QString &projectId);
 
@@ -164,8 +181,23 @@ private:
     void openDrawer(const QString &taskId);
     // Segarkan drawer bila sedang menampilkan task ini
     void refreshDrawer(const TaskItem &task);
-    // Tombol ▶ diklik: pastikan folder kerja ada, lalu serahkan ke SwarmCoordinator
+    // Tombol ▶ diklik: pastikan folder kerja ada, siapkan branch/worktree task (dan di QA: commit +
+    // push) bila perlu, lalu serahkan ke SwarmCoordinator
     void handleRunRequested(const QString &projectId, const QString &taskId);
+    // Baca lampiran & folder referensi lalu jalankan agent di folder itu; false bila ditolak
+    bool startAgentRun(const TaskItem &task, const QString &workingDirectory);
+    // Git selesai menyiapkan run task (requested = data saat ▶ diklik)
+    void finishRunPreparation(const TaskItem &requested, const TaskGit::Result &result);
+    // Folder kerja agent task: worktree-nya bila ada, selain itu folder kerja project
+    QString taskDirectory(const TaskItem &task) const;
+    // Baris [GIT] untuk yang sudah dikerjakan dan peringatannya
+    void logGitResult(const TaskItem &task, const TaskGit::Result &result);
+    // Buang worktree task (dihapus) di thread pool; branch-nya dibiarkan
+    void removeWorktreeLater(const TaskItem &task);
+    // Keputusan "Setujui" apa adanya lewat TaskManager, beserta baris konsolnya
+    void approveTask(const TaskItem &task, const QString &note);
+    // QA pada task ber-branch: merge ke branch dasarnya dulu, baru disetujui (→ DONE)
+    void mergeThenApprove(const TaskItem &task, const QString &note);
     // Folder kerja tersimpan yang masih ada; kalau tidak ada, tanya pengguna
     QString ensureWorkingDirectory(const QString &projectId);
     // Pemilih folder -> FileManager -> tombol header swimlane; kosong bila dibatalkan

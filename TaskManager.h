@@ -43,9 +43,16 @@ public:
     // Buang semua task project dari memori (data di disk tidak disentuh)
     void removeProject(const QString &projectId);
 
-    // Hasil satu run agent: dibatalkan -> Idle, gagal -> Failed,
-    // sukses di stage ber-gate -> menunggu review, sukses tanpa gate -> maju ke stage berikutnya
+    // Buang satu task (termasuk riwayat run-nya) lalu pancarkan taskRemoved; false bila tidak ada
+    bool removeTask(const QString &taskId);
+
+    // Hasil satu run agent: dibatalkan -> Idle, gagal -> Failed, sukses di stage ber-gate -> menunggu
+    // review, sukses tanpa gate -> maju ke stage berikutnya, atau kembali ke stage yang tadi
+    // mengembalikan task ke sini (mis. QA -> CODER -> QA)
     void recordRun(const QString &taskId, const StageRun &run);
+
+    // Simpan keadaan branch git task (dibuat, diserahkan ke QA, di-merge); false bila task tidak ada
+    bool setBranch(const QString &taskId, const TaskBranch &branch);
 
     // Keputusan review untuk task yang menunggu review
     bool approve(const QString &taskId, const QString &note, QString *reason = nullptr);            // -> stage berikutnya
@@ -68,6 +75,9 @@ signals:
     // Task pindah stage; widget kartu mengikuti ke kolom item.stage
     void taskMoved(const TaskItem &item, const QString &fromStage);
 
+    // Task dihapus; item = data terakhirnya (sudah tidak ada di TaskManager)
+    void taskRemoved(const TaskItem &item);
+
     // Dipancarkan saat pindah stage ditolak TransitionPolicy stage asal (mis. gate belum di-approve).
     // Widget kolom perlu dengar ini untuk mengembalikan kartu ke posisi semula.
     void taskMoveRejected(const QString &taskId, const QString &fromStage, const QString &reason);
@@ -79,6 +89,8 @@ private:
     QMap<QString, TaskItem> m_tasks;
 
     int stageIndex(const QString &stageKey) const;
+    // Tujuan setelah run sukses di stage tanpa gate (lihat recordRun)
+    QString advanceTarget(const TaskItem &task) const;
     // Tandai run yang sedang direview; gagal bila task tidak sedang menunggu review
     StageRun *reviewedRun(TaskItem &task, QString *reason);
     // Pindahkan task ke stage lain dalam keadaan Idle, lalu pancarkan taskMoved

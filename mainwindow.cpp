@@ -13,10 +13,13 @@
 #include "StageCatalog.h"
 #include "SwarmCoordinator.h"
 #include "TaskAttachments.h"
+#include "TaskGit.h"
 #include "TaskManager.h"
 #include "WorkspaceDiff.h"
 
 #include <QFileDialog>
+#include <QFileInfo>
+#include <QThreadPool>
 #include <QFutureWatcher>
 #include <QtConcurrent/QtConcurrentRun>
 #include <QInputDialog>
@@ -48,7 +51,9 @@
 namespace {
 
 QString badgeText(const TaskItem &task) {
-    return QString("✓ %1").arg(task.approvedGates());
+    const int sentBack = task.sentBackCount();
+    return sentBack > 0 ? QString("✓ %1 · ↺ %2").arg(task.approvedGates()).arg(sentBack)
+                        : QString("✓ %1").arg(task.approvedGates());
 }
 
 // Path yang sama atau berada di dalam root (tanpa beda huruf besar/kecil di Windows)
@@ -95,6 +100,7 @@ MainWindow::MainWindow(const StageCatalog &catalog, TaskManager &tasks, SwarmCoo
     connect(&m_tasks, &TaskManager::taskChanged, this, &MainWindow::handleTaskChanged);
     connect(&m_tasks, &TaskManager::taskMoved, this, &MainWindow::handleTaskMoved);
     connect(&m_tasks, &TaskManager::taskMoveRejected, this, &MainWindow::handleTaskMoveRejected);
+    connect(&m_tasks, &TaskManager::taskRemoved, this, &MainWindow::handleTaskRemoved);
 
     // Drawer hasil agent: splitter bersarang [board | drawer] menggantikan boardStack di
     // mainSplitter, sehingga mainSplitter tetap tiga pane dan animasi sidebar (indeks 0/1/2) aman
@@ -288,7 +294,9 @@ QWidget *MainWindow::createProjectRowWidget(const QString &projectId) {
     // Event filter dipakai untuk memutihkan icon selama hover (lihat eventFilter())
     btnDelete->installEventFilter(this);
     connect(btnDelete, &QPushButton::clicked, this, [this, projectId, btnDelete]() {
-        showDeleteConfirmPopup(projectId, btnDelete);
+        showDeleteConfirmPopup(btnDelete, QString("Hapus project \"%1\"?").arg(projectId), [this, projectId]() {
+            handleDeleteProjectRequested(projectId);
+        });
     });
 
     auto *btnNewTask = new QPushButton(row);
@@ -334,14 +342,14 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
     return QMainWindow::eventFilter(watched, event);
 }
 
-void MainWindow::showDeleteConfirmPopup(const QString &projectId, QWidget *anchor) {
+void MainWindow::showDeleteConfirmPopup(QWidget *anchor, const QString &question, std::function<void()> onConfirm) {
     // Qt::Popup: otomatis tertutup saat klik di luar area-nya, persis tooltip
     auto *popup = new QFrame(anchor, Qt::Popup);
     popup->setObjectName("deleteConfirmPopup");
     popup->setAttribute(Qt::WA_DeleteOnClose);
 
-    auto *question = new QLabel(QString("Hapus project \"%1\"?").arg(projectId), popup);
-    question->setObjectName("deleteConfirmLabel");
+    auto *label = new QLabel(question, popup);
+    label->setObjectName("deleteConfirmLabel");
 
     auto *btnCancel = new QPushButton("Batal", popup);
     btnCancel->setObjectName("btnDeleteConfirmCancel");
@@ -361,18 +369,16 @@ void MainWindow::showDeleteConfirmPopup(const QString &projectId, QWidget *ancho
     auto *popupLayout = new QVBoxLayout(popup);
     popupLayout->setContentsMargins(10, 8, 10, 8);
     popupLayout->setSpacing(8);
-    popupLayout->addWidget(question);
+    popupLayout->addWidget(label);
     popupLayout->addLayout(actions);
 
     connect(btnCancel, &QPushButton::clicked, popup, &QWidget::close);
-    connect(btnYes, &QPushButton::clicked, this, [this, popup, projectId]() {
+    connect(btnYes, &QPushButton::clicked, this, [this, popup, onConfirm]() {
         popup->close();
-        // Dijadwalkan ke siklus event berikutnya: baris sidebar yang dibuang adalah
-        // induk popup ini, jadi menghapusnya selagi sinyal klik masih berjalan
+        // Dijadwalkan ke siklus event berikutnya: anchor yang dibuang (baris sidebar / kartu)
+        // adalah induk popup ini, jadi menghapusnya selagi sinyal klik masih berjalan
         // berarti membongkar widget yang sedang mengirim sinyal tersebut.
-        QTimer::singleShot(0, this, [this, projectId]() {
-            handleDeleteProjectRequested(projectId);
-        });
+        QTimer::singleShot(0, this, onConfirm);
     });
 
     popup->adjustSize();
@@ -651,17 +657,34 @@ void MainWindow::handleCloseProjectRequested(const QString &projectId) {
 void MainWindow::handleDeleteProjectRequested(const QString &projectId) {
     if (!m_swimlanes.contains(projectId)) return;
 
+    // Dibaca sebelum project dibuang: folder worktree task-nya ikut terhapus bersama folder project
+    const QString projectDir = m_fileManager->workingDirectory(projectId);
     removeProjectFromUi(projectId);
 
     // Beda dengan "Close": data di disk ikut dibuang supaya project tidak
     // muncul lagi saat aplikasi dibuka berikutnya.
     QString error;
-    if (!m_fileManager->deleteProject(projectId, &error)) {
+    const bool deleted = m_fileManager->deleteProject(projectId, &error);
+    // Catatan worktree yang foldernya baru saja hilang dibersihkan dari repository
+    if (TaskGit::looksLikeRepository(projectDir)) {
+        QThreadPool::globalInstance()->start([projectDir]() { TaskGit::prune(projectDir); });
+    }
+    if (!deleted) {
         ui->consolePanel->appendLog(QString("[DELETE WARN] %1: %2").arg(projectId, error));
         return;
     }
 
     ui->consolePanel->appendLog(QString("[SYSTEM] Project '%1' dihapus permanen.").arg(projectId));
+}
+
+void MainWindow::handleDeleteTaskRequested(const QString &taskId) {
+    if (!m_tasks.task(taskId)) return;
+
+    // Run yang masih antre/berjalan dihentikan dulu; hasilnya (cancelled) tidak lagi berarti apa-apa
+    m_swarm.cancel(taskId);
+
+    // Kartu, file sesi, dan folder lampiran dibuang oleh handleTaskRemoved()
+    m_tasks.removeTask(taskId);
 }
 
 void MainWindow::handleCommandSubmitted(const QString &command) {
@@ -688,10 +711,27 @@ KanbanCardWidget *MainWindow::createCard(SwimlaneWidget *swimlane, const TaskIte
         handleRunRequested(projectId, taskId);
     });
     connect(card, &KanbanCardWidget::cancelRequested, this, [this](const QString &taskId) {
+        // Git masih menyiapkan run: agent-nya tidak dijalankan setelah git selesai
+        if (m_gitBusy.contains(taskId)) {
+            m_gitCancelled.insert(taskId);
+            return;
+        }
         m_swarm.cancel(taskId);
     });
     connect(card, &KanbanCardWidget::editRequested, this, [this, projectId](const QString &taskId) {
         handleEditTaskRequested(projectId, taskId);
+    });
+    connect(card, &KanbanCardWidget::deleteRequested, this, [this, card](const QString &taskId) {
+        const std::optional<TaskItem> task = m_tasks.task(taskId);
+        if (!task) return;
+        QString question = QString("Hapus task \"%1\"?").arg(task->title);
+        if (m_swarm.state(taskId) != RunState::Idle) {
+            question += QStringLiteral("\nAgent-nya akan dihentikan.");
+        }
+        if (task->branch.hasWorktree()) {
+            question += QString("\nWorktree-nya ikut dihapus; branch %1 tetap ada.").arg(task->branch.name);
+        }
+        showDeleteConfirmPopup(card, question, [this, taskId]() { handleDeleteTaskRequested(taskId); });
     });
     // 📋 (menunggu review) dan klik biasa pada kartu sama-sama membuka drawer hasil agent
     connect(card, &KanbanCardWidget::reviewRequested, this, &MainWindow::openDrawer);
@@ -787,23 +827,100 @@ void MainWindow::handleTaskMoveRejected(const QString &taskId, const QString &fr
     ui->consolePanel->appendLog(RunLogFormatter::gateLine(*task, QString("tidak bisa dipindah: %1").arg(reason)));
 }
 
+void MainWindow::handleTaskRemoved(const TaskItem &task) {
+    if (m_drawer->taskId() == task.id) {
+        m_drawerAnimator->close();
+    }
+
+    auto *swimlane = m_swimlanes.value(task.projectId, nullptr);
+    if (KanbanCardWidget *card = swimlane ? swimlane->cardById(task.id) : nullptr) {
+        if (KanbanColumnWidget *column = swimlane->column(swimlane->stageOf(card))) {
+            column->removeCard(card);
+        }
+        card->hide();
+        card->deleteLater();
+    }
+    saveProject(task.projectId);
+
+    QString error;
+    if (!m_fileManager->deleteAttachments(task.projectId, task.id, &error)) {
+        ui->consolePanel->appendLog(QString("[DELETE WARN] %1/%2: %3").arg(task.projectId, task.title, error));
+    }
+    ui->consolePanel->appendLog(QString("[TASK DELETED] %1/%2 (%3)").arg(task.projectId, task.title, task.stage));
+    removeWorktreeLater(task);
+}
+
 void MainWindow::handleApproveRequested(const QString &taskId, const QString &note) {
     const std::optional<TaskItem> before = m_tasks.task(taskId);
     if (!before) return;
 
+    // QA pada task ber-branch: kodenya di-merge dulu, baru task maju ke DONE
+    const bool merges = TaskGit::isHandoffStage(before->stage) && !before->branch.isEmpty()
+                        && before->branch.mergedCommit.isEmpty() && before->state == TaskState::AwaitingReview;
+    if (merges) {
+        mergeThenApprove(*before, note);
+    } else {
+        approveTask(*before, note);
+    }
+}
+
+void MainWindow::approveTask(const TaskItem &before, const QString &note) {
     QString reason;
     m_userMoveInProgress = true;
-    const bool approved = m_tasks.approve(taskId, note, &reason);
+    const bool approved = m_tasks.approve(before.id, note, &reason);
     m_userMoveInProgress = false;
     if (!approved) {
-        ui->consolePanel->appendLog(RunLogFormatter::gateLine(*before, QString("gagal disetujui: %1").arg(reason)));
+        ui->consolePanel->appendLog(RunLogFormatter::gateLine(before, QString("gagal disetujui: %1").arg(reason)));
         return;
     }
-    const std::optional<TaskItem> after = m_tasks.task(taskId);
+    const std::optional<TaskItem> after = m_tasks.task(before.id);
     ui->consolePanel->appendLog(RunLogFormatter::gateLine(
-        *before, QString("%1 disetujui → %2%3")
-                     .arg(before->stage, after ? after->stage : QString(),
-                          note.isEmpty() ? QString() : QStringLiteral(" (dengan catatan)"))));
+        before, QString("%1 disetujui → %2%3")
+                    .arg(before.stage, after ? after->stage : QString(),
+                         note.isEmpty() ? QString() : QStringLiteral(" (dengan catatan)"))));
+}
+
+void MainWindow::mergeThenApprove(const TaskItem &task, const QString &note) {
+    if (m_gitBusy.contains(task.id)) return;
+
+    // Merge mengubah isi folder kerja project, jadi tidak boleh bersamaan dengan agent yang menulis di sana
+    const QString projectDir = m_fileManager->workingDirectory(task.projectId);
+    QString blocked;
+    if (projectDir.isEmpty() || !QDir(projectDir).exists()) {
+        blocked = QStringLiteral("folder kerja project belum dipilih atau sudah tidak ada");
+    } else if (m_swarm.isWriting(projectDir)) {
+        blocked = QStringLiteral("masih ada agent yang menulis di folder kerja project; tunggu sampai selesai");
+    }
+    if (!blocked.isEmpty()) {
+        ui->consolePanel->appendLog(RunLogFormatter::gateLine(task, QString("gagal disetujui: %1").arg(blocked)));
+        m_drawer->setGitActivity(task.id, blocked, false);
+        return;
+    }
+
+    m_gitBusy.insert(task.id);
+    const QString activity = QString("Merge %1 ke %2…").arg(task.branch.name, task.branch.base);
+    m_drawer->setGitActivity(task.id, activity, true);
+    ui->consolePanel->appendLog(RunLogFormatter::gitLine(task, activity));
+
+    auto *watcher = new QFutureWatcher<TaskGit::Result>(this);
+    connect(watcher, &QFutureWatcher<TaskGit::Result>::finished, this, [this, watcher, taskId = task.id, note]() {
+        watcher->deleteLater();
+        m_gitBusy.remove(taskId);
+        const TaskGit::Result result = watcher->result();
+        const std::optional<TaskItem> current = m_tasks.task(taskId);
+        if (!current) return;
+
+        logGitResult(*current, result);
+        if (!result.error.isEmpty()) {
+            ui->consolePanel->appendLog(RunLogFormatter::gateLine(*current, QString("gagal disetujui: %1").arg(result.error)));
+            m_drawer->setGitActivity(taskId, result.error, false);
+            return;
+        }
+        m_tasks.setBranch(taskId, result.branch);
+        m_drawer->setGitActivity(taskId, QString(), false);
+        approveTask(*m_tasks.task(taskId), note);
+    });
+    watcher->setFuture(QtConcurrent::run(&TaskGit::merge, projectDir, task));
 }
 
 void MainWindow::handleRevisionRequested(const QString &taskId, const QString &note) {
@@ -838,11 +955,13 @@ void MainWindow::handleDiffRequested(const QString &taskId) {
     const std::optional<TaskItem> task = m_tasks.task(taskId);
     if (!task) return;
 
-    const QString workingDirectory = m_fileManager->workingDirectory(task->projectId);
+    const QString workingDirectory = taskDirectory(*task);
     if (workingDirectory.isEmpty() || !QDir(workingDirectory).exists()) {
-        m_drawer->showDiff(taskId, WorkspaceDiff::failure(
-                                       QString("Folder kerja project %1 belum dipilih atau sudah tidak ada.")
-                                           .arg(task->projectId)));
+        const QString why = task->branch.hasWorktree()
+            ? QString("Worktree task ini sudah tidak ada (%1). Jalankan task lagi untuk memasangnya kembali.")
+                  .arg(QDir::toNativeSeparators(task->branch.worktree))
+            : QString("Folder kerja project %1 belum dipilih atau sudah tidak ada.").arg(task->projectId);
+        m_drawer->showDiff(taskId, WorkspaceDiff::failure(why));
         return;
     }
 
@@ -858,7 +977,9 @@ void MainWindow::handleDiffRequested(const QString &taskId) {
     });
     // Maintainability dan UML hanya tampil di stage peninjauan; stage lain cukup diff-nya
     const bool withMetrics = ResponseDrawer::showsCodeAnalysis(task->stage);
-    watcher->setFuture(QtConcurrent::run(&GitDiff::collect, workingDirectory, withMetrics));
+    // Task ber-branch dibanding titik cabangnya, jadi putaran yang sudah di-commit ikut terlihat
+    const QString base = task->branch.hasWorktree() ? task->branch.baseCommit : QString();
+    watcher->setFuture(QtConcurrent::run(&GitDiff::collect, workingDirectory, withMetrics, base));
 }
 
 void MainWindow::handleRunRequested(const QString &projectId, const QString &taskId) {
@@ -872,10 +993,92 @@ void MainWindow::handleRunRequested(const QString &projectId, const QString &tas
         ui->consolePanel->appendLog(RunLogFormatter::rejectedLine(task, "folder kerja belum dipilih"));
         return;
     }
+    if (m_gitBusy.contains(taskId)) {
+        ui->consolePanel->appendLog(RunLogFormatter::rejectedLine(task, "git untuk task ini masih berjalan"));
+        return;
+    }
 
+    // Git hanya disiapkan untuk run yang memang bisa jalan; sisanya ditolak coordinator seperti biasa.
+    // Folder tanpa .git dicek tanpa proses, jadi run di folder biasa tetap langsung jalan.
+    const StageProfile *profile = m_catalog.profile(task.stage);
+    const bool runnable = profile && profile->agent() && m_swarm.state(taskId) == RunState::Idle;
+    const bool usesBranch = !task.branch.isEmpty()
+                            || (TaskGit::startsBranch(task, m_catalog) && TaskGit::looksLikeRepository(workingDirectory));
+    const bool handoff = TaskGit::isHandoffStage(task.stage);
+    const bool attached = task.branch.hasWorktree() && QFileInfo::exists(task.branch.worktree);
+    if (!runnable || !usesBranch || (attached && !handoff)) {
+        startAgentRun(task, taskDirectory(task));
+        return;
+    }
+
+    // Branch/worktree dibuat atau dipasang lagi, dan di QA kodenya di-commit + push dulu. Checkout
+    // dan push bisa lambat, jadi git jalan di thread pool; selama itu kartu tampil antre.
+    m_gitBusy.insert(taskId);
+    m_gitCancelled.remove(taskId);
+    if (KanbanCardWidget *card = cardFor(task)) {
+        card->setRunState(RunState::Queued);
+    }
+    ui->consolePanel->appendLog(RunLogFormatter::gitLine(
+        task, handoff ? QStringLiteral("menyerahkan kode ke QA: commit + push…")
+                      : QStringLiteral("menyiapkan branch & worktree…")));
+
+    const QString worktreePath = m_fileManager->worktreeDirectory(projectId, taskId);
+    auto *watcher = new QFutureWatcher<TaskGit::Result>(this);
+    connect(watcher, &QFutureWatcher<TaskGit::Result>::finished, this, [this, watcher, task]() {
+        watcher->deleteLater();
+        finishRunPreparation(task, watcher->result());
+    });
+    watcher->setFuture(QtConcurrent::run([workingDirectory, worktreePath, task, handoff]() {
+        TaskGit::Result result = TaskGit::ensureWorktree(workingDirectory, worktreePath, task);
+        if (!result.error.isEmpty() || result.skipped || !handoff) {
+            return result;
+        }
+        TaskItem prepared = task;
+        prepared.branch = result.branch;
+        TaskGit::Result handed = TaskGit::handoff(prepared);
+        handed.log = result.log + handed.log;
+        handed.warnings = result.warnings + handed.warnings;
+        return handed;
+    }));
+}
+
+void MainWindow::finishRunPreparation(const TaskItem &requested, const TaskGit::Result &result) {
+    m_gitBusy.remove(requested.id);
+    const bool cancelled = m_gitCancelled.remove(requested.id);
+
+    const std::optional<TaskItem> current = m_tasks.task(requested.id);
+    if (!current) {
+        // Task dihapus selagi git berjalan: worktree yang barusan dibuat ikut dibuang
+        TaskItem removed = requested;
+        removed.branch = result.branch;
+        removeWorktreeLater(removed);
+        return;
+    }
+    logGitResult(*current, result);
+    if (result.branch != current->branch) {
+        m_tasks.setBranch(requested.id, result.branch);
+    }
+    const TaskItem task = *m_tasks.task(requested.id);
+
+    QString reason = result.error;
+    if (reason.isEmpty() && cancelled) {
+        reason = QStringLiteral("dibatalkan sebelum agent dijalankan");
+    }
+    if (!reason.isEmpty()) {
+        ui->consolePanel->appendLog(RunLogFormatter::rejectedLine(task, reason));
+    }
+    if (!reason.isEmpty() || !startAgentRun(task, taskDirectory(task))) {
+        if (KanbanCardWidget *card = cardFor(task)) {
+            card->setRunState(RunState::Idle);
+        }
+    }
+}
+
+bool MainWindow::startAgentRun(const TaskItem &task, const QString &workingDirectory) {
     // Foto, isi dokumen lampiran, dan folder referensi dibaca sekarang supaya run memakai isi terbaru
     const TaskMaterials materials = TaskAttachments::materials(
-        task, m_fileManager->attachmentDirectory(projectId, taskId), m_fileManager->referenceDirectories(projectId));
+        task, m_fileManager->attachmentDirectory(task.projectId, task.id),
+        m_fileManager->referenceDirectories(task.projectId));
     for (const QString &warning : materials.warnings) {
         ui->consolePanel->appendLog(RunLogFormatter::warningLine(task, warning));
     }
@@ -884,7 +1087,38 @@ void MainWindow::handleRunRequested(const QString &projectId, const QString &tas
     QString reason;
     if (!m_swarm.run(task, workingDirectory, materials, &reason)) {
         ui->consolePanel->appendLog(RunLogFormatter::rejectedLine(task, reason));
+        return false;
     }
+    return true;
+}
+
+QString MainWindow::taskDirectory(const TaskItem &task) const {
+    return task.branch.hasWorktree() ? task.branch.directory() : m_fileManager->workingDirectory(task.projectId);
+}
+
+void MainWindow::logGitResult(const TaskItem &task, const TaskGit::Result &result) {
+    for (const QString &line : result.log) {
+        ui->consolePanel->appendLog(RunLogFormatter::gitLine(task, line));
+    }
+    for (const QString &warning : result.warnings) {
+        ui->consolePanel->appendLog(RunLogFormatter::gitLine(task, QStringLiteral("peringatan: ") + warning));
+    }
+}
+
+void MainWindow::removeWorktreeLater(const TaskItem &task) {
+    if (!task.branch.hasWorktree()) return;
+
+    const QString projectDir = m_fileManager->workingDirectory(task.projectId);
+    auto *watcher = new QFutureWatcher<TaskGit::Result>(this);
+    connect(watcher, &QFutureWatcher<TaskGit::Result>::finished, this, [this, watcher, task]() {
+        watcher->deleteLater();
+        const TaskGit::Result result = watcher->result();
+        logGitResult(task, result);
+        if (!result.error.isEmpty()) {
+            ui->consolePanel->appendLog(RunLogFormatter::gitLine(task, QStringLiteral("gagal: ") + result.error));
+        }
+    });
+    watcher->setFuture(QtConcurrent::run(&TaskGit::removeWorktree, projectDir, task.branch));
 }
 
 QString MainWindow::ensureWorkingDirectory(const QString &projectId) {
@@ -1000,7 +1234,7 @@ void MainWindow::handleRunStarted(const TaskItem &task, const AgentLaunch &launc
 }
 
 void MainWindow::handleRunEvent(const TaskItem &task, const AgentEvent &event) {
-    const QString workingDirectory = m_fileManager->workingDirectory(task.projectId);
+    const QString workingDirectory = taskDirectory(task);
     const QString line = RunLogFormatter::eventLine(task, event, workingDirectory);
     if (!line.isEmpty()) {
         ui->consolePanel->appendLog(line);

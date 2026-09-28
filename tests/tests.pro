@@ -20,6 +20,7 @@ SOURCES += \
     ../DocumentText.cpp \
     ../EdgeMermaidRenderer.cpp \
     ../FileManager.cpp \
+    ../GitProcess.cpp \
     ../MermaidRenderer.cpp \
     ../PromptComposer.cpp \
     ../RunLogFormatter.cpp \
@@ -30,6 +31,7 @@ SOURCES += \
     ../StreamJsonParser.cpp \
     ../SwarmCoordinator.cpp \
     ../TaskAttachments.cpp \
+    ../TaskGit.cpp \
     ../TaskManager.cpp \
     ../TransitionPolicy.cpp \
     ../WorkspaceDiff.cpp \
@@ -37,6 +39,7 @@ SOURCES += \
 
 HEADERS += \
     FakeAgentRuntime.h \
+    GitSandbox.h \
     ../AgentDefinition.h \
     ../AgentRuntime.h \
     ../AgentTypes.h \
@@ -48,6 +51,7 @@ HEADERS += \
     ../DocumentText.h \
     ../EdgeMermaidRenderer.h \
     ../FileManager.h \
+    ../GitProcess.h \
     ../MermaidRenderer.h \
     ../PromptComposer.h \
     ../RunLogFormatter.h \
@@ -58,6 +62,7 @@ HEADERS += \
     ../StreamJsonParser.h \
     ../SwarmCoordinator.h \
     ../TaskAttachments.h \
+    ../TaskGit.h \
     ../TaskItem.h \
     ../TaskManager.h \
     ../TaskMaterials.h \

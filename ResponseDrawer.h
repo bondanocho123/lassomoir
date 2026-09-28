@@ -55,6 +55,10 @@ public:
     // Jawaban diffRequested; diabaikan bila drawer sudah beralih ke task atau stage lain
     void showDiff(const QString &taskId, const WorkspaceDiff &diff);
 
+    // Status git task yang sedang tampil (mis. "Merge … ke development…" atau alasan merge gagal).
+    // busy = tombol keputusan dinonaktifkan sampai git selesai. Teks kosong = sembunyikan.
+    void setGitActivity(const QString &taskId, const QString &text, bool busy);
+
     // Sinkronkan ikon/tooltip tombol expand dengan keadaan drawer (tanpa memancarkan sinyal)
     void setExpanded(bool expanded);
     bool isExpanded() const { return m_expanded; }
@@ -92,6 +96,7 @@ private:
 
     QLabel *m_title;
     QLabel *m_status;
+    QLabel *m_branch;          // branch git task; tersembunyi bila task tanpa branch
     QPushButton *m_expand;
     QTabBar *m_tabs;           // hanya tampil di stage yang menampilkan perubahan kode
     QStackedWidget *m_pages;   // [hasil agent | perubahan kode | maintainability | UML], mengikuti m_tabs
@@ -104,6 +109,7 @@ private:
     QWidget *m_reviewPanel;
     QPlainTextEdit *m_note;
     QLabel *m_noteHint;
+    QLabel *m_gitActivity;
     QPushButton *m_approve;
     QPushButton *m_revise;
     QWidget *m_sendBackRow;

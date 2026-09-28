@@ -55,6 +55,28 @@ struct StageRun {
     }
 };
 
+// Branch git milik task (lihat TaskGit): dibuat pada run pertamanya di stage yang menulis kode.
+// Kosong = task bekerja langsung di folder kerja project (bukan repository, atau task lama).
+struct TaskBranch {
+    QString name;          // "lassomoir/<id>-<judul>"
+    QString base;          // tujuan merge: branch yang aktif di folder kerja saat branch dibuat
+    QString baseCommit;    // titik cabang; pembanding tab "Perubahan kode"
+    QString worktree;      // akar git worktree task; kosong setelah di-merge
+    QString subdir;        // letak folder kerja project di dalam repository ("" = akarnya)
+    QString mergedCommit;  // commit merge di base; kosong selama belum di-merge
+
+    bool isEmpty() const { return name.isEmpty(); }
+    bool hasWorktree() const { return !worktree.isEmpty(); }
+    // Folder kerja agent: posisi yang sama dengan folder kerja project, tapi di dalam worktree
+    QString directory() const { return subdir.isEmpty() ? worktree : worktree + QLatin1Char('/') + subdir; }
+
+    bool operator==(const TaskBranch &other) const {
+        return name == other.name && base == other.base && baseCommit == other.baseCommit
+               && worktree == other.worktree && subdir == other.subdir && mergedCommit == other.mergedCommit;
+    }
+    bool operator!=(const TaskBranch &other) const { return !(*this == other); }
+};
+
 struct TaskItem {
     QString id;
     QString projectId; // "TTT", "spacewar"
@@ -70,6 +92,8 @@ struct TaskItem {
     // Model/effort pilihan pengguna per key stage; stage yang tidak ada di sini memakai
     // bawaan StageCatalog
     QHash<QString, AgentTuning> tuning;
+
+    TaskBranch branch;
 
     // Run terakhir di stage tertentu; nullptr bila belum pernah ada
     const StageRun *latestRun(const QString &stageKey) const {
@@ -90,6 +114,17 @@ struct TaskItem {
         int count = 0;
         for (const QString &stageKey : std::as_const(stages)) {
             if (latestRun(stageKey)->decision == ReviewDecision::Approved) {
+                ++count;
+            }
+        }
+        return count;
+    }
+
+    // Berapa kali task dikembalikan dari gate ke stage sebelumnya: angka pada badge "↺ N"
+    int sentBackCount() const {
+        int count = 0;
+        for (const StageRun &run : runs) {
+            if (run.decision == ReviewDecision::SentBack) {
                 ++count;
             }
         }
