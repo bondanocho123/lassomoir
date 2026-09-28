@@ -9,12 +9,18 @@
 
 #include <QInputDialog>
 #include <QDateTime>
+#include <QAbstractAnimation>
+#include <QEasingCurve>
+#include <QHBoxLayout>
+#include <QLabel>
 #include <QListWidget>
 #include <QListWidgetItem>
+#include <QPushButton>
 #include <QSignalBlocker>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QTimer>
+#include <QVariantAnimation>
 #include <QDir>
 #include <QPixmap>
 
@@ -23,6 +29,9 @@ MainWindow::MainWindow(QWidget *parent)
     ui(new Ui::MainWindow) {
     m_fileManager = new FileManager(this);
     ui->setupUi(this);
+
+    // Simpan lebar minimum asli sidebar (dari .ui) sebelum animasi bisa mengubahnya
+    m_sidebarMinWidth = ui->sidebarPanel->minimumWidth();
 
     // Logo menggantikan teks aplikasi di header
     QPixmap logo(":/logo.png");
@@ -34,7 +43,7 @@ MainWindow::MainWindow(QWidget *parent)
     ui->rootVerticalLayout->setStretch(1,1);
     QTimer::singleShot(0, this, [this]() {
         // sidebar : board : console, boleh disesuaikan
-        ui->mainSplitter->setSizes({220, 780, 350});
+        ui->mainSplitter->setSizes({180, 820, 350});
     });
 
     // Sambungkan input teks dari panel konsol kanan
@@ -130,17 +139,46 @@ void MainWindow::addSwimlane(const QString &projectId) {
 
     // Tangkap interaksi dari swimlane
     connect(swimlane, &SwimlaneWidget::cardMoved, this, &MainWindow::handleCardMoved);
-    connect(swimlane, &SwimlaneWidget::newTaskRequested, this, &MainWindow::handleNewTaskRequested);
     connect(swimlane, &SwimlaneWidget::closeProjectRequested, this, &MainWindow::handleCloseProjectRequested);
 
     // Board hanya menampilkan satu project; sisanya menganggur di dalam stack
     ui->boardStack->addWidget(swimlane);
 
-    // Daftarkan project ke sidebar
-    auto *item = new QListWidgetItem(projectId, ui->projectList);
+    // Daftarkan project ke sidebar: nama project (kiri) sejajar dengan tombol "+" (kanan)
+    auto *item = new QListWidgetItem(ui->projectList);
     item->setData(Qt::UserRole, projectId);
+    QWidget *rowWidget = createProjectRowWidget(projectId);
+    item->setSizeHint(rowWidget->sizeHint());
+    ui->projectList->setItemWidget(item, rowWidget);
 
     m_swimlanes.insert(projectId, swimlane);
+}
+
+QWidget *MainWindow::createProjectRowWidget(const QString &projectId) {
+    auto *row = new QWidget();
+    row->setObjectName("projectRow");
+
+    auto *label = new QLabel(projectId, row);
+    label->setObjectName("projectRowLabel");
+
+    auto *btnNewTask = new QPushButton("+", row);
+    btnNewTask->setObjectName("btnProjectNewTask");
+    btnNewTask->setFixedSize(18, 18);
+    btnNewTask->setCursor(Qt::PointingHandCursor);
+    btnNewTask->setToolTip("New Task untuk " + projectId);
+    connect(btnNewTask, &QPushButton::clicked, this, [this, projectId]() {
+        handleNewTaskRequested(projectId);
+    });
+
+    // justify-between: label menempel kiri, tombol "+" menempel kanan
+    auto *rowLayout = new QHBoxLayout(row);
+    rowLayout->setContentsMargins(6, 3, 4, 3);
+    rowLayout->setSpacing(4);
+    rowLayout->addWidget(label);
+    rowLayout->addStretch(1);
+    rowLayout->addWidget(btnNewTask);
+
+    return row;
 }
 
 int MainWindow::findProjectRow(const QString &projectId) const {
@@ -184,17 +222,72 @@ void MainWindow::handleProjectSelected(QListWidgetItem *current, QListWidgetItem
 }
 
 void MainWindow::toggleSidebar() {
-    if (ui->sidebarPanel->isVisible()) {
-        // Simpan lebar sebelum disembunyikan agar bisa dipulihkan persis
-        m_savedSplitterSizes = ui->mainSplitter->sizes();
-        ui->sidebarPanel->setVisible(false);
-        return;
+    animateSidebar(!ui->sidebarPanel->isVisible());
+}
+
+void MainWindow::animateSidebar(bool opening) {
+    // Interupsi animasi sebelumnya (mis. tombol diklik cepat berulang) agar
+    // sidebar melanjutkan geseran dari posisi saat ini, bukan melompat.
+    if (m_sidebarAnimation) {
+        m_sidebarAnimation->stop();
     }
 
-    ui->sidebarPanel->setVisible(true);
-    if (m_savedSplitterSizes.size() == ui->mainSplitter->count()) {
-        ui->mainSplitter->setSizes(m_savedSplitterSizes);
+    QList<int> sizes = ui->mainSplitter->sizes();
+    if (sizes.size() != ui->mainSplitter->count() || sizes.size() < 3) return;
+
+    // sidebar + board berbagi lebar ini; console tetap sebesar sebelumnya
+    const int sidebarBoardWidth = sizes.at(0) + sizes.at(1);
+    const int consoleWidth = sizes.at(2);
+
+    int startWidth;
+    int endWidth;
+
+    if (opening) {
+        if (m_savedSplitterSizes.size() != ui->mainSplitter->count()) {
+            m_savedSplitterSizes = {m_sidebarMinWidth + 40, sizes.at(1), sizes.at(2)};
+        }
+        startWidth = 0;
+        endWidth = qBound(m_sidebarMinWidth, m_savedSplitterSizes.at(0), ui->sidebarPanel->maximumWidth());
+
+        // Sementara lepas batas minimum agar splitter bisa mulai dari 0
+        ui->sidebarPanel->setMinimumWidth(0);
+        ui->sidebarPanel->setVisible(true);
+    } else {
+        m_savedSplitterSizes = sizes;
+        startWidth = sizes.at(0);
+        endWidth = 0;
+
+        ui->sidebarPanel->setMinimumWidth(0);
     }
+
+    auto *animation = new QVariantAnimation(this);
+    animation->setStartValue(startWidth);
+    animation->setEndValue(endWidth);
+    animation->setDuration(220);
+    animation->setEasingCurve(QEasingCurve::OutCubic);
+
+    connect(animation, &QVariantAnimation::valueChanged, this,
+            [this, sidebarBoardWidth, consoleWidth](const QVariant &value) {
+        const int sidebarWidth = value.toInt();
+        const int boardWidth = qMax(0, sidebarBoardWidth - sidebarWidth);
+        ui->mainSplitter->setSizes({sidebarWidth, boardWidth, consoleWidth});
+    });
+
+    connect(animation, &QVariantAnimation::finished, this, [this, opening]() {
+        // Kembalikan batas minimum asli setelah animasi selesai
+        ui->sidebarPanel->setMinimumWidth(m_sidebarMinWidth);
+
+        if (opening) {
+            if (m_savedSplitterSizes.size() == ui->mainSplitter->count()) {
+                ui->mainSplitter->setSizes(m_savedSplitterSizes);
+            }
+        } else {
+            ui->sidebarPanel->setVisible(false);
+        }
+    });
+
+    m_sidebarAnimation = animation;
+    animation->start(QAbstractAnimation::DeleteWhenStopped);
 }
 
 void MainWindow::handleCardMoved(const QString &projectId, KanbanCardWidget *card, const QString &targetStage, int targetIndex) {

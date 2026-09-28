@@ -4,8 +4,6 @@
 #include "ui_SwimlaneWidget.h"
 
 #include <QHBoxLayout>
-#include <QPushButton>
-#include <QResizeEvent>
 
 // Daftar nama 8 kolom pipeline kanban
 const QStringList PIPELINE_STAGES = {
@@ -13,29 +11,11 @@ const QStringList PIPELINE_STAGES = {
     "ARCHITECT", "HARDENER", "QA", "DONE"
 };
 
-namespace {
-// Ukuran dan jarak tombol New Task mengambang (FAB)
-constexpr int kFabSize = 52;
-// Margin cukup lebar agar FAB bebas dari scrollbar horizontal kolom
-constexpr int kFabMargin = 24;
-}
-
 SwimlaneWidget::SwimlaneWidget(const QString &projectId, QWidget *parent)
     : QWidget(parent),
     ui(new Ui::SwimlaneWidget),
-    m_projectId(projectId),
-    m_btnNewTask(nullptr) {
+    m_projectId(projectId) {
     ui->setupUi(this);
-
-    // Tombol New Task dibuat di kode (bukan di .ui) karena harus berada di luar
-    // layout agar bisa mengambang di atas kolom-kolom kanban.
-    m_btnNewTask = new QPushButton("+", this);
-    m_btnNewTask->setObjectName("btnNewTask");
-    m_btnNewTask->setFixedSize(kFabSize, kFabSize);
-    m_btnNewTask->setCursor(Qt::PointingHandCursor);
-    m_btnNewTask->setToolTip("New Task");
-    m_btnNewTask->raise();
-    connect(m_btnNewTask, &QPushButton::clicked, this, &SwimlaneWidget::onNewTaskClicked);
 
     if (ui->btnClose) {
         connect(ui->btnClose, &QPushButton::clicked, this, &SwimlaneWidget::onCloseClicked);
@@ -43,9 +23,6 @@ SwimlaneWidget::SwimlaneWidget(const QString &projectId, QWidget *parent)
 
     initializeColumns();
     setProjectTitle(m_projectId);
-
-    // resizeEvent belum tentu terpanggil sebelum widget tampil pertama kali
-    repositionNewTaskButton();
 }
 
 SwimlaneWidget::~SwimlaneWidget() {
@@ -56,20 +33,6 @@ void SwimlaneWidget::setProjectTitle(const QString &title) {
     if (ui->labelProjectTitle) {
         ui->labelProjectTitle->setText(title);
     }
-}
-
-void SwimlaneWidget::resizeEvent(QResizeEvent *event) {
-    QWidget::resizeEvent(event);
-    repositionNewTaskButton();
-}
-
-void SwimlaneWidget::repositionNewTaskButton() {
-    if (!m_btnNewTask) return;
-
-    // Clamp agar FAB tidak pernah terdorong keluar widget saat pane dipersempit
-    m_btnNewTask->move(qMax(0, width() - kFabSize - kFabMargin),
-                       qMax(0, height() - kFabSize - kFabMargin));
-    m_btnNewTask->raise();
 }
 
 void SwimlaneWidget::initializeColumns() {
@@ -108,10 +71,6 @@ void SwimlaneWidget::addCardToStage(const QString &stageName, KanbanCardWidget *
 
 KanbanColumnWidget* SwimlaneWidget::column(const QString &stageName) const {
     return m_columns.value(stageName, nullptr);
-}
-
-void SwimlaneWidget::onNewTaskClicked() {
-    emit newTaskRequested(m_projectId);
 }
 
 void SwimlaneWidget::onCloseClicked() {

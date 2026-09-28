@@ -79,26 +79,6 @@ QLabel#labelStageTitle {
     letter-spacing: 0.5px;
 }
 
-/* Tombol "New Task" mengambang (FAB) di pojok kanan bawah swimlane.
-   Ukuran 52x52 diset di SwimlaneWidget.cpp; radius 26 membuatnya bulat penuh. */
-QPushButton#btnNewTask {
-    background-color: #a9743f;
-    color: #ffffff;
-    border: 2px solid #f7f9f8;
-    border-radius: 26px;
-    padding: 0;
-    font-size: 24px;
-    font-weight: bold;
-}
-
-QPushButton#btnNewTask:hover {
-    background-color: #c08a52;
-}
-
-QPushButton#btnNewTask:pressed {
-    background-color: #8f5f31;
-}
-
 /* Tombol Header Swimlane - "Close" (outline navy) */
 QPushButton#btnClose {
     background-color: #ffffff;
@@ -195,23 +175,51 @@ QListWidget#projectList {
 }
 
 QListWidget#projectList::item {
-    color: #3d3730;
-    padding: 7px 10px;
+    padding: 0px;
     border-radius: 5px;
     margin-bottom: 2px;
 }
 
 QListWidget#projectList::item:hover {
     background-color: #f2e3d1;
-    color: #8a5a2f;
 }
 
 /* Kedua state dipakai agar project terpilih tetap coklat walau daftar kehilangan fokus */
 QListWidget#projectList::item:selected,
 QListWidget#projectList::item:selected:!active {
     background-color: #a9743f;
-    color: #ffffff;
+}
+
+/* Baris item project: label (kiri) sejajar justify-between dengan tombol "+" (kanan) */
+QWidget#projectRow {
+    background: transparent;
+}
+
+QLabel#projectRowLabel {
+    background: transparent;
+    color: #3d3730;
+    font-size: 12px;
+}
+
+QPushButton#btnProjectNewTask {
+    background-color: transparent;
+    color: #a9743f;
+    border: 1px solid #a9743f;
+    border-radius: 9px;
+    padding: 0;
+    font-size: 12px;
     font-weight: bold;
+}
+
+QPushButton#btnProjectNewTask:hover {
+    background-color: #a9743f;
+    color: #ffffff;
+}
+
+QPushButton#btnProjectNewTask:pressed {
+    background-color: #8f5f31;
+    border-color: #8f5f31;
+    color: #ffffff;
 }
 
 /* Tombol hamburger pengendali sidebar di top bar */
