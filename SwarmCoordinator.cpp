@@ -30,6 +30,11 @@ SwarmCoordinator::SwarmCoordinator(const StageCatalog &catalog, AgentRuntime &ru
 }
 
 bool SwarmCoordinator::run(const TaskItem &task, const QString &workingDirectory, QString *reason) {
+    return run(task, workingDirectory, TaskMaterials(), reason);
+}
+
+bool SwarmCoordinator::run(const TaskItem &task, const QString &workingDirectory, const TaskMaterials &materials,
+                           QString *reason) {
     auto reject = [reason](const QString &why) {
         if (reason) {
             *reason = why;
@@ -55,8 +60,10 @@ bool SwarmCoordinator::run(const TaskItem &task, const QString &workingDirectory
     AgentLaunch launch;
     launch.agent = *profile->agent();
     launch.agent.applyTuning(task.tuning.value(task.stage));
-    launch.prompt = m_composer.compose(task);
+    launch.prompt = m_composer.compose(task, materials);
     launch.workingDirectory = workingDirectory;
+    launch.readableDirectories = materials.readableDirectories();
+    launch.imagePaths = materials.imagePaths;
     swarm->submit(task, launch);
     return true;
 }

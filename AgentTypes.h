@@ -46,6 +46,8 @@ struct AgentLaunch {
     AgentDefinition agent;       // salinan definisi stage
     QString prompt;              // isi task, dikirim lewat stdin
     QString workingDirectory;    // folder kerja project = cwd proses agent
+    QStringList readableDirectories;   // folder di luar folder kerja yang boleh dibaca (referensi, lampiran)
+    QStringList imagePaths;      // foto lampiran, dikirim sebagai blok gambar bersama prompt
 };
 
 #endif // AGENTTYPES_H

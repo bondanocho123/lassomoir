@@ -45,6 +45,16 @@ public:
     QString workingDirectory(const QString &projectId) const;
     void setWorkingDirectory(const QString &projectId, const QString &dir);
 
+    // Folder referensi project: folder di luar folder kerja yang boleh dibaca agent (hanya baca).
+    // Sama seperti folder kerja, tersimpan di session.json (field root "referenceDirectories")
+    // pada save berikutnya.
+    QStringList referenceDirectories(const QString &projectId) const;
+    void setReferenceDirectories(const QString &projectId, const QStringList &dirs);
+
+    // Folder lampiran satu task: <AppData>/projects/<projectId>/attachments/<taskId>.
+    // Ikut terhapus bersama project di deleteProject().
+    QString attachmentDirectory(const QString &projectId, const QString &taskId) const;
+
 signals:
     void saveFailed(const QString &projectId, QString *reason);
 
@@ -57,6 +67,7 @@ private:
     QSet<QString> m_pendingProjects;
     QMap<QString, QList<TaskItem>> m_pendingSaves;
     QMap<QString, QString> m_workingDirs;   // projectId -> folder kerja agent
+    QMap<QString, QStringList> m_referenceDirs;   // projectId -> folder referensi
     QJsonObject taskToJson(TaskItem task);
 
     TaskItem taskFromJson(QJsonObject obj, QString *error = nullptr);

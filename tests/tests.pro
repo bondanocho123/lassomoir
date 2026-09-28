@@ -1,4 +1,6 @@
-QT += testlib gui
+# core-private: QZipReader/QZipWriter (lampiran .xlsx/.docx dan fixture-nya)
+QT += testlib gui core-private
+CONFIG += no_private_qt_headers_warning
 
 CONFIG += console c++17 testcase
 CONFIG -= app_bundle
@@ -15,6 +17,7 @@ SOURCES += \
     ../ClassDiagram.cpp \
     ../ClaudeCodeRuntime.cpp \
     ../CodeMetrics.cpp \
+    ../DocumentText.cpp \
     ../EdgeMermaidRenderer.cpp \
     ../FileManager.cpp \
     ../MermaidRenderer.cpp \
@@ -26,6 +29,7 @@ SOURCES += \
     ../StageSwarm.cpp \
     ../StreamJsonParser.cpp \
     ../SwarmCoordinator.cpp \
+    ../TaskAttachments.cpp \
     ../TaskManager.cpp \
     ../TransitionPolicy.cpp \
     ../WorkspaceDiff.cpp \
@@ -41,6 +45,7 @@ HEADERS += \
     ../ClassDiagram.h \
     ../ClaudeCodeRuntime.h \
     ../CodeMetrics.h \
+    ../DocumentText.h \
     ../EdgeMermaidRenderer.h \
     ../FileManager.h \
     ../MermaidRenderer.h \
@@ -52,8 +57,10 @@ HEADERS += \
     ../StageSwarm.h \
     ../StreamJsonParser.h \
     ../SwarmCoordinator.h \
+    ../TaskAttachments.h \
     ../TaskItem.h \
     ../TaskManager.h \
+    ../TaskMaterials.h \
     ../TransitionPolicy.h \
     ../WorkspaceDiff.h \
     ../WorkspaceGuard.h

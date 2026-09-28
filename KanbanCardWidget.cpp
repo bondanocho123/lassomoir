@@ -9,6 +9,37 @@
 #include <QPixmap>
 #include <QStyle>
 
+namespace {
+
+constexpr int kSummaryLines = 3;
+constexpr int kSummaryChars = 140;
+
+// Subtext bisa berupa prompt panjang; kartu cukup menampilkan beberapa baris pertamanya
+QString summaryOf(const QString &text, bool *truncated) {
+    QStringList lines;
+    *truncated = false;
+    const QStringList all = text.split(QLatin1Char('\n'));
+    for (const QString &raw : all) {
+        const QString line = raw.trimmed();
+        if (line.isEmpty()) {
+            continue;
+        }
+        if (lines.size() == kSummaryLines) {
+            *truncated = true;
+            break;
+        }
+        lines.append(line);
+    }
+    QString summary = lines.join(QLatin1Char('\n'));
+    if (summary.size() > kSummaryChars) {
+        summary = summary.left(kSummaryChars - 1).trimmed();
+        *truncated = true;
+    }
+    return *truncated ? summary + QChar(0x2026) : summary;   // …
+}
+
+}
+
 KanbanCardWidget::KanbanCardWidget(QWidget *parent) : QWidget(parent), ui(new Ui::KanbanCardWidget){
     ui->setupUi(this);
 
@@ -24,6 +55,7 @@ KanbanCardWidget::KanbanCardWidget(QWidget *parent) : QWidget(parent), ui(new Ui
 
     connect(ui->btnCardRun, &QPushButton::clicked, this, &KanbanCardWidget::onRunButtonClicked);
     refreshRunButton();
+    setAttachments(0, 0);
 }
 
 void KanbanCardWidget::setRunEnabled(bool enabled) {
@@ -143,9 +175,25 @@ void KanbanCardWidget::updateUI() {
     }
 
     if (ui->labelSubtext) {
-        ui->labelSubtext->setText(m_subtext);
-        ui->labelSubtext->setVisible(!m_subtext.isEmpty());
+        bool truncated = false;
+        ui->labelSubtext->setText(summaryOf(m_subtext, &truncated));
+        // Teks lengkap tetap bisa dibaca lewat tooltip; klik dua kali untuk mengubahnya
+        ui->labelSubtext->setToolTip(truncated ? m_subtext.trimmed() : QString());
+        ui->labelSubtext->setVisible(!m_subtext.trimmed().isEmpty());
     }
+}
+
+void KanbanCardWidget::setAttachments(int images, int documents, const QStringList &names) {
+    QStringList parts;
+    if (images > 0) {
+        parts.append(QStringLiteral("%1 foto").arg(images));
+    }
+    if (documents > 0) {
+        parts.append(QStringLiteral("%1 file").arg(documents));
+    }
+    ui->labelAttachments->setText(parts.join(QStringLiteral(" · ")));
+    ui->labelAttachments->setToolTip(names.join(QLatin1Char('\n')));
+    ui->labelAttachments->setVisible(!parts.isEmpty());
 }
 
 

@@ -33,6 +33,10 @@ public:
     QString subtext() const { return m_subtext; }
     QString badge() const { return m_badge; }
 
+    // Penanda lampiran di bawah subtext ("2 foto · 1 file"); tersembunyi bila keduanya 0.
+    // names = nama file lampiran, untuk tooltip.
+    void setAttachments(int images, int documents, const QStringList &names = QStringList());
+
     // Diatur kolom: tombol ▶ hanya aktif di stage yang punya agent
     void setRunEnabled(bool enabled);
 

@@ -50,7 +50,7 @@ void ClaudeCodeSession::start() {
 
     m_process = new QProcess(this);
     m_process->setProgram(m_program);
-    m_process->setArguments(ClaudeCli::arguments(m_launch.agent));
+    m_process->setArguments(ClaudeCli::arguments(m_launch));
     m_process->setWorkingDirectory(m_launch.workingDirectory);
 
     connect(m_process, &QProcess::started, this, &ClaudeCodeSession::onStarted);
@@ -82,8 +82,10 @@ bool ClaudeCodeSession::isRunning() const {
 }
 
 void ClaudeCodeSession::onStarted() {
-    // Prompt lewat stdin: aman dari masalah quoting dan batas panjang command line
-    m_process->write(m_launch.prompt.toUtf8());
+    // Prompt lewat stdin: aman dari masalah quoting dan batas panjang command line.
+    // Task berfoto dikirim sebagai satu pesan stream-json supaya fotonya ikut sebagai blok gambar.
+    m_process->write(m_launch.imagePaths.isEmpty() ? m_launch.prompt.toUtf8()
+                                                   : ClaudeCli::userMessage(m_launch.prompt, m_launch.imagePaths));
     m_process->closeWriteChannel();
 }
 

@@ -1,4 +1,5 @@
-QT += widgets svg testlib concurrent
+QT += widgets svg testlib concurrent core-private
+CONFIG += no_private_qt_headers_warning
 
 CONFIG += console c++17 testcase
 CONFIG -= app_bundle
@@ -19,6 +20,7 @@ SOURCES += \
     ../../CodeMetrics.cpp \
     ../../ConsolePanelWidget.cpp \
     ../../DiffView.cpp \
+    ../../DocumentText.cpp \
     ../../FileManager.cpp \
     ../../KanbanCardWidget.cpp \
     ../../KanbanColumnWidget.cpp \
@@ -27,6 +29,7 @@ SOURCES += \
     ../../MermaidRenderer.cpp \
     ../../NewTaskDialog.cpp \
     ../../PromptComposer.cpp \
+    ../../PromptEditor.cpp \
     ../../ResponseDrawer.cpp \
     ../../RunLogFormatter.cpp \
     ../../SourceTokens.cpp \
@@ -37,6 +40,7 @@ SOURCES += \
     ../../StreamJsonParser.cpp \
     ../../SwarmCoordinator.cpp \
     ../../SwimlaneWidget.cpp \
+    ../../TaskAttachments.cpp \
     ../../TaskManager.cpp \
     ../../TransitionPolicy.cpp \
     ../../WorkspaceDiff.cpp \
@@ -55,6 +59,7 @@ HEADERS += \
     ../../CodeMetrics.h \
     ../../ConsolePanelWidget.h \
     ../../DiffView.h \
+    ../../DocumentText.h \
     ../../FileManager.h \
     ../../KanbanCardWidget.h \
     ../../KanbanColumnWidget.h \
@@ -63,6 +68,7 @@ HEADERS += \
     ../../MermaidRenderer.h \
     ../../NewTaskDialog.h \
     ../../PromptComposer.h \
+    ../../PromptEditor.h \
     ../../ResponseDrawer.h \
     ../../RunLogFormatter.h \
     ../../SourceTokens.h \
@@ -73,8 +79,10 @@ HEADERS += \
     ../../StreamJsonParser.h \
     ../../SwarmCoordinator.h \
     ../../SwimlaneWidget.h \
+    ../../TaskAttachments.h \
     ../../TaskItem.h \
     ../../TaskManager.h \
+    ../../TaskMaterials.h \
     ../../TransitionPolicy.h \
     ../../WorkspaceDiff.h \
     ../../WorkspaceGuard.h \

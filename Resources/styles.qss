@@ -105,9 +105,10 @@ QLabel#labelStageTitle {
     letter-spacing: 0.5px;
 }
 
-/* Tombol Header Swimlane - "Close" dan folder kerja agent (outline navy) */
+/* Tombol Header Swimlane - "Close", folder kerja agent, dan folder referensi (outline navy) */
 QPushButton#btnClose,
-QPushButton#btnWorkingDir {
+QPushButton#btnWorkingDir,
+QPushButton#btnReferenceDirs {
     background-color: #ffffff;
     color: #33517a;
     border: 1px solid #b9c6da;
@@ -118,14 +119,23 @@ QPushButton#btnWorkingDir {
 }
 
 QPushButton#btnClose:hover,
-QPushButton#btnWorkingDir:hover {
+QPushButton#btnWorkingDir:hover,
+QPushButton#btnReferenceDirs:hover {
     background-color: #eef2f8;
     border: 1px solid #33517a;
 }
 
 QPushButton#btnClose:pressed,
-QPushButton#btnWorkingDir:pressed {
+QPushButton#btnWorkingDir:pressed,
+QPushButton#btnReferenceDirs:pressed {
     background-color: #dfe7f2;
+}
+
+/* Penanda lampiran di kartu: "2 foto - 1 file" */
+QLabel#labelAttachments {
+    font-size: 10px;
+    font-weight: bold;
+    color: #33517a;
 }
 
 /* Scrollbar ramping selaras palet */
@@ -248,6 +258,73 @@ QPushButton#btnProjectDelete:hover {
 QPushButton#btnProjectNewTask:pressed,
 QPushButton#btnProjectDelete:pressed {
     background-color: #24201b;
+}
+
+/* ============ Popup folder referensi (header swimlane) ============ */
+
+QFrame#referencePopup {
+    background-color: #ffffff;
+    border: 1px solid #e2d5c1;
+    border-radius: 8px;
+}
+
+QLabel#referencePopupTitle {
+    background: transparent;
+    font-size: 10px;
+    font-weight: bold;
+    color: #a9743f;
+    letter-spacing: 0.5px;
+}
+
+QLabel#referencePopupHint,
+QLabel#referencePopupEmpty {
+    background: transparent;
+    color: #8a7f70;
+    font-size: 11px;
+}
+
+QWidget#referencePopupContent,
+QWidget#referenceRow {
+    background: transparent;
+}
+
+QLabel#referenceRowName {
+    background: transparent;
+    color: #33517a;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+QLabel#referenceRowPath {
+    background: transparent;
+    color: #8a7f70;
+    font-size: 10px;
+}
+
+QToolButton#btnReferenceRemove {
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    padding: 3px;
+}
+
+QToolButton#btnReferenceRemove:hover {
+    background-color: #f2e3d1;
+}
+
+QPushButton#btnReferenceAdd {
+    background-color: #ffffff;
+    color: #33517a;
+    border: 1px solid #b9c6da;
+    border-radius: 5px;
+    padding: 4px 12px;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+QPushButton#btnReferenceAdd:hover {
+    background-color: #eef2f8;
+    border: 1px solid #33517a;
 }
 
 /* ============ Popup konfirmasi hapus project ============ */
@@ -432,6 +509,184 @@ QLabel#taskFormApprovalsValue {
 QLabel#taskFormPreviewCaption {
     color: #8a7f70;
     font-size: 10px;
+}
+
+/* Kotak prompt (PromptEditor): teks + thumbnail foto + daftar dokumen dalam satu bingkai.
+   Property "focused" diatur PromptEditor saat kotak teksnya fokus. */
+QFrame#taskPromptBox {
+    background-color: #ffffff;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+}
+
+QFrame#taskPromptBox[focused="true"] {
+    border: 1px solid #a9743f;
+}
+
+QPlainTextEdit#taskFormPrompt {
+    background: transparent;
+    border: none;
+    padding: 4px 6px;
+    font-family: "Segoe UI", sans-serif;
+    font-size: 12px;
+    color: #111827;
+}
+
+QScrollArea#promptImageStrip,
+QWidget#promptImageRow,
+QWidget#promptDocumentList {
+    background: transparent;
+    border: none;
+}
+
+QToolButton#promptThumb {
+    background-color: #fbf8f3;
+    border: 1px solid #e2d5c1;
+    border-radius: 6px;
+    padding: 0;
+}
+
+QToolButton#promptThumb:hover {
+    border: 1px solid #a9743f;
+}
+
+/* Tombol x di pojok thumbnail: bulatan gelap agar terbaca di atas foto apa pun */
+QToolButton#btnThumbRemove {
+    background-color: rgba(61, 55, 48, 210);
+    border: none;
+    border-radius: 9px;
+    padding: 0;
+}
+
+QToolButton#btnThumbRemove:hover {
+    background-color: #9b2c1f;
+}
+
+QFrame#promptDocument {
+    background-color: #fbf8f3;
+    border: 1px solid #e7ddcd;
+    border-radius: 4px;
+}
+
+/* Label jenis dokumen: hijau Excel, biru Word, coklat CSV */
+QLabel#promptDocumentKind {
+    background-color: #1f7a4d;
+    color: #ffffff;
+    font-family: "Segoe UI", sans-serif;
+    font-size: 9px;
+    font-weight: bold;
+    border-radius: 3px;
+    padding: 1px 4px;
+    min-width: 28px;
+}
+
+QLabel#promptDocumentKind[kind="word"] {
+    background-color: #2b5797;
+}
+
+QLabel#promptDocumentKind[kind="csv"] {
+    background-color: #8a5a2f;
+}
+
+QLabel#promptDocumentName {
+    font-size: 11px;
+    color: #3d3730;
+}
+
+QLabel#promptDocumentSize {
+    font-size: 10px;
+    color: #8a7f70;
+}
+
+QToolButton#btnDocumentRemove {
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    padding: 3px;
+}
+
+QToolButton#btnDocumentRemove:hover {
+    background-color: #f2e3d1;
+}
+
+QFrame#promptToolbar {
+    background: transparent;
+    border: none;
+    border-top: 1px solid #efe7da;
+}
+
+QPushButton#btnPromptAddImage,
+QPushButton#btnPromptAddDocument {
+    background: transparent;
+    color: #33517a;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 3px 8px;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+QPushButton#btnPromptAddImage:hover,
+QPushButton#btnPromptAddDocument:hover {
+    background-color: #eef2f8;
+    border: 1px solid #b9c6da;
+}
+
+QLabel#promptHint {
+    color: #8a7f70;
+    font-size: 10px;
+}
+
+QLabel#promptHint[error="true"] {
+    color: #9b2c1f;
+}
+
+/* Pratinjau foto ukuran penuh */
+QDialog#imagePreviewDialog {
+    background-color: #fbf8f3;
+}
+
+QLabel#imagePreview {
+    background-color: #ffffff;
+    border: 1px solid #e7ddcd;
+    border-radius: 6px;
+    padding: 6px;
+}
+
+QLabel#imagePreviewInfo {
+    color: #8a7f70;
+    font-size: 11px;
+}
+
+QPushButton#btnPreviewRemove,
+QPushButton#btnPreviewClose {
+    border-radius: 5px;
+    padding: 6px 16px;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+QPushButton#btnPreviewRemove {
+    background-color: #ffffff;
+    color: #9b2c1f;
+    border: 1px solid #e2c4bd;
+}
+
+QPushButton#btnPreviewRemove:hover {
+    background-color: #9b2c1f;
+    color: #ffffff;
+    border: 1px solid #9b2c1f;
+}
+
+QPushButton#btnPreviewClose {
+    background-color: #a9743f;
+    color: #ffffff;
+    border: 1px solid #a9743f;
+}
+
+QPushButton#btnPreviewClose:hover {
+    background-color: #3d3730;
+    border: 1px solid #3d3730;
 }
 
 QPushButton#btnTaskFormCancel {

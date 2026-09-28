@@ -7,8 +7,10 @@
 #include <QMap>
 #include <QString>
 
+#include "TaskAttachments.h"
 #include "TaskItem.h"
 
+class PromptEditor;
 class StageCatalog;
 class QLineEdit;
 class QComboBox;
@@ -26,14 +28,20 @@ public:
     // catalog: urutan stage dan bawaan model/effort tiap stage, jadi pilihan di combo selalu valid
     NewTaskDialog(const QString &projectId, const StageCatalog &catalog, QWidget *parent = nullptr);
 
-    // Mode edit: form terisi dari task yang ada. Stage dikunci karena perpindahan stage
-    // hanya lewat drag di board (yang lolos gerbang StageProfile), bukan lewat form.
-    NewTaskDialog(const TaskItem &task, const StageCatalog &catalog, QWidget *parent = nullptr);
+    // Mode edit: form terisi dari task yang ada, termasuk lampiran di attachmentDirectory.
+    // Stage dikunci karena perpindahan stage hanya lewat drag di board (yang lolos gerbang
+    // StageProfile), bukan lewat form.
+    NewTaskDialog(const TaskItem &task, const QString &attachmentDirectory, const StageCatalog &catalog,
+                  QWidget *parent = nullptr);
 
     // Hanya valid dipanggil setelah exec() == QDialog::Accepted.
     // Mode edit: id, projectId, dan field yang tidak ada di form (status, riwayat run)
-    // dibawa dari task asal.
+    // dibawa dari task asal. attachments masih berisi nama lampiran lama: lampiran di form
+    // disimpan pemanggil lewat TaskAttachments::save(attachments()).
     TaskItem resultTask() const;
+
+    // Foto dan dokumen di kotak prompt, termasuk yang baru ditambahkan dan belum tersimpan
+    QList<TaskAttachments::Draft> attachments() const;
 
 private slots:
     void updateCreateButtonEnabled();
@@ -46,7 +54,7 @@ private:
     bool m_editing = false;
 
     QLineEdit *m_titleInput;
-    QLineEdit *m_subtextInput;
+    PromptEditor *m_promptInput;   // subtext multi-baris + foto & dokumen lampiran
     QComboBox *m_categoryInput;
     QComboBox *m_stageInput;
     QPushButton *m_btnCreate;

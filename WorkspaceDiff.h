@@ -64,8 +64,10 @@ namespace GitDiff {
 // Unified diff keluaran `git diff` -> daftar file. Tidak menjalankan proses apa pun.
 QList<FileDiff> parse(const QString &patch);
 
-// Membaca perubahan lewat git (memblokir sampai git selesai): panggil di luar thread GUI
-WorkspaceDiff collect(const QString &workingDirectory);
+// Membaca perubahan lewat git (memblokir sampai git selesai): panggil di luar thread GUI.
+// withMetrics = false melewati pengukuran kode (Maintainability, tipe C# seluruh project)
+// bila yang ditampilkan hanya diff-nya.
+WorkspaceDiff collect(const QString &workingDirectory, bool withMetrics = true);
 
 }
 

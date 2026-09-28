@@ -5,6 +5,7 @@
 
 #include "AgentTypes.h"
 #include "TaskItem.h"
+#include "TaskMaterials.h"
 #include "WorkspaceGuard.h"
 
 #include <QList>
@@ -29,6 +30,10 @@ public:
     // Kembalikan false dan isi *reason bila ditolak: stage tanpa agent, task sudah
     // berjalan/antre, runtime tidak tersedia, atau folder kerja tidak ada
     bool run(const TaskItem &task, const QString &workingDirectory, QString *reason = nullptr);
+    // Sama, dengan lampiran dan folder referensi yang sudah dibaca (TaskAttachments::materials):
+    // isinya masuk prompt, fotonya ikut sebagai blok gambar, foldernya boleh dibaca agent
+    bool run(const TaskItem &task, const QString &workingDirectory, const TaskMaterials &materials,
+             QString *reason = nullptr);
 
     void cancel(const QString &taskId);
 

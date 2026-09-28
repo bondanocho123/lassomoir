@@ -4,7 +4,9 @@
 #pragma once
 
 #include <QMap>
+#include <QPointer>
 #include <QString>
+#include <QStringList>
 #include <QWidget>
 
 namespace Ui {
@@ -13,6 +15,7 @@ class SwimlaneWidget;
 
 class KanbanColumnWidget;
 class KanbanCardWidget;
+class QFrame;
 class StageCatalog;
 
 class SwimlaneWidget : public QWidget
@@ -30,6 +33,14 @@ public:
     // Tampilkan folder kerja project di tombol header (kosong = belum dipilih)
     void setWorkingDirectory(const QString &path);
 
+    // Folder referensi project (hanya dibaca agent): jumlahnya di tombol "Referensi", daftarnya
+    // di popup tombol itu. Popup yang sedang terbuka ikut diperbarui.
+    void setReferenceDirectories(const QStringList &dirs);
+    QStringList referenceDirectories() const { return m_referenceDirs; }
+
+    // Popup daftar folder referensi di bawah tombol "Referensi": hapus per folder, tambah folder
+    void showReferencePopup();
+
     // Manajemen kartu dalam swimlane
     void addCardToStage(const QString &stageName, KanbanCardWidget *card);
     KanbanColumnWidget *column(const QString &stageName) const;
@@ -45,6 +56,9 @@ signals:
     void closeProjectRequested(const QString &projectId);
     // Tombol folder kerja di header diklik
     void workingDirectoryChangeRequested(const QString &projectId);
+    // Dari popup folder referensi: "Tambah folder…" dan tombol × per folder
+    void referenceDirectoryAddRequested(const QString &projectId);
+    void referenceDirectoryRemoveRequested(const QString &projectId, const QString &dir);
     void cardMoved(const QString &projectId,
                    KanbanCardWidget *card,
                    const QString &targetStage,
@@ -57,10 +71,16 @@ private slots:
 private:
     Ui::SwimlaneWidget *ui;
     QString m_projectId;
+    QStringList m_referenceDirs;
+    QPointer<QFrame> m_referencePopup;
 
     // Mapping nama stage ke pointer kolom
     QMap<QString, KanbanColumnWidget *> m_columns;
 
     void initializeColumns(const StageCatalog &catalog);
+    // Isi popup folder referensi (judul, baris per folder, tombol tambah) dari m_referenceDirs
+    void fillReferencePopup(QFrame *popup);
+    // Ukur ulang popup, lalu gantung di bawah tombol "Referensi" dan jaga tetap di dalam layar
+    void placeReferencePopup(QFrame *popup);
 };
 #endif // SWIMLANEWIDGET_H

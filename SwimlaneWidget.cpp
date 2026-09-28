@@ -5,8 +5,16 @@
 #include "ui_SwimlaneWidget.h"
 
 #include <QDir>
+#include <QFrame>
+#include <QGuiApplication>
 #include <QIcon>
 #include <QHBoxLayout>
+#include <QLabel>
+#include <QPushButton>
+#include <QScreen>
+#include <QTimer>
+#include <QToolButton>
+#include <QVBoxLayout>
 
 SwimlaneWidget::SwimlaneWidget(const QString &projectId, const StageCatalog &catalog, QWidget *parent)
     : QWidget(parent),
@@ -25,10 +33,14 @@ SwimlaneWidget::SwimlaneWidget(const QString &projectId, const StageCatalog &cat
     connect(ui->btnWorkingDir, &QPushButton::clicked, this, [this]() {
         emit workingDirectoryChangeRequested(m_projectId);
     });
+    ui->btnReferenceDirs->setIconSize(QSize(iconSide, iconSide));
+    ui->btnReferenceDirs->setIcon(QIcon(":/icons/folders.svg"));
+    connect(ui->btnReferenceDirs, &QPushButton::clicked, this, &SwimlaneWidget::showReferencePopup);
 
     initializeColumns(catalog);
     setProjectTitle(m_projectId);
     setWorkingDirectory(QString());
+    setReferenceDirectories(QStringList());
 }
 
 SwimlaneWidget::~SwimlaneWidget() {
@@ -54,6 +66,158 @@ void SwimlaneWidget::setWorkingDirectory(const QString &path) {
     ui->btnWorkingDir->setText(name.isEmpty() ? path : name);
     ui->btnWorkingDir->setToolTip(QString("Folder kerja agent: %1\nKlik untuk mengganti")
                                       .arg(QDir::toNativeSeparators(path)));
+}
+
+void SwimlaneWidget::setReferenceDirectories(const QStringList &dirs) {
+    m_referenceDirs = dirs;
+    ui->btnReferenceDirs->setText(dirs.isEmpty() ? QStringLiteral("Referensi")
+                                                 : QStringLiteral("Referensi · %1").arg(dirs.size()));
+    QStringList tip = {QStringLiteral("Folder referensi: dibaca agent sebagai acuan, isinya tidak diubah")};
+    for (const QString &dir : dirs) {
+        tip.append(QStringLiteral("• %1").arg(QDir::toNativeSeparators(dir)));
+    }
+    if (dirs.isEmpty()) {
+        tip.append(QStringLiteral("Klik untuk menambah folder di luar folder kerja"));
+    }
+    ui->btnReferenceDirs->setToolTip(tip.join(QLatin1Char('\n')));
+
+    // Popup yang terbuka (mis. tombol × di dalamnya baru diklik) diisi ulang di tempat. Menutup lalu
+    // membuka popup baru tidak dipakai: aktivasi ulang jendela utama ikut menutup popup baru itu.
+    if (m_referencePopup && m_referencePopup->isVisible()) {
+        fillReferencePopup(m_referencePopup);
+        placeReferencePopup(m_referencePopup);
+    }
+}
+
+void SwimlaneWidget::showReferencePopup() {
+    QPushButton *anchor = ui->btnReferenceDirs;
+    if (!anchor->isVisible()) {
+        return;
+    }
+    if (m_referencePopup) {
+        m_referencePopup->close();
+    }
+
+    // Qt::Popup: tertutup sendiri saat klik di luar, seperti popup konfirmasi hapus project
+    auto *popup = new QFrame(anchor, Qt::Popup);
+    popup->setObjectName("referencePopup");
+    popup->setAttribute(Qt::WA_DeleteOnClose);
+    popup->setMinimumWidth(320);
+    auto *layout = new QVBoxLayout(popup);
+    layout->setContentsMargins(12, 10, 12, 10);
+    layout->setSpacing(6);
+    m_referencePopup = popup;
+
+    fillReferencePopup(popup);
+    placeReferencePopup(popup);
+    popup->show();
+}
+
+void SwimlaneWidget::fillReferencePopup(QFrame *popup) {
+    // Isi lama (berisi tombol × yang mungkin sedang mengirim sinyal klik) disembunyikan dan dihapus
+    // belakangan. Isi baru dirakit dalam wadah yang belum tampil lalu ditampilkan sekaligus, supaya
+    // ukurannya sudah benar saat popup diukur ulang.
+    QLayout *popupLayout = popup->layout();
+    while (QLayoutItem *item = popupLayout->takeAt(0)) {
+        if (QWidget *old = item->widget()) {
+            old->hide();
+            old->deleteLater();
+        }
+        delete item;
+    }
+    auto *content = new QWidget(popup);
+    content->setObjectName("referencePopupContent");
+    auto *layout = new QVBoxLayout(content);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(6);
+
+    auto *title = new QLabel(QStringLiteral("FOLDER REFERENSI"), content);
+    title->setObjectName("referencePopupTitle");
+    auto *hint = new QLabel(QStringLiteral("Folder di luar folder kerja yang boleh dibaca agent sebagai acuan. "
+                                           "Agent tidak bisa mengubah isinya."),
+                            content);
+    hint->setObjectName("referencePopupHint");
+    hint->setWordWrap(true);
+    layout->addWidget(title);
+    layout->addWidget(hint);
+
+    if (m_referenceDirs.isEmpty()) {
+        auto *empty = new QLabel(QStringLiteral("Belum ada folder referensi."), content);
+        empty->setObjectName("referencePopupEmpty");
+        layout->addWidget(empty);
+    }
+    for (const QString &dir : std::as_const(m_referenceDirs)) {
+        auto *row = new QWidget(content);
+        row->setObjectName("referenceRow");
+
+        auto *icon = new QLabel(row);
+        icon->setPixmap(QIcon(":/icons/folder.svg").pixmap(QSize(14, 14)));
+        const QString name = QDir(dir).dirName();
+        auto *label = new QLabel(name.isEmpty() ? QDir::toNativeSeparators(dir) : name, row);
+        label->setObjectName("referenceRowName");
+        auto *path = new QLabel(row);
+        path->setObjectName("referenceRowPath");
+        path->ensurePolished();
+        path->setText(path->fontMetrics().elidedText(QDir::toNativeSeparators(dir), Qt::ElideMiddle, 280));
+        path->setToolTip(QDir::toNativeSeparators(dir));
+
+        auto *remove = new QToolButton(row);
+        remove->setObjectName("btnReferenceRemove");
+        remove->setIcon(QIcon(":/icons/close.svg"));
+        remove->setIconSize(QSize(10, 10));
+        remove->setCursor(Qt::PointingHandCursor);
+        remove->setToolTip(QStringLiteral("Hapus dari folder referensi"));
+        connect(remove, &QToolButton::clicked, this, [this, dir]() {
+            emit referenceDirectoryRemoveRequested(m_projectId, dir);
+        });
+
+        auto *text = new QVBoxLayout();
+        text->setSpacing(0);
+        text->addWidget(label);
+        text->addWidget(path);
+        auto *rowLayout = new QHBoxLayout(row);
+        rowLayout->setContentsMargins(0, 2, 0, 2);
+        rowLayout->setSpacing(8);
+        rowLayout->addWidget(icon);
+        rowLayout->addLayout(text, 1);
+        rowLayout->addWidget(remove);
+        layout->addWidget(row);
+    }
+
+    auto *add = new QPushButton(QIcon(":/icons/folder-add.svg"), QStringLiteral("Tambah folder…"), content);
+    add->setObjectName("btnReferenceAdd");
+    add->setCursor(Qt::PointingHandCursor);
+    connect(add, &QPushButton::clicked, this, [this, popup]() {
+        popup->close();
+        // Pemilih folder (dialog modal) dibuka setelah klik ini selesai diproses
+        QTimer::singleShot(0, this, [this]() { emit referenceDirectoryAddRequested(m_projectId); });
+    });
+    auto *actions = new QHBoxLayout();
+    actions->addStretch(1);
+    actions->addWidget(add);
+    layout->addLayout(actions);
+
+    popupLayout->addWidget(content);
+    content->show();
+}
+
+void SwimlaneWidget::placeReferencePopup(QFrame *popup) {
+    // Ukuran dari isi yang baru; isi lama yang menunggu deleteLater sudah keluar dari layout
+    popup->layout()->activate();
+    popup->resize(popup->sizeHint().expandedTo(popup->minimumSize()));
+
+    // Tepi kanan popup sejajar tepi kanan tombol, menggantung di bawahnya; tetap di dalam layar
+    QPushButton *anchor = ui->btnReferenceDirs;
+    const QPoint anchorBottomRight = anchor->mapToGlobal(QPoint(anchor->width(), anchor->height()));
+    QPoint pos(anchorBottomRight.x() - popup->width(), anchorBottomRight.y() + 6);
+    if (QScreen *screen = QGuiApplication::screenAt(anchorBottomRight)) {
+        const QRect available = screen->availableGeometry();
+        pos.setX(qBound(available.left() + 4, pos.x(), available.right() - popup->width() - 4));
+        if (pos.y() + popup->height() > available.bottom()) {
+            pos.setY(anchor->mapToGlobal(QPoint(0, 0)).y() - popup->height() - 6);
+        }
+    }
+    popup->move(pos);
 }
 
 KanbanCardWidget *SwimlaneWidget::cardById(const QString &taskId) const {

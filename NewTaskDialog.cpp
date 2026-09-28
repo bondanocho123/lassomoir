@@ -1,13 +1,16 @@
 #include "NewTaskDialog.h"
+#include "PromptEditor.h"
 #include "StageCatalog.h"
 
 #include <QComboBox>
 #include <QDateTime>
 #include <QFrame>
 #include <QHBoxLayout>
+#include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QShortcut>
 #include <QVBoxLayout>
 
 namespace {
@@ -56,7 +59,7 @@ NewTaskDialog::NewTaskDialog(const QString &projectId, const StageCatalog &catal
     setObjectName("NewTaskDialog");
     setWindowTitle("New Task");
     setModal(true);
-    setMinimumWidth(420);
+    setMinimumWidth(480);
 
     auto *root = new QVBoxLayout(this);
     root->setContentsMargins(24, 20, 24, 20);
@@ -72,10 +75,11 @@ NewTaskDialog::NewTaskDialog(const QString &projectId, const StageCatalog &catal
     m_titleInput->setPlaceholderText("Rancang ulang halaman login");
     root->addWidget(buildField("TASK TITLE", m_titleInput));
 
-    m_subtextInput = new QLineEdit(this);
-    m_subtextInput->setObjectName("taskFormInput");
-    m_subtextInput->setPlaceholderText("PIC: Budi / waiting in queue");
-    root->addWidget(buildField("SUBTEXT", m_subtextInput));
+    // Subtext = prompt untuk agent: multi-baris, bisa berisi foto dan dokumen lampiran
+    m_promptInput = new PromptEditor(this);
+    m_promptInput->setPlaceholderText("Instruksi untuk agent: tujuan, batasan, contoh…\n"
+                                      "Foto bisa ditempel (Ctrl+V) atau diseret ke sini.");
+    root->addWidget(buildField("SUBTEXT / PROMPT", m_promptInput), 1);
 
     m_categoryInput = new QComboBox(this);
     m_categoryInput->setObjectName("taskFormCombo");
@@ -133,9 +137,16 @@ NewTaskDialog::NewTaskDialog(const QString &projectId, const StageCatalog &catal
     connect(m_titleInput, &QLineEdit::returnPressed, this, [this]() {
         if (m_btnCreate->isEnabled()) m_btnCreate->click();
     });
+    // Enter di kotak prompt menulis baris baru; Ctrl+Enter menyimpan dari mana saja
+    for (const QKeySequence &keys : {QKeySequence(Qt::CTRL | Qt::Key_Return), QKeySequence(Qt::CTRL | Qt::Key_Enter)}) {
+        connect(new QShortcut(keys, this), &QShortcut::activated, this, [this]() {
+            if (m_btnCreate->isEnabled()) m_btnCreate->click();
+        });
+    }
 }
 
-NewTaskDialog::NewTaskDialog(const TaskItem &task, const StageCatalog &catalog, QWidget *parent)
+NewTaskDialog::NewTaskDialog(const TaskItem &task, const QString &attachmentDirectory, const StageCatalog &catalog,
+                             QWidget *parent)
     : NewTaskDialog(task.projectId, catalog, parent) {
     m_editing = true;
     m_original = task;
@@ -144,7 +155,8 @@ NewTaskDialog::NewTaskDialog(const TaskItem &task, const StageCatalog &catalog, 
     m_btnCreate->setText("Simpan");
 
     m_titleInput->setText(task.title);
-    m_subtextInput->setText(task.subtext);
+    m_promptInput->setText(task.subtext);
+    m_promptInput->setStoredAttachments(attachmentDirectory, task.attachments);
     m_categoryInput->setCurrentText(task.category);
 
     m_stageInput->setCurrentText(task.stage);
@@ -206,6 +218,10 @@ QFrame *NewTaskDialog::buildDivider() {
     return line;
 }
 
+QList<TaskAttachments::Draft> NewTaskDialog::attachments() const {
+    return m_promptInput->attachments();
+}
+
 void NewTaskDialog::updateCreateButtonEnabled() {
     m_btnCreate->setEnabled(!m_titleInput->text().trimmed().isEmpty());
 }
@@ -219,7 +235,7 @@ TaskItem NewTaskDialog::resultTask() const {
     item.stage = m_stageInput->currentText();
     item.category = m_categoryInput->currentText().trimmed();
     item.title = m_titleInput->text().trimmed();
-    item.subtext = m_subtextInput->text().trimmed();
+    item.subtext = m_promptInput->text().trimmed();
     for (auto it = m_tuningInputs.cbegin(); it != m_tuningInputs.cend(); ++it) {
         const AgentTuning tuning{it->model->currentData().toString(), it->effort->currentData().toString()};
         if (tuning.isEmpty()) {

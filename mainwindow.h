@@ -32,6 +32,9 @@ class TaskManager;
 class QListWidgetItem;
 class QSplitter;
 class QVariantAnimation;
+namespace TaskAttachments {
+struct Draft;
+}
 
 class MainWindow : public QMainWindow
 {
@@ -95,6 +98,9 @@ private slots:
 
     // Drawer minta perubahan kode folder kerja task (stage peninjauan kode)
     void handleDiffRequested(const QString &taskId);
+
+    // Tombol × di popup folder referensi swimlane
+    void removeReferenceDirectory(const QString &projectId, const QString &dir);
 
 private:
     Ui::MainWindow *ui;
@@ -164,6 +170,12 @@ private:
     QString ensureWorkingDirectory(const QString &projectId);
     // Pemilih folder -> FileManager -> tombol header swimlane; kosong bila dibatalkan
     QString chooseWorkingDirectory(const QString &projectId);
+    // Pemilih folder referensi (dibaca agent, tidak diubah) -> addReferenceDirectory
+    void chooseReferenceDirectory(const QString &projectId);
+    // Tolak folder di dalam folder kerja atau yang sudah tercakup referensi lain; false bila ditolak
+    bool addReferenceDirectory(const QString &projectId, const QString &dir);
+    // Simpan foto & dokumen dari form task ke folder lampiran task; kembalikan nama yang tersimpan
+    QStringList saveAttachments(const TaskItem &task, const QList<TaskAttachments::Draft> &drafts);
 
 protected:
     // Tukar icon tombol baris sidebar jadi putih selama kursor berada di atasnya,

@@ -32,10 +32,9 @@ public:
     // Menambahkan item tugas baru ke dalam database/memori
     void addTask(const TaskItem &item);
 
-    // Ubah isi task dari form edit (termasuk pilihan model/effort per stage);
-    // stage, status, dan riwayat run tidak tersentuh
-    bool updateDetails(const QString &taskId, const QString &title, const QString &category,
-                       const QString &subtext, const QHash<QString, AgentTuning> &tuning);
+    // Salin isi form edit (judul, kategori, subtext, pilihan model/effort per stage, lampiran)
+    // ke task details.id; stage, status, dan riwayat run tidak tersentuh
+    bool updateDetails(const TaskItem &details);
 
     // Pindah stage karena drag manual. Mundur selalu boleh; maju ditolak bila task sedang
     // menunggu review atau stage asalnya ber-gate dan belum disetujui (taskMoveRejected).

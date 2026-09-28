@@ -43,16 +43,16 @@ void TaskManager::addTask(const TaskItem &item) {
     emit taskAdded(item);
 }
 
-bool TaskManager::updateDetails(const QString &taskId, const QString &title, const QString &category,
-                                const QString &subtext, const QHash<QString, AgentTuning> &tuning) {
-    auto it = m_tasks.find(taskId);
+bool TaskManager::updateDetails(const TaskItem &details) {
+    auto it = m_tasks.find(details.id);
     if (it == m_tasks.end()) {
         return false;
     }
-    it->title = title;
-    it->category = category;
-    it->subtext = subtext;
-    it->tuning = tuning;
+    it->title = details.title;
+    it->category = details.category;
+    it->subtext = details.subtext;
+    it->tuning = details.tuning;
+    it->attachments = details.attachments;
     emit taskChanged(*it);
     return true;
 }

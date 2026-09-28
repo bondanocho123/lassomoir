@@ -46,9 +46,21 @@ QStringList RunLogFormatter::startLines(const TaskItem &task, const AgentLaunch 
             lines.append(QStringLiteral("      + %1 (%2 baris)").arg(heading).arg(headingLines));
         }
     };
+    // Baris "# ..." di dalam blok kode (mis. judul dokumen Word lampiran) bukan judul bagian.
+    // Blok ditutup pagar backtick yang sama panjang atau lebih, jadi ``` di dalam pagar ```` tidak menutupnya.
+    qsizetype fenceLength = 0;   // > 0 selama di dalam blok kode
     const QStringList promptLines = launch.prompt.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
     for (const QString &line : promptLines) {
-        const bool isHeading = line.startsWith(QLatin1String("# "));
+        qsizetype ticks = 0;
+        while (ticks < line.size() && line.at(ticks) == QLatin1Char('`')) {
+            ++ticks;
+        }
+        if (fenceLength == 0 && ticks >= 3) {
+            fenceLength = ticks;
+        } else if (fenceLength > 0 && ticks >= fenceLength && line.trimmed().size() == ticks) {
+            fenceLength = 0;
+        }
+        const bool isHeading = fenceLength == 0 && line.startsWith(QLatin1String("# "));
         if (isHeading && line != QLatin1String("# Task")) {
             flushHeading();
             heading = line.mid(2);
@@ -80,6 +92,10 @@ QString RunLogFormatter::queuedLine(const TaskItem &task) {
 
 QString RunLogFormatter::rejectedLine(const TaskItem &task, const QString &reason) {
     return QStringLiteral("[RUN] %1 ditolak: %2").arg(taskLabel(task), reason);
+}
+
+QString RunLogFormatter::warningLine(const TaskItem &task, const QString &text) {
+    return QStringLiteral("[RUN] %1 peringatan: %2").arg(taskLabel(task), text);
 }
 
 QString RunLogFormatter::eventLine(const TaskItem &task, const AgentEvent &event, const QString &workingDirectory) {

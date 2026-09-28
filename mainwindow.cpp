@@ -12,6 +12,7 @@
 #include "SplitterPaneAnimator.h"
 #include "StageCatalog.h"
 #include "SwarmCoordinator.h"
+#include "TaskAttachments.h"
 #include "TaskManager.h"
 #include "WorkspaceDiff.h"
 
@@ -42,10 +43,20 @@
 #include <QVariantAnimation>
 #include <QDir>
 
+#include <algorithm>
+
 namespace {
 
 QString badgeText(const TaskItem &task) {
     return QString("✓ %1").arg(task.approvedGates());
+}
+
+// Path yang sama atau berada di dalam root (tanpa beda huruf besar/kecil di Windows)
+bool isSameOrInside(const QString &path, const QString &root) {
+    const QString a = QDir::cleanPath(QDir(path).absolutePath());
+    const QString b = QDir::cleanPath(QDir(root).absolutePath());
+    const Qt::CaseSensitivity cs = QDir::separator() == QLatin1Char('\\') ? Qt::CaseInsensitive : Qt::CaseSensitive;
+    return a.compare(b, cs) == 0 || a.startsWith(b.endsWith(QLatin1Char('/')) ? b : b + QLatin1Char('/'), cs);
 }
 
 // Alasan run terakhir gagal, untuk tooltip "Coba lagi" di kartu
@@ -234,6 +245,7 @@ void MainWindow::addSwimlane(const QString &projectId) {
 
     auto *swimlane = new SwimlaneWidget(projectId, m_catalog, this);
     swimlane->setWorkingDirectory(m_fileManager->workingDirectory(projectId));
+    swimlane->setReferenceDirectories(m_fileManager->referenceDirectories(projectId));
 
     // Tangkap interaksi dari swimlane
     connect(swimlane, &SwimlaneWidget::cardMoved, this, &MainWindow::handleCardMoved);
@@ -241,6 +253,10 @@ void MainWindow::addSwimlane(const QString &projectId) {
     connect(swimlane, &SwimlaneWidget::workingDirectoryChangeRequested, this, [this](const QString &id) {
         chooseWorkingDirectory(id);
     });
+    connect(swimlane, &SwimlaneWidget::referenceDirectoryAddRequested, this, [this](const QString &id) {
+        chooseReferenceDirectory(id);
+    });
+    connect(swimlane, &SwimlaneWidget::referenceDirectoryRemoveRequested, this, &MainWindow::removeReferenceDirectory);
 
     // Board hanya menampilkan satu project; sisanya menganggur di dalam stack
     ui->boardStack->addWidget(swimlane);
@@ -544,11 +560,12 @@ void MainWindow::handleNewTaskRequested(const QString &projectId) {
     auto *swimlane = m_swimlanes.value(projectId, nullptr);
     if (!swimlane) return;
 
-    const TaskItem item = dialog.resultTask();
+    TaskItem item = dialog.resultTask();
     if (!swimlane->column(item.stage)) {
         ui->consolePanel->appendLog(QString("[TASK CREATE WARN] %1: stage '%2' tidak dikenal").arg(projectId, item.stage));
         return;
     }
+    item.attachments = saveAttachments(item, dialog.attachments());
 
     // Kartu dibuat dan task dipersistenkan oleh handleTaskAdded()
     m_tasks.addTask(item);
@@ -560,18 +577,30 @@ void MainWindow::handleEditTaskRequested(const QString &projectId, const QString
     const std::optional<TaskItem> task = m_tasks.task(taskId);
     if (!task) return;
 
-    NewTaskDialog dialog(*task, m_catalog, this);
+    NewTaskDialog dialog(*task, m_fileManager->attachmentDirectory(projectId, taskId), m_catalog, this);
     if (dialog.exec() != QDialog::Accepted) {
         return;
     }
 
     // Kartu dan file sesi ikut diperbarui lewat sinyal taskChanged
-    const TaskItem item = dialog.resultTask();
-    if (!m_tasks.updateDetails(taskId, item.title, item.category, item.subtext, item.tuning)) {
+    TaskItem item = dialog.resultTask();
+    item.attachments = saveAttachments(item, dialog.attachments());
+    if (!m_tasks.updateDetails(item)) {
         return;
     }
 
     ui->consolePanel->appendLog(QString("[TASK EDITED] %1 -> %2: '%3'").arg(projectId, item.stage, item.title));
+}
+
+QStringList MainWindow::saveAttachments(const TaskItem &task, const QList<TaskAttachments::Draft> &drafts) {
+    // task.attachments masih berisi lampiran sebelum form dibuka; yang tidak ada lagi di form dihapus
+    QStringList errors;
+    const QStringList saved = TaskAttachments::save(m_fileManager->attachmentDirectory(task.projectId, task.id),
+                                                    drafts, task.attachments, &errors);
+    for (const QString &error : std::as_const(errors)) {
+        ui->consolePanel->appendLog(QString("[TASK WARN] %1/%2: lampiran %3").arg(task.projectId, task.title, error));
+    }
+    return saved;
 }
 
 void MainWindow::removeProjectFromUi(const QString &projectId) {
@@ -675,6 +704,8 @@ KanbanCardWidget *MainWindow::createCard(SwimlaneWidget *swimlane, const TaskIte
 void MainWindow::applyTaskToCard(KanbanCardWidget *card, const TaskItem &task) {
     card->setCardData(task.id, task.category, task.title, task.subtext, badgeText(task));
     card->setTaskState(task.state, failureDetail(task));
+    const int images = int(std::count_if(task.attachments.cbegin(), task.attachments.cend(), TaskAttachments::isImage));
+    card->setAttachments(images, int(task.attachments.size()) - images, task.attachments);
 }
 
 KanbanCardWidget *MainWindow::cardFor(const TaskItem &task) const {
@@ -686,8 +717,8 @@ void MainWindow::openDrawer(const QString &taskId) {
     const std::optional<TaskItem> task = m_tasks.task(taskId);
     if (!task) return;
 
-    // Klik pada kartu yang belum pernah dijalankan tidak membuka apa-apa, kecuali di stage
-    // peninjauan kode: perubahan kode sudah bisa ditinjau sebelum agent-nya dijalankan
+    // Klik pada kartu yang belum pernah dijalankan tidak membuka apa-apa, kecuali di stage yang
+    // menampilkan perubahan kode: perubahan kode sudah bisa dilihat sebelum agent-nya dijalankan
     const RunState runState = m_swarm.state(taskId);
     if (task->runs.isEmpty() && runState == RunState::Idle && !ResponseDrawer::showsCodeChanges(task->stage)) {
         return;
@@ -825,7 +856,9 @@ void MainWindow::handleDiffRequested(const QString &taskId) {
             m_drawer->showDiff(taskId, watcher->result());
         }
     });
-    watcher->setFuture(QtConcurrent::run(&GitDiff::collect, workingDirectory));
+    // Maintainability dan UML hanya tampil di stage peninjauan; stage lain cukup diff-nya
+    const bool withMetrics = ResponseDrawer::showsCodeAnalysis(task->stage);
+    watcher->setFuture(QtConcurrent::run(&GitDiff::collect, workingDirectory, withMetrics));
 }
 
 void MainWindow::handleRunRequested(const QString &projectId, const QString &taskId) {
@@ -840,9 +873,16 @@ void MainWindow::handleRunRequested(const QString &projectId, const QString &tas
         return;
     }
 
+    // Foto, isi dokumen lampiran, dan folder referensi dibaca sekarang supaya run memakai isi terbaru
+    const TaskMaterials materials = TaskAttachments::materials(
+        task, m_fileManager->attachmentDirectory(projectId, taskId), m_fileManager->referenceDirectories(projectId));
+    for (const QString &warning : materials.warnings) {
+        ui->consolePanel->appendLog(RunLogFormatter::warningLine(task, warning));
+    }
+
     // Kartu baru berubah status lewat sinyal runQueued/runStarted dari coordinator
     QString reason;
-    if (!m_swarm.run(task, workingDirectory, &reason)) {
+    if (!m_swarm.run(task, workingDirectory, materials, &reason)) {
         ui->consolePanel->appendLog(RunLogFormatter::rejectedLine(task, reason));
     }
 }
@@ -876,6 +916,62 @@ QString MainWindow::chooseWorkingDirectory(const QString &projectId) {
     }
     ui->consolePanel->appendLog(QString("[SYSTEM] Folder kerja %1: %2").arg(projectId, dir));
     return dir;
+}
+
+void MainWindow::chooseReferenceDirectory(const QString &projectId) {
+    const QString working = m_fileManager->workingDirectory(projectId);
+    const QStringList current = m_fileManager->referenceDirectories(projectId);
+    const QString start = !current.isEmpty() ? current.last() : (!working.isEmpty() ? working : QDir::homePath());
+    const QString dir = QFileDialog::getExistingDirectory(
+        this, QString("Folder referensi untuk %1 (hanya dibaca agent)").arg(projectId), start);
+    if (!dir.isEmpty()) {
+        addReferenceDirectory(projectId, dir);
+    }
+}
+
+bool MainWindow::addReferenceDirectory(const QString &projectId, const QString &dir) {
+    const QString clean = QDir::cleanPath(dir);
+    const QString shown = QDir::toNativeSeparators(clean);
+    const QString working = m_fileManager->workingDirectory(projectId);
+    QStringList dirs = m_fileManager->referenceDirectories(projectId);
+
+    // Isi folder kerja sudah bisa dibaca (dan ditulis) agent; referensi hanya untuk folder di luarnya
+    if (!working.isEmpty() && isSameOrInside(clean, working)) {
+        ui->consolePanel->appendLog(QString("[SYSTEM] %1 tidak ditambahkan: sudah termasuk folder kerja %2")
+                                        .arg(shown, projectId));
+        return false;
+    }
+    for (const QString &existing : std::as_const(dirs)) {
+        if (isSameOrInside(clean, existing)) {
+            ui->consolePanel->appendLog(QString("[SYSTEM] %1 sudah termasuk folder referensi %2")
+                                            .arg(shown, QDir::toNativeSeparators(existing)));
+            return false;
+        }
+    }
+    // Folder induk yang baru menggantikan subfoldernya yang sudah terdaftar
+    dirs.removeIf([&clean](const QString &existing) { return isSameOrInside(existing, clean); });
+    dirs.append(clean);
+
+    m_fileManager->setReferenceDirectories(projectId, dirs);
+    saveProject(projectId);
+    if (auto *swimlane = m_swimlanes.value(projectId, nullptr)) {
+        swimlane->setReferenceDirectories(dirs);
+    }
+    ui->consolePanel->appendLog(QString("[SYSTEM] Folder referensi %1 + %2").arg(projectId, shown));
+    return true;
+}
+
+void MainWindow::removeReferenceDirectory(const QString &projectId, const QString &dir) {
+    QStringList dirs = m_fileManager->referenceDirectories(projectId);
+    if (!dirs.removeOne(dir)) {
+        return;
+    }
+    m_fileManager->setReferenceDirectories(projectId, dirs);
+    saveProject(projectId);
+    if (auto *swimlane = m_swimlanes.value(projectId, nullptr)) {
+        swimlane->setReferenceDirectories(dirs);
+    }
+    ui->consolePanel->appendLog(QString("[SYSTEM] Folder referensi %1 − %2").arg(projectId, QDir::toNativeSeparators(dir)));
 }
 
 void MainWindow::handleRunQueued(const TaskItem &task) {

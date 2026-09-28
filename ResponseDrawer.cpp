@@ -145,7 +145,12 @@ ResponseDrawer::ResponseDrawer(MermaidRenderer *renderer, QWidget *parent)
     m_tabs->addTab(QStringLiteral("Perubahan kode"));
     m_tabs->addTab(QStringLiteral("Maintainability"));
     m_tabs->addTab(QStringLiteral("UML"));
-    connect(m_tabs, &QTabBar::currentChanged, m_pages, &QStackedWidget::setCurrentIndex);
+    connect(m_tabs, &QTabBar::currentChanged, this, [this](int index) {
+        m_pages->setCurrentIndex(index);
+        if (index == kDiffTab && m_diffStale) {
+            requestDiff();
+        }
+    });
     m_tabs->hide();
 
     // Panel keputusan: hanya tampil saat task menunggu review dan run yang direview dipilih
@@ -230,6 +235,10 @@ ResponseDrawer::ResponseDrawer(MermaidRenderer *renderer, QWidget *parent)
 }
 
 bool ResponseDrawer::showsCodeChanges(const QString &stageKey) {
+    return stageKey == QLatin1String("CODER") || showsCodeAnalysis(stageKey);
+}
+
+bool ResponseDrawer::showsCodeAnalysis(const QString &stageKey) {
     return stageKey == QLatin1String("ARCHITECT");
 }
 
@@ -272,14 +281,21 @@ void ResponseDrawer::showTask(const TaskItem &task, RunState runState, const QSt
     rebuildRunSelector(selected);
 
     // Folder kerja bisa berubah selama drawer tertutup, jadi git dibaca ulang setiap drawer dibuka
-    // atau task masuk stage peninjauan; penyegaran biasa (run selesai, keputusan) tidak mengulangnya
-    const bool codeReview = showsCodeChanges(task.stage);
-    const bool loadDiff = codeReview && (opening || !sameTask || previousStage != task.stage);
-    m_tabs->setVisible(codeReview);
-    if (!codeReview) {
+    // atau task masuk stage yang menampilkan perubahan kode; penyegaran biasa (keputusan) tidak
+    // mengulangnya, kecuali agent menulis file sejak diff dibaca (m_diffStale)
+    const bool codeChanges = showsCodeChanges(task.stage);
+    const bool analysis = showsCodeAnalysis(task.stage);
+    const bool loadDiff = codeChanges && (opening || !sameTask || previousStage != task.stage);
+    m_tabs->setVisible(codeChanges);
+    m_tabs->setTabVisible(kMaintainabilityTab, analysis);
+    m_tabs->setTabVisible(kUmlTab, analysis);
+    if (!codeChanges) {
         m_tabs->setCurrentIndex(kResultTab);
     } else if (loadDiff) {
-        m_tabs->setCurrentIndex(running ? kResultTab : kDiffTab);
+        m_diffStale = false;   // requestDiff() di bawah membacanya sekarang
+        // Saat run berjalan atau gagal yang dicari adalah output atau alasannya, bukan diff
+        const bool wantsResult = running || task.state == TaskState::Failed;
+        m_tabs->setCurrentIndex(wantsResult ? kResultTab : kDiffTab);
     }
 
     m_approve->setText(nextStage.isEmpty() ? QStringLiteral("Setujui")
@@ -298,8 +314,14 @@ void ResponseDrawer::showTask(const TaskItem &task, RunState runState, const QSt
 
     if (loadDiff) {
         requestDiff();
-    } else if (codeReview) {
-        refreshUml();   // run baru bisa membawa diagram dari agent
+    } else if (codeChanges) {
+        if (analysis) {
+            refreshUml();   // run baru bisa membawa diagram dari agent
+        }
+        // Mis. run CODER yang baru berakhir (gagal atau dibatalkan) sudah mengubah folder kerja
+        if (m_diffStale && m_tabs->currentIndex() == kDiffTab) {
+            requestDiff();
+        }
     }
 }
 
@@ -308,16 +330,20 @@ void ResponseDrawer::showDiff(const QString &taskId, const WorkspaceDiff &diff) 
         return;
     }
     m_diffView->showDiff(diff);
-    m_maintainabilityView->showDiff(diff);
     m_tabs->setTabText(kDiffTab, diff.files.isEmpty()
                                      ? QStringLiteral("Perubahan kode")
                                      : QStringLiteral("Perubahan kode · %1").arg(diff.files.size()));
+    m_diffLoading = false;
+    m_diffError = diff.error;
+    if (!showsCodeAnalysis(m_task.stage)) {
+        return;   // tab Maintainability dan UML hanya ada di stage peninjauan
+    }
+
+    m_maintainabilityView->showDiff(diff);
     const std::optional<int> maintainability = diff.maintainabilityAfter();
     m_tabs->setTabText(kMaintainabilityTab, maintainability
                                                 ? QStringLiteral("Maintainability · %1").arg(*maintainability)
                                                 : QStringLiteral("Maintainability"));
-    m_diffLoading = false;
-    m_diffError = diff.error;
     m_classDiagram = ClassDiagram::fromDiff(diff);
     m_tabs->setTabText(kUmlTab, m_classDiagram.drawnTypes > 0
                                     ? QStringLiteral("UML · %1").arg(m_classDiagram.drawnTypes)
@@ -326,15 +352,18 @@ void ResponseDrawer::showDiff(const QString &taskId, const WorkspaceDiff &diff) 
 }
 
 void ResponseDrawer::requestDiff() {
+    m_diffStale = false;
     m_diffView->showLoading();
-    m_maintainabilityView->showLoading();
     m_tabs->setTabText(kDiffTab, QStringLiteral("Perubahan kode"));
-    m_tabs->setTabText(kMaintainabilityTab, QStringLiteral("Maintainability"));
-    m_tabs->setTabText(kUmlTab, QStringLiteral("UML"));
     m_diffLoading = true;
     m_diffError.clear();
     m_classDiagram = ClassDiagram();
-    refreshUml();
+    if (showsCodeAnalysis(m_task.stage)) {
+        m_maintainabilityView->showLoading();
+        m_tabs->setTabText(kMaintainabilityTab, QStringLiteral("Maintainability"));
+        m_tabs->setTabText(kUmlTab, QStringLiteral("UML"));
+        refreshUml();
+    }
     emit diffRequested(m_task.id);
 }
 
@@ -407,6 +436,9 @@ void ResponseDrawer::appendLive(const AgentEvent &event, const QString &workingD
         break;
     case AgentEvent::Kind::ToolUse:
         m_liveMarkdown += QStringLiteral("`` %1 ``\n\n").arg(RunLogFormatter::toolLabel(event, workingDirectory));
+        if (showsCodeChanges(m_task.stage) && AgentDefinition::isWritingTool(event.toolName)) {
+            m_diffStale = true;   // folder kerja berubah; dibaca ulang saat tab perubahan kode terlihat
+        }
         break;
     case AgentEvent::Kind::Stderr:
         m_liveMarkdown += quoted(QStringLiteral("stderr: ") + event.text) + QStringLiteral("\n\n");

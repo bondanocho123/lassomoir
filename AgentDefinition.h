@@ -35,11 +35,16 @@ struct AgentDefinition {
         }
     }
 
+    // Tool yang bisa mengubah isi folder kerja
+    static bool isWritingTool(const QString &tool) {
+        static const QStringList writingTools = {"Edit", "Write", "Bash"};
+        return writingTools.contains(tool);
+    }
+
     // Agent yang bisa mengubah isi folder kerja wajib bergiliran lewat WorkspaceGuard
     bool writesWorkspace() const {
-        static const QStringList writingTools = {"Edit", "Write", "Bash"};
-        for (const QString &tool : writingTools) {
-            if (tools.contains(tool)) {
+        for (const QString &tool : tools) {
+            if (isWritingTool(tool)) {
                 return true;
             }
         }

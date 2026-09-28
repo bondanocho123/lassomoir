@@ -37,3 +37,8 @@ Kalau tetap pakai akun gratis, catat sumber tiap ikon di sini supaya nggak lupa 
 | `review.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
 | `expand.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
 | `collapse.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
+| `folders.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
+| `image.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
+| `paperclip.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
+| `close.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
+| `close-white.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |

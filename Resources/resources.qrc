@@ -15,6 +15,11 @@
         <file>icons/trash-white.svg</file>
         <file>icons/folder.svg</file>
         <file>icons/folder-add.svg</file>
+        <file>icons/folders.svg</file>
+        <file>icons/image.svg</file>
+        <file>icons/paperclip.svg</file>
+        <file>icons/close.svg</file>
+        <file>icons/close-white.svg</file>
         <file>prompts/SPECIFIER.md</file>
         <file>prompts/CODER.md</file>
         <file>prompts/CLEANER.md</file>

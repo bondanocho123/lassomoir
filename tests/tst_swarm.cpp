@@ -2,6 +2,7 @@
 #include "ClaudeCli.h"
 #include "ClaudeCodeRuntime.h"
 #include "CodeMetrics.h"
+#include "DocumentText.h"
 #include "EdgeMermaidRenderer.h"
 #include "FakeAgentRuntime.h"
 #include "FileManager.h"
@@ -11,11 +12,16 @@
 #include "StageCatalog.h"
 #include "StreamJsonParser.h"
 #include "SwarmCoordinator.h"
+#include "TaskAttachments.h"
 #include "TaskItem.h"
 #include "TaskManager.h"
 #include "WorkspaceDiff.h"
 #include "WorkspaceGuard.h"
 
+// Fixture .xlsx/.docx dibuat di test dengan penulis ZIP milik Qt (QtCore privat, lihat tests.pro)
+#include <QtCore/private/qzipwriter_p.h>
+
+#include <QBuffer>
 #include <QCoreApplication>
 #include <QDir>
 #include <QElapsedTimer>
@@ -26,6 +32,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QProcess>
+#include <QRandomGenerator>
 #include <QScopeGuard>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -275,6 +282,31 @@ QStringList diffPaths(const WorkspaceDiff &diff) {
     return paths;
 }
 
+// Arsip ZIP berisi bagian Office yang dibaca DocumentText; bagian lain tidak perlu ada
+bool writeZip(const QString &path, const QList<QPair<QString, QByteArray>> &parts) {
+    QZipWriter zip(path);
+    zip.setCompressionPolicy(QZipWriter::AlwaysCompress);
+    for (const QPair<QString, QByteArray> &part : parts) {
+        zip.addFile(part.first, part.second);
+    }
+    zip.close();
+    return zip.status() == QZipWriter::NoError;
+}
+
+QByteArray imageBytes(const QImage &image, const char *format) {
+    QByteArray bytes;
+    QBuffer buffer(&bytes);
+    buffer.open(QIODevice::WriteOnly);
+    image.save(&buffer, format);
+    return bytes;
+}
+
+QByteArray pngBytes(const QSize &size, const QColor &color) {
+    QImage image(size, QImage::Format_RGB32);
+    image.fill(color);
+    return imageBytes(image, "PNG");
+}
+
 }
 
 class TestSwarm : public QObject {
@@ -338,14 +370,31 @@ private slots:
     void csharpMetricsHandlesStringsAndNullable();
     void csharpMetricsResolvesInheritance();
     void gitDiffMeasuresCSharpTypes();
+    void gitDiffCanSkipMetrics();
 
     // Diagram kelas UML (Mermaid) dari tipe C# yang berubah
     void csharpMetricsRecordsOutline();
     void classDiagramDrawsChangedTypes();
     void classDiagramLimitsSize();
 
+    // Lampiran task (foto, Excel/Word/CSV) dan folder referensi project
+    void documentTextReadsCsv();
+    void documentTextReadsDocx();
+    void documentTextReadsXlsx();
+    void documentTextRejectsUnsupportedFiles();
+    void attachmentNamesAreSafeAndUnique();
+    void attachmentsSaveAndRemoveFiles();
+    void imagesAreNormalizedForClaude();
+    void materialsReadAttachmentsAndReferences();
+    void composerAddsInstructionsAttachmentsAndReferences();
+    void cliGrantsReadOnlyFoldersAndStreamInput();
+    void userMessageCarriesImages();
+    void claudeSessionSendsImagesAsStreamJson();
+    void swarmPassesMaterialsToLaunch();
+
     // Claude Code sungguhan; hanya jalan bila LASSOMOIR_REAL_CLAUDE=1 (memakai token)
     void realClaudeRunsCoderTask();
+    void realClaudeReadsAttachmentsAndReferences();
     // Edge sungguhan; hanya jalan bila LASSOMOIR_REAL_MERMAID=1 (tanpa token)
     void realEdgeRendersMermaid();
 };
@@ -370,6 +419,7 @@ void TestSwarm::catalogGivesAgentsOnlyToWorkingStages() {
     }
 
     QVERIFY(catalog.profile(QStringLiteral("SPECIFIER"))->exitPolicy().isGated());
+    QVERIFY(catalog.profile(QStringLiteral("ARCHITECT"))->exitPolicy().isGated());
     QVERIFY(catalog.profile(QStringLiteral("QA"))->exitPolicy().isGated());
     QVERIFY(!catalog.profile(QStringLiteral("CODER"))->exitPolicy().isGated());
 
@@ -531,16 +581,28 @@ void TestSwarm::taskTuningOverridesStageDefaults() {
     QCOMPARE(argValue(args, QStringLiteral("--model")), QStringLiteral("opus"));
     QCOMPARE(argValue(args, QStringLiteral("--effort")), QStringLiteral("high"));
 
-    // Form edit menyimpan pilihan lewat TaskManager tanpa menyentuh stage atau status
+    // Form edit menyimpan pilihan lewat TaskManager tanpa menyentuh stage, status, atau riwayat run
     TaskManager manager(f.catalog);
     manager.addTask(makeTask(QStringLiteral("m1"), QStringLiteral("CODER")));
-    QVERIFY(manager.updateDetails(QStringLiteral("m1"), QStringLiteral("Baru"), QStringLiteral("bug"),
-                                  QStringLiteral("catatan"), heavy.tuning));
+    TaskItem details = makeTask(QStringLiteral("m1"), QStringLiteral("QA"));
+    details.title = QStringLiteral("Baru");
+    details.category = QStringLiteral("bug");
+    details.subtext = QStringLiteral("catatan");
+    details.tuning = heavy.tuning;
+    details.attachments = QStringList({"mockup.png", "data.xlsx"});
+    details.state = TaskState::Failed;
+    details.runs = {stageRun(QStringLiteral("QA"), false, QStringLiteral("x"))};
+    QVERIFY(manager.updateDetails(details));
     const std::optional<TaskItem> updated = manager.task(QStringLiteral("m1"));
     QVERIFY(updated);
     QCOMPARE(updated->title, QStringLiteral("Baru"));
+    QCOMPARE(updated->subtext, QStringLiteral("catatan"));
+    QCOMPARE(updated->attachments, QStringList({"mockup.png", "data.xlsx"}));
     QCOMPARE(updated->stage, QStringLiteral("CODER"));
+    QVERIFY(updated->state == TaskState::Idle);
+    QVERIFY(updated->runs.isEmpty());
     QCOMPARE(updated->tuning.value(QStringLiteral("CODER")).model, QStringLiteral("opus"));
+    QVERIFY(!manager.updateDetails(makeTask(QStringLiteral("tidak-ada"), QStringLiteral("CODER"))));
 }
 
 void TestSwarm::promptComposerSkipsEmptyFields() {
@@ -963,6 +1025,15 @@ void TestSwarm::taskManagerReviewDecisions() {
     QCOMPARE(task.approvedGates(), 1);
     QCOMPARE(task.runs.last().decision, ReviewDecision::Approved);
 
+    // ARCHITECT menunggu persetujuan; run sukses tidak langsung maju ke HARDENER
+    tasks.addTask(makeTask(QStringLiteral("a"), QStringLiteral("ARCHITECT")));
+    tasks.recordRun(QStringLiteral("a"), stageRun(QStringLiteral("ARCHITECT"), true, QStringLiteral("Temuan")));
+    QCOMPARE(tasks.task(QStringLiteral("a"))->stage, QStringLiteral("ARCHITECT"));
+    QVERIFY(tasks.task(QStringLiteral("a"))->state == TaskState::AwaitingReview);
+    QVERIFY(!tasks.moveTask(QStringLiteral("a"), QStringLiteral("HARDENER"), &reason));
+    QVERIFY(tasks.approve(QStringLiteral("a"), QString(), &reason));
+    QCOMPARE(tasks.task(QStringLiteral("a"))->stage, QStringLiteral("HARDENER"));
+
     // QA dikembalikan ke CODER dengan catatan
     tasks.addTask(makeTask(QStringLiteral("q"), QStringLiteral("QA")));
     tasks.recordRun(QStringLiteral("q"), stageRun(QStringLiteral("QA"), true, QStringLiteral("Kriteria 3 gagal")));
@@ -1038,6 +1109,17 @@ void TestSwarm::composerBuildsHandoffPrompt() {
     QVERIFY(prompt.contains(QStringLiteral("# Spesifikasi yang disetujui (SPECIFIER)")));
     QVERIFY(prompt.contains(QStringLiteral("# Hasil stage sebelumnya (CODER)\n\nUbah welcome_message.php")));
 
+    // HARDENER setelah review ARCHITECT disetujui: spesifikasi tetap dibawa bersama hasil review
+    StageRun architect = stageRun(QStringLiteral("ARCHITECT"), true, QStringLiteral("Temuan: pisahkan repository"));
+    architect.decision = ReviewDecision::Approved;
+    architect.reviewNote = QStringLiteral("Lanjut");
+    task.runs = {spec1, spec2, coder, architect};
+    task.stage = QStringLiteral("HARDENER");
+    prompt = composer.compose(task);
+    QVERIFY(prompt.contains(QStringLiteral("# Spesifikasi yang disetujui (SPECIFIER)\n\nSpek v2")));
+    QVERIFY(prompt.contains(QStringLiteral("# Hasil review yang disetujui (ARCHITECT)\n\nTemuan: pisahkan repository")));
+    QVERIFY(!prompt.contains(QStringLiteral("Hasil stage sebelumnya")));
+
     // CODER setelah dikembalikan QA
     StageRun qa = stageRun(QStringLiteral("QA"), true, QStringLiteral("Kriteria 3 gagal"));
     qa.decision = ReviewDecision::SentBack;
@@ -1069,11 +1151,13 @@ void TestSwarm::fileManagerRoundTripsRunsAndState() {
     task.tuning.insert(QStringLiteral("CODER"), {QStringLiteral("opus"), QStringLiteral("high")});
     task.tuning.insert(QStringLiteral("SPECIFIER"), {QString(), QStringLiteral("low")});
     task.tuning.insert(QStringLiteral("QA"), AgentTuning());   // entri kosong tidak ditulis
+    task.attachments = QStringList({"mockup.png", "Data Penjualan.xlsx"});
 
     QString error;
     {
         FileManager writer;
         writer.setWorkingDirectory(QStringLiteral("RoundTrip"), QStringLiteral("C:/repo"));
+        writer.setReferenceDirectories(QStringLiteral("RoundTrip"), {QStringLiteral("D:/lib"), QStringLiteral("E:/docs")});
         QVERIFY2(writer.saveTasks(QStringLiteral("RoundTrip"), {task}, &error), qPrintable(error));
     }
 
@@ -1102,6 +1186,33 @@ void TestSwarm::fileManagerRoundTripsRunsAndState() {
     QCOMPARE(back.tuning.value(QStringLiteral("CODER")).effort, QStringLiteral("high"));
     QVERIFY(back.tuning.value(QStringLiteral("SPECIFIER")).model.isEmpty());
     QCOMPARE(back.tuning.value(QStringLiteral("SPECIFIER")).effort, QStringLiteral("low"));
+    QCOMPARE(back.attachments, QStringList({"mockup.png", "Data Penjualan.xlsx"}));
+    QCOMPARE(reader.referenceDirectories(QStringLiteral("RoundTrip")), QStringList({"D:/lib", "E:/docs"}));
+
+    // Folder lampiran per task di dalam folder project, jadi ikut terhapus bersama project
+    const QString attachmentDir = reader.attachmentDirectory(QStringLiteral("RoundTrip"), QStringLiteral("r1"));
+    QCOMPARE(attachmentDir, base + QStringLiteral("/projects/RoundTrip/attachments/r1"));
+    QVERIFY(reader.attachmentDirectory(QStringLiteral("RoundTrip"), QString()).isEmpty());
+    QVERIFY(writeFile(attachmentDir + QStringLiteral("/mockup.png"), pngBytes(QSize(2, 2), Qt::red)));
+    {
+        FileManager remover;
+        QVERIFY(remover.saveTasks(QStringLiteral("Hapus"), {}, &error));
+        QVERIFY(writeFile(remover.attachmentDirectory(QStringLiteral("Hapus"), QStringLiteral("x")) + QStringLiteral("/a.csv"), "a"));
+        QVERIFY(remover.deleteProject(QStringLiteral("Hapus"), &error));
+        QVERIFY(!QFileInfo::exists(base + QStringLiteral("/projects/Hapus")));
+    }
+
+    // Tanpa folder referensi dan lampiran: field-nya tidak ditulis
+    {
+        FileManager writer;
+        writer.setReferenceDirectories(QStringLiteral("Polos"), {});
+        QVERIFY(writer.saveTasks(QStringLiteral("Polos"), {makeTask(QStringLiteral("p1"), QStringLiteral("CODER"))}, &error));
+        QFile plain(writer.projectFilePath(QStringLiteral("Polos")));
+        QVERIFY(plain.open(QIODevice::ReadOnly));
+        const QByteArray json = plain.readAll();
+        QVERIFY(!json.contains("referenceDirectories"));
+        QVERIFY(!json.contains("attachments"));
+    }
 
     // File lama tanpa "state"/"runs" (dan dengan "badge") tetap terbaca
     QVERIFY(QDir().mkpath(base + QStringLiteral("/projects/Legacy")));
@@ -1115,6 +1226,8 @@ void TestSwarm::fileManagerRoundTripsRunsAndState() {
     QVERIFY(old.first().state == TaskState::Idle);
     QVERIFY(old.first().runs.isEmpty());
     QVERIFY(old.first().tuning.isEmpty());
+    QVERIFY(old.first().attachments.isEmpty());
+    QVERIFY(reader.referenceDirectories(QStringLiteral("Legacy")).isEmpty());
 
     QDir(base + QStringLiteral("/projects")).removeRecursively();
 }
@@ -1900,6 +2013,47 @@ void TestSwarm::gitDiffMeasuresCSharpTypes() {
     QCOMPARE(findMember(*after, QStringLiteral("Cancel(Order)"))->coupling, 1);
 }
 
+void TestSwarm::gitDiffCanSkipMetrics() {
+    if (QStandardPaths::findExecutable(QStringLiteral("git")).isEmpty()) {
+        QSKIP("git tidak ada di PATH");
+    }
+
+    QTemporaryDir repo;
+    const QDir dir(repo.path());
+    QVERIFY(runGit(dir.path(), {QStringLiteral("init"), QStringLiteral("-q")}));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("Order.cs")),
+                      "namespace Shop;\npublic class Order : Entity\n{\n    public void Close() { }\n}\n"));
+    QVERIFY(runGit(dir.path(), {QStringLiteral("add"), QStringLiteral("-A")}));
+    QVERIFY(runGit(dir.path(), {QStringLiteral("commit"), QStringLiteral("-q"), QStringLiteral("-m"), QStringLiteral("awal")}));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("Order.cs")),
+                      "namespace Shop;\npublic class Order : Entity\n{\n    public void Close() { if (true) { } }\n}\n"));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("hitung.py")), "def hitung(x):\n    return x * 2\n"));
+
+    // Bawaan: file kode diukur dan tipe C# project terbaca
+    const WorkspaceDiff measured = GitDiff::collect(dir.path());
+    QVERIFY2(measured.error.isEmpty(), qPrintable(measured.error));
+    QCOMPARE(diffPaths(measured), QStringList({"hitung.py", "Order.cs"}));
+    QVERIFY(measured.files.at(0).after);
+    QVERIFY(measured.files.at(1).before && measured.files.at(1).after);
+    QVERIFY(!measured.csharpTypes.isEmpty());
+    QVERIFY(measured.maintainabilityAfter());
+
+    // Tanpa pengukuran: diff-nya sama persis, hanya metrik yang kosong
+    const WorkspaceDiff plain = GitDiff::collect(dir.path(), false);
+    QVERIFY2(plain.error.isEmpty(), qPrintable(plain.error));
+    QCOMPARE(diffPaths(plain), diffPaths(measured));
+    QCOMPARE(plain.baseCommit, measured.baseCommit);
+    QCOMPARE(plain.added(), measured.added());
+    QCOMPARE(plain.removed(), measured.removed());
+    for (const FileDiff &file : plain.files) {
+        QVERIFY(!file.before);
+        QVERIFY(!file.after);
+    }
+    QVERIFY(plain.csharpTypes.isEmpty());
+    QVERIFY(!plain.maintainabilityBefore());
+    QVERIFY(!plain.maintainabilityAfter());
+}
+
 namespace {
 
 // "method +abstract Place(Customer, int) : Order"
@@ -2150,6 +2304,654 @@ void TestSwarm::realEdgeRendersMermaid() {
     renderer.render(code);
     QTRY_COMPARE_WITH_TIMEOUT(int(images.size()), 2, 5000);
     QVERIFY(timer.elapsed() < 1000);
+}
+
+void TestSwarm::documentTextReadsCsv() {
+    QTemporaryDir dir;
+
+    // BOM UTF-8 dan akhir baris Windows: BOM dibuang, CRLF jadi LF
+    const QString utf8 = dir.filePath(QStringLiteral("data.csv"));
+    QVERIFY(writeFile(utf8, "\xEF\xBB\xBFnama,kota\r\nBudi,S\xC3\xA9marang\r\n"));
+    QString error;
+    QCOMPARE(DocumentText::extract(utf8, &error), QStringLiteral("nama,kota\nBudi,S\u00e9marang\n"));
+    QVERIFY(error.isEmpty());
+
+    // "CSV" Excel lama (code page Windows, bukan UTF-8 yang sah) tetap terbaca tanpa karakter rusak
+    const QString ansi = dir.filePath(QStringLiteral("ansi.csv"));
+    QVERIFY(writeFile(ansi, "nama;kota\nJos\xE9;Caf\xE9\n"));
+    const QString decoded = DocumentText::extract(ansi, &error);
+    QVERIFY(decoded.startsWith(QStringLiteral("nama;kota\nJos")));
+    QVERIFY(!decoded.contains(QChar::ReplacementCharacter));
+
+    // TSV: tab tetap tab
+    const QString tsv = dir.filePath(QStringLiteral("data.tsv"));
+    QVERIFY(writeFile(tsv, "a\tb\n1\t2\n"));
+    QCOMPARE(DocumentText::extract(tsv), QStringLiteral("a\tb\n1\t2\n"));
+    QVERIFY(DocumentText::check(tsv));
+}
+
+void TestSwarm::documentTextReadsDocx() {
+    const QByteArray styles = R"(<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:style w:type="paragraph" w:styleId="Judul1"><w:name w:val="heading 1"/></w:style>
+  <w:style w:type="paragraph" w:styleId="Subjudul"><w:name w:val="Subjudul Saya"/><w:pPr><w:outlineLvl w:val="1"/></w:pPr></w:style>
+</w:styles>)";
+    // Word berbahasa Indonesia: styleId judul "Judul1", tapi nama gaya bawaannya tetap "heading 1"
+    const QByteArray document = R"(<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">
+<w:body>
+  <w:p><w:pPr><w:pStyle w:val="Judul1"/></w:pPr><w:r><w:t>Spesifikasi Login</w:t></w:r></w:p>
+  <w:p><w:r><w:t xml:space="preserve">Halaman </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>login</w:t></w:r><w:del w:id="1"><w:r><w:delText>lama</w:delText></w:r></w:del><w:r><w:tab/><w:t>baru</w:t><w:br/><w:t>baris dua</w:t></w:r></w:p>
+  <w:p/>
+  <w:p><w:pPr><w:pStyle w:val="Subjudul"/></w:pPr><w:r><w:t>Kriteria</w:t></w:r></w:p>
+  <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="3"/></w:numPr></w:pPr><w:r><w:t>Email wajib</w:t></w:r></w:p>
+  <w:p><w:pPr><w:numPr><w:ilvl w:val="1"/><w:numId w:val="3"/></w:numPr></w:pPr><w:r><w:t>Format valid</w:t></w:r></w:p>
+  <w:tbl>
+    <w:tr><w:tc><w:p><w:r><w:t>Field</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Aturan</w:t></w:r></w:p></w:tc></w:tr>
+    <w:tr><w:tc><w:p><w:r><w:t>Password</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>min 8 | huruf</w:t></w:r></w:p><w:p><w:r><w:t>angka</w:t></w:r></w:p></w:tc></w:tr>
+  </w:tbl>
+  <w:p><w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><w:txbxContent><w:p><w:r><w:t>Catatan kotak</w:t></w:r></w:p></w:txbxContent></w:drawing></mc:Choice><mc:Fallback><w:pict><w:txbxContent><w:p><w:r><w:t>Catatan kotak</w:t></w:r></w:p></w:txbxContent></w:pict></mc:Fallback></mc:AlternateContent></w:r><w:r><w:t>Selesai</w:t></w:r></w:p>
+  <w:sectPr/>
+</w:body>
+</w:document>)";
+
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("spesifikasi.docx"));
+    QVERIFY(writeZip(path, {{QStringLiteral("word/document.xml"), document}, {QStringLiteral("word/styles.xml"), styles}}));
+    QVERIFY(DocumentText::check(path));
+
+    QString error;
+    const QString text = DocumentText::extract(path, &error);
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    // Teks yang dihapus lewat track changes dan salinan mc:Fallback tidak ikut
+    QCOMPARE(text, QStringLiteral("# Spesifikasi Login\n"
+                                  "Halaman login\tbaru\n"
+                                  "baris dua\n"
+                                  "\n"
+                                  "## Kriteria\n"
+                                  "- Email wajib\n"
+                                  "  - Format valid\n"
+                                  "\n"
+                                  "| Field | Aturan |\n"
+                                  "| --- | --- |\n"
+                                  "| Password | min 8 \\| huruf angka |\n"
+                                  "\n"
+                                  "Catatan kotak\n"
+                                  "Selesai"));
+}
+
+void TestSwarm::documentTextReadsXlsx() {
+    const QByteArray workbook = R"(<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <workbookPr/>
+  <sheets>
+    <sheet name="Data" sheetId="1" r:id="rId1"/>
+    <sheet name="Rahasia" sheetId="2" state="hidden" r:id="rId2"/>
+    <sheet name="Grafik" sheetId="3" r:id="rId3"/>
+  </sheets>
+</workbook>)";
+    // Target relatif terhadap xl/ atau absolut dari akar arsip; chartsheet bukan lembar data
+    const QByteArray rels = R"(<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="/xl/worksheets/sheet2.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet" Target="chartsheets/sheet1.xml"/>
+</Relationships>)";
+    const QByteArray shared = R"(<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <si><t>Nama</t></si>
+  <si><t>Tanggal</t></si>
+  <si><r><t>Budi</t></r><r><rPr><b/></rPr><t xml:space="preserve"> Santoso</t></r><rPh><t>budi</t></rPh></si>
+  <si><t>Kota, "Besar"</t></si>
+</sst>)";
+    // cellXfs: 0 General, 1 tanggal bawaan (14), 2 tanggal buatan sendiri, 3 angka (#,##0.00),
+    // 4 angka dengan teks berkutip yang memuat huruf "h". cellStyleXfs sengaja bertanggal: bukan gaya sel.
+    const QByteArray styles = R"(<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <numFmts count="2"><numFmt numFmtId="164" formatCode="dd/mm/yyyy;@"/><numFmt numFmtId="165" formatCode="0&quot; hari&quot;"/></numFmts>
+  <cellStyleXfs count="1"><xf numFmtId="14"/></cellStyleXfs>
+  <cellXfs count="5"><xf numFmtId="0"/><xf numFmtId="14"/><xf numFmtId="164"/><xf numFmtId="4"/><xf numFmtId="165"/></cellXfs>
+</styleSheet>)";
+    const QByteArray sheet1 = R"(<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>
+  <row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1" t="inlineStr"><is><t>Aktif</t></is></c><c r="D1" t="inlineStr"><is><t>Total</t></is></c></row>
+  <row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2" s="1"><v>46293</v></c><c r="C2" t="b"><v>1</v></c><c r="D2" s="3"><f>SUM(E2:F2)</f><v>1234.5</v></c></row>
+  <row r="3"><c r="A3" t="s"><v>3</v></c><c r="B3" s="2"><v>46293.5625</v></c><c r="D3" t="e"><v>#DIV/0!</v></c></row>
+  <row r="4"><c r="A4" s="0"/></row>
+  <row r="6"><c r="C6"><v>7</v></c><c r="D6" s="4"><v>5</v></c></row>
+</sheetData></worksheet>)";
+    const QByteArray sheet2 = R"(<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>
+  <row r="1"><c r="A1" t="inlineStr"><is><t>kode</t></is></c><c r="B1"><v>42</v></c></row>
+</sheetData></worksheet>)";
+
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("laporan.xlsx"));
+    QVERIFY(writeZip(path, {{QStringLiteral("xl/workbook.xml"), workbook},
+                            {QStringLiteral("xl/_rels/workbook.xml.rels"), rels},
+                            {QStringLiteral("xl/sharedStrings.xml"), shared},
+                            {QStringLiteral("xl/styles.xml"), styles},
+                            {QStringLiteral("xl/worksheets/sheet1.xml"), sheet1},
+                            {QStringLiteral("xl/worksheets/sheet2.xml"), sheet2}}));
+
+    QString error;
+    const QString text = DocumentText::extract(path, &error);
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    // Seri 46293 = 28 September 2026; kolom yang terlewat jadi sel kosong; teks fonetik dibuang;
+    // rumus diwakili hasilnya; baris tanpa isi dilewati
+    QCOMPARE(text, QStringLiteral("[Sheet: Data]\n"
+                                  "Nama,Tanggal,Aktif,Total\n"
+                                  "Budi Santoso,2026-09-28,TRUE,1234.5\n"
+                                  "\"Kota, \"\"Besar\"\"\",2026-09-28 13:30,,#DIV/0!\n"
+                                  ",,7,5\n"
+                                  "\n"
+                                  "[Sheet: Rahasia (tersembunyi)]\n"
+                                  "kode,42"));
+
+    // Workbook bertanggal 1904 (Excel Mac lama): seri 0 = 1 Januari 1904
+    const QString mac = dir.filePath(QStringLiteral("mac.xlsx"));
+    QByteArray workbook1904 = workbook;
+    workbook1904.replace("<workbookPr/>", "<workbookPr date1904=\"1\"/>");
+    const QByteArray sheetDate = R"(<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>
+  <row r="1"><c r="A1" s="1"><v>0</v></c><c r="B1" s="1"><v>0.25</v></c></row></sheetData></worksheet>)";
+    QVERIFY(writeZip(mac, {{QStringLiteral("xl/workbook.xml"), workbook1904},
+                           {QStringLiteral("xl/_rels/workbook.xml.rels"), rels},
+                           {QStringLiteral("xl/styles.xml"), styles},
+                           {QStringLiteral("xl/worksheets/sheet1.xml"), sheetDate},
+                           {QStringLiteral("xl/worksheets/sheet2.xml"), sheet2}}));
+    QVERIFY(DocumentText::extract(mac).startsWith(QStringLiteral("[Sheet: Data]\n1904-01-01,06:00\n")));
+}
+
+void TestSwarm::documentTextRejectsUnsupportedFiles() {
+    QTemporaryDir dir;
+    auto problem = [](const QString &path) {
+        QString error;
+        const bool ok = DocumentText::check(path, &error);
+        // extract() menolak dengan alasan yang sama
+        QString extractError;
+        const QString text = DocumentText::extract(path, &extractError);
+        return ok || !text.isEmpty() || extractError != error ? QStringLiteral("<lolos>") : error;
+    };
+
+    const QString xls = dir.filePath(QStringLiteral("lama.xls"));
+    QVERIFY(writeFile(xls, "x"));
+    QCOMPARE(problem(xls), QStringLiteral("Format lama .xls tidak didukung; simpan ulang sebagai .xlsx"));
+    const QString doc = dir.filePath(QStringLiteral("lama.doc"));
+    QVERIFY(writeFile(doc, "x"));
+    QCOMPARE(problem(doc), QStringLiteral("Format lama .doc tidak didukung; simpan ulang sebagai .docx"));
+
+    const QString txt = dir.filePath(QStringLiteral("catatan.txt"));
+    QVERIFY(writeFile(txt, "x"));
+    QVERIFY(problem(txt).startsWith(QStringLiteral("Hanya file Excel")));
+    QVERIFY(!DocumentText::isSupported(txt));
+    QVERIFY(DocumentText::isSupported(QStringLiteral("Laporan.XLSX")));
+
+    QCOMPARE(problem(dir.filePath(QStringLiteral("hilang.csv"))), QStringLiteral("File tidak ditemukan"));
+
+    const QString fake = dir.filePath(QStringLiteral("palsu.xlsx"));
+    QVERIFY(writeFile(fake, "bukan arsip zip"));
+    QCOMPARE(problem(fake), QStringLiteral("Bukan file Excel yang valid"));
+
+    // File Office berpassword disimpan sebagai compound file (OLE), bukan ZIP
+    const QString locked = dir.filePath(QStringLiteral("rahasia.docx"));
+    QVERIFY(writeFile(locked, QByteArray::fromHex("d0cf11e0a1b11ae1") + QByteArray(512, '\0')));
+    QVERIFY(problem(locked).contains(QStringLiteral("berpassword")));
+
+    const QString empty = dir.filePath(QStringLiteral("kosong.xlsx"));
+    QVERIFY(writeZip(empty, {{QStringLiteral("[Content_Types].xml"), QByteArray("<Types/>")}}));
+    QVERIFY(problem(empty).contains(QStringLiteral("xl/workbook.xml")));
+}
+
+void TestSwarm::attachmentNamesAreSafeAndUnique() {
+    using TaskAttachments::uniqueName;
+    QCOMPARE(uniqueName(QStringLiteral("data.csv"), {}), QStringLiteral("data.csv"));
+    // Tanpa beda huruf besar/kecil, seperti sistem file Windows
+    QCOMPARE(uniqueName(QStringLiteral("data.csv"), {QStringLiteral("DATA.csv")}), QStringLiteral("data (2).csv"));
+    QCOMPARE(uniqueName(QStringLiteral("data.csv"), {QStringLiteral("data.csv"), QStringLiteral("data (2).csv")}),
+             QStringLiteral("data (3).csv"));
+    QCOMPARE(uniqueName(QStringLiteral("a:b?c*.png"), {}), QStringLiteral("a_b_c_.png"));
+    QCOMPARE(uniqueName(QStringLiteral("../../rahasia.txt"), {}), QStringLiteral(".._.._rahasia.txt"));
+    QCOMPARE(uniqueName(QStringLiteral("CON.txt"), {}), QStringLiteral("lampiranCON.txt"));
+    // Nama berawalan titik (mis. folder .teks) tidak pernah dipakai
+    QCOMPARE(uniqueName(QStringLiteral(".teks"), {}), QStringLiteral("lampiran.teks"));
+    QCOMPARE(uniqueName(QStringLiteral("titik. "), {}), QStringLiteral("titik"));
+    QCOMPARE(uniqueName(QString(200, QLatin1Char('x')) + QStringLiteral(".xlsx"), {}).size(), qsizetype(105));
+
+    QVERIFY(TaskAttachments::isImage(QStringLiteral("Foto.JPG")));
+    QVERIFY(!TaskAttachments::isImage(QStringLiteral("data.csv")));
+    QVERIFY(TaskAttachments::isDocument(QStringLiteral("data.csv")));
+    QVERIFY(TaskAttachments::documentFilter().contains(QStringLiteral("*.xlsx")));
+    QVERIFY(TaskAttachments::imageFilter().contains(QStringLiteral("*.png")));
+}
+
+void TestSwarm::attachmentsSaveAndRemoveFiles() {
+    QTemporaryDir root;
+    const QString source = root.filePath(QStringLiteral("asal/Data Penjualan.csv"));
+    QVERIFY(writeFile(source, "produk,harga\nkopi,15000\n"));
+    const QString directory = root.filePath(QStringLiteral("attachments/t1"));
+
+    TaskAttachments::Draft photo;
+    photo.fileName = QStringLiteral("tempel.png");
+    photo.imageData = pngBytes(QSize(8, 8), Qt::red);
+    TaskAttachments::Draft document;
+    document.fileName = QStringLiteral("Data Penjualan.csv");
+    document.sourcePath = source;
+    TaskAttachments::Draft missing;
+    missing.fileName = QStringLiteral("hilang.csv");
+    missing.sourcePath = root.filePath(QStringLiteral("tidak-ada.csv"));
+
+    // Task baru: draft baru ditulis, yang gagal dilewati dengan alasan
+    QStringList errors;
+    QStringList saved = TaskAttachments::save(directory, {photo, document, missing}, {}, &errors);
+    QCOMPARE(saved, QStringList({"tempel.png", "Data Penjualan.csv"}));
+    QCOMPARE(errors, QStringList({"hilang.csv gagal disimpan"}));
+    const QDir dir(directory);
+    QCOMPARE(QFile(dir.filePath(QStringLiteral("tempel.png"))).size(), qint64(photo.imageData.size()));
+    QFile copied(dir.filePath(QStringLiteral("Data Penjualan.csv")));
+    QVERIFY(copied.open(QIODevice::ReadOnly));
+    QCOMPARE(copied.readAll(), QByteArray("produk,harga\nkopi,15000\n"));
+    copied.close();
+
+    // Edit: foto lama tetap, dokumen dihapus dari form, dokumen baru bernama sama dengan foto lama
+    QVERIFY(writeFile(dir.filePath(QStringLiteral(".teks/Data Penjualan.csv.txt")), "cache"));
+    TaskAttachments::Draft keep;
+    keep.fileName = QStringLiteral("tempel.png");
+    keep.storedPath = dir.filePath(QStringLiteral("tempel.png"));
+    TaskAttachments::Draft clash = document;
+    clash.fileName = QStringLiteral("TEMPEL.png");
+    errors.clear();
+    saved = TaskAttachments::save(directory, {keep, clash}, saved, &errors);
+    QVERIFY(errors.isEmpty());
+    QCOMPARE(saved, QStringList({"tempel.png", "TEMPEL (2).png"}));
+    QVERIFY(!QFile::exists(dir.filePath(QStringLiteral("Data Penjualan.csv"))));
+    // Cache teks lengkap dibuang; dibuat ulang pada run berikutnya
+    QVERIFY(!QFileInfo::exists(dir.filePath(QStringLiteral(".teks"))));
+
+    // Semua lampiran dihapus: folder task ikut hilang
+    saved = TaskAttachments::save(directory, {}, saved, &errors);
+    QVERIFY(saved.isEmpty());
+    QVERIFY(!QFileInfo::exists(directory));
+
+    // Nama dari session.json yang menunjuk ke luar folder lampiran tidak pernah dihapus
+    const QString outside = root.filePath(QStringLiteral("asal/penting.txt"));
+    QVERIFY(writeFile(outside, "jangan dihapus"));
+    TaskAttachments::save(directory, {}, {QStringLiteral("../../asal/penting.txt")}, &errors);
+    QVERIFY(QFile::exists(outside));
+
+    // Folder kosong = tidak diketahui: tidak menulis apa pun ke folder kerja proses
+    errors.clear();
+    QVERIFY(TaskAttachments::save(QString(), {photo}, {}, &errors).isEmpty());
+    QCOMPARE(errors, QStringList({"folder lampiran tidak diketahui"}));
+    QVERIFY(!QFile::exists(QStringLiteral("tempel.png")));
+}
+
+void TestSwarm::imagesAreNormalizedForClaude() {
+    using TaskAttachments::kMaxImageBytes;
+    using TaskAttachments::kMaxImageSide;
+
+    // Tangkapan layar besar: diperkecil, tetap PNG
+    QImage screenshot(3200, 1600, QImage::Format_ARGB32);
+    screenshot.fill(QColor(20, 40, 200, 128));
+    TaskAttachments::NormalizedImage result = TaskAttachments::normalizeImage(screenshot);
+    QVERIFY(result.error.isEmpty());
+    QCOMPARE(result.suffix, QStringLiteral("png"));
+    QCOMPARE(result.size, QSize(kMaxImageSide, kMaxImageSide / 2));
+    QVERIFY(QImage::fromData(result.data).hasAlphaChannel());
+
+    // Derau acak tidak bisa dikompres PNG: jatuh ke JPEG di bawah batas ukuran
+    QImage noise(1400, 1400, QImage::Format_RGB32);
+    for (int y = 0; y < noise.height(); ++y) {
+        auto *line = reinterpret_cast<quint32 *>(noise.scanLine(y));
+        for (int x = 0; x < noise.width(); ++x) {
+            line[x] = 0xff000000u | (QRandomGenerator::global()->generate() & 0xffffffu);
+        }
+    }
+    result = TaskAttachments::normalizeImage(noise);
+    QVERIFY(result.error.isEmpty());
+    QCOMPARE(result.suffix, QStringLiteral("jpg"));
+    QVERIFY(result.data.size() <= kMaxImageBytes);
+    QVERIFY(!QImage::fromData(result.data).isNull());
+
+    QVERIFY(!TaskAttachments::normalizeImage(QImage()).error.isEmpty());
+
+    QTemporaryDir dir;
+    // PNG kecil disimpan apa adanya, tanpa kompresi ulang
+    const QString small = dir.filePath(QStringLiteral("kecil.png"));
+    const QByteArray smallBytes = pngBytes(QSize(40, 20), Qt::green);
+    QVERIFY(writeFile(small, smallBytes));
+    result = TaskAttachments::normalizeImageFile(small);
+    QCOMPARE(result.data, smallBytes);
+    QCOMPARE(result.suffix, QStringLiteral("png"));
+
+    // Foto kamera besar (JPEG): diperkecil, tetap JPEG
+    QImage photo(2400, 1800, QImage::Format_RGB32);
+    photo.fill(QColor(200, 150, 100));
+    const QString camera = dir.filePath(QStringLiteral("kamera.jpeg"));
+    QVERIFY(writeFile(camera, imageBytes(photo, "JPEG")));
+    result = TaskAttachments::normalizeImageFile(camera);
+    QVERIFY(result.error.isEmpty());
+    QCOMPARE(result.suffix, QStringLiteral("jpg"));
+    QCOMPARE(result.size, QSize(kMaxImageSide, 1176));
+
+    const QString broken = dir.filePath(QStringLiteral("rusak.png"));
+    QVERIFY(writeFile(broken, "bukan gambar"));
+    result = TaskAttachments::normalizeImageFile(broken);
+    QVERIFY(result.data.isEmpty());
+    QVERIFY(result.error.startsWith(QStringLiteral("Bukan gambar")));
+}
+
+void TestSwarm::materialsReadAttachmentsAndReferences() {
+    QTemporaryDir root;
+    const QDir attachments(root.filePath(QStringLiteral("attachments/t1")));
+    QVERIFY(writeFile(attachments.filePath(QStringLiteral("foto.png")), pngBytes(QSize(4, 4), Qt::red)));
+    QVERIFY(writeFile(attachments.filePath(QStringLiteral("data.csv")), "produk,harga\nkopi,15000\n"));
+    QByteArray big;
+    for (int i = 0; i < 3000; ++i) {
+        big += QByteArray("baris-") + QByteArray::number(i).rightJustified(4, '0') + QByteArray(",isi-data-panjang\n");
+    }
+    QVERIFY(writeFile(attachments.filePath(QStringLiteral("besar.csv")), big));
+    QVERIFY(writeFile(attachments.filePath(QStringLiteral("rusak.xlsx")), "bukan zip"));
+    const QString reference = root.filePath(QStringLiteral("referensi"));
+    QVERIFY(QDir().mkpath(reference));
+
+    TaskItem task = makeTask(QStringLiteral("t1"), QStringLiteral("CODER"));
+    task.attachments = QStringList({"foto.png", "data.csv", "besar.csv", "rusak.xlsx", "hilang.docx"});
+    const TaskMaterials materials = TaskAttachments::materials(
+        task, attachments.path(), {reference, root.filePath(QStringLiteral("sudah-dihapus"))});
+
+    QCOMPARE(materials.imagePaths, QStringList({QDir::toNativeSeparators(attachments.filePath(QStringLiteral("foto.png")))}));
+    QCOMPARE(int(materials.documents.size()), 3);
+
+    const TaskMaterials::Document &data = materials.documents.at(0);
+    QCOMPARE(data.fileName, QStringLiteral("data.csv"));
+    QCOMPARE(data.path, QDir::toNativeSeparators(attachments.filePath(QStringLiteral("data.csv"))));
+    QCOMPARE(data.text, QStringLiteral("produk,harga\nkopi,15000\n"));
+    QCOMPARE(data.omittedChars, qsizetype(0));
+    QVERIFY(data.fullTextPath.isEmpty());
+
+    // Dokumen panjang dipotong di akhir baris; teks lengkapnya disimpan untuk dibaca dengan Read
+    const TaskMaterials::Document &large = materials.documents.at(1);
+    QVERIFY(large.text.size() <= TaskAttachments::kDocumentPromptChars);
+    QVERIFY(large.text.endsWith(QStringLiteral(",isi-data-panjang")));
+    QCOMPARE(large.text.size() + large.omittedChars, qsizetype(big.size()));
+    QFile full(large.fullTextPath);
+    QVERIFY2(full.open(QIODevice::ReadOnly), qPrintable(large.fullTextPath));
+    QCOMPARE(full.readAll(), big);
+
+    const TaskMaterials::Document &broken = materials.documents.at(2);
+    QCOMPARE(broken.error, QStringLiteral("Bukan file Excel yang valid"));
+    QVERIFY(broken.text.isEmpty());
+
+    QCOMPARE(materials.referenceDirectories, QStringList({QDir::toNativeSeparators(reference)}));
+    QCOMPARE(materials.attachmentDirectory, QDir::toNativeSeparators(attachments.path()));
+    QCOMPARE(materials.readableDirectories(),
+             QStringList({QDir::toNativeSeparators(reference), QDir::toNativeSeparators(attachments.path())}));
+    QCOMPARE(int(materials.warnings.size()), 3);
+    QVERIFY(materials.warnings.at(0).startsWith(QStringLiteral("folder referensi tidak ditemukan")));
+    QCOMPARE(materials.warnings.at(1), QStringLiteral("lampiran rusak.xlsx tidak bisa dibaca: Bukan file Excel yang valid"));
+    QCOMPARE(materials.warnings.at(2), QStringLiteral("lampiran hilang.docx tidak ditemukan, dilewati"));
+
+    // Task tanpa lampiran: folder lampirannya tidak ikut dibuka untuk agent
+    const TaskMaterials plain = TaskAttachments::materials(makeTask(QStringLiteral("t2"), QStringLiteral("CODER")),
+                                                           attachments.path(), {});
+    QVERIFY(plain.attachmentDirectory.isEmpty());
+    QVERIFY(plain.readableDirectories().isEmpty());
+}
+
+void TestSwarm::composerAddsInstructionsAttachmentsAndReferences() {
+    TaskItem task = makeTask(QStringLiteral("1"), QStringLiteral("CODER"));
+    task.subtext = QStringLiteral("  Buat halaman login seperti foto.\nWarna mengikuti data.csv.  ");
+    StageRun spec = stageRun(QStringLiteral("SPECIFIER"), true, QStringLiteral("Spek"));
+    spec.decision = ReviewDecision::Approved;
+    task.runs = {spec};
+
+    TaskMaterials materials;
+    materials.imagePaths = QStringList({QStringLiteral("C:\\lampiran\\mockup.png"), QStringLiteral("C:\\lampiran\\warna.jpg")});
+    TaskMaterials::Document csv;
+    csv.fileName = QStringLiteral("data.csv");
+    csv.path = QStringLiteral("C:\\lampiran\\data.csv");
+    csv.text = QStringLiteral("a,b\n1,2");
+    TaskMaterials::Document word;
+    word.fileName = QStringLiteral("spec.docx");
+    word.path = QStringLiteral("C:\\lampiran\\spec.docx");
+    word.text = QStringLiteral("# Judul\n```kode```");
+    word.omittedChars = 10;
+    word.fullTextPath = QStringLiteral("C:\\lampiran\\.teks\\spec.docx.txt");
+    TaskMaterials::Document broken;
+    broken.fileName = QStringLiteral("rusak.xlsx");
+    broken.path = QStringLiteral("C:\\lampiran\\rusak.xlsx");
+    broken.error = QStringLiteral("Bukan file Excel yang valid");
+    materials.documents = {csv, word, broken};
+    materials.referenceDirectories = QStringList({QStringLiteral("E:\\shared\\design-system"),
+                                                  QStringLiteral("E:\\arsip (lama)")});
+
+    const QString prompt = TaskPromptComposer().compose(task, materials);
+    // Prompt multi-baris jadi bagian sendiri, bukan "Catatan:" di bagian Task
+    QVERIFY(prompt.startsWith(QStringLiteral("# Task\nJudul: Task 1\nKategori: utility\n\n# Instruksi\n\n"
+                                             "Buat halaman login seperti foto.\nWarna mengikuti data.csv.\n\n# Lampiran\n")));
+    QVERIFY(!prompt.contains(QStringLiteral("Catatan:")));
+    QVERIFY(prompt.contains(QStringLiteral("# Lampiran\n"
+                                           "Foto (terlampir sebagai gambar di pesan ini): mockup.png, warna.jpg\n"
+                                           "Dokumen (isi teksnya di bawah):\n"
+                                           "- data.csv: `C:\\lampiran\\data.csv`\n"
+                                           "- spec.docx: `C:\\lampiran\\spec.docx`\n"
+                                           "- rusak.xlsx: `C:\\lampiran\\rusak.xlsx`\n"
+                                           "\n## data.csv\n```csv\na,b\n1,2\n```\n")));
+    // Pagar blok lebih panjang dari backtick di dalam dokumen
+    QVERIFY(prompt.contains(QStringLiteral("## spec.docx\n(Dipotong: 10 karakter terakhir tidak ikut di sini; teks "
+                                           "lengkapnya bisa dibaca dengan Read: `C:\\lampiran\\.teks\\spec.docx.txt`)\n"
+                                           "````markdown\n# Judul\n```kode```\n````\n")));
+    QVERIFY(prompt.contains(QStringLiteral("## rusak.xlsx\n(Tidak bisa dibaca: Bukan file Excel yang valid)")));
+    QVERIFY(prompt.contains(QStringLiteral("# Folder referensi (hanya dibaca)\n")));
+    // Path dalam kode sebaris: "(lama)" di nama folder bukan keterangan
+    QVERIFY(prompt.contains(QStringLiteral("Jangan mengubah isinya.\n- `E:\\shared\\design-system`\n- `E:\\arsip (lama)`\n\n")));
+
+    // Urutan: task, instruksi, lampiran, referensi, lalu dokumen serah-terima antar stage
+    const QStringList order = {
+        QStringLiteral("# Task"), QStringLiteral("# Instruksi"), QStringLiteral("# Lampiran"),
+        QStringLiteral("# Folder referensi"), QStringLiteral("# Spesifikasi yang disetujui (SPECIFIER)"),
+    };
+    for (qsizetype i = 1; i < order.size(); ++i) {
+        QVERIFY2(prompt.indexOf(order.at(i - 1)) < prompt.indexOf(order.at(i)), qPrintable(order.at(i)));
+    }
+
+    // Log konsol meringkas bagian-bagian itu; judul "# Judul" di dalam blok kode bukan bagian prompt
+    AgentLaunch launch;
+    launch.prompt = prompt;
+    launch.workingDirectory = QStringLiteral("E:/repo");
+    const QString log = RunLogFormatter::startLines(task, launch).join(QLatin1Char('\n'));
+    QVERIFY(log.contains(QStringLiteral("+ Instruksi (2 baris)")));
+    QVERIFY(log.contains(QStringLiteral("+ Lampiran (")));
+    QVERIFY(log.contains(QStringLiteral("+ Folder referensi (hanya dibaca) (3 baris)")));
+    QVERIFY(!log.contains(QStringLiteral("+ Judul")));
+
+    // Tanpa bahan: prompt sama persis dengan sebelumnya
+    task.subtext = QStringLiteral("PIC: Budi");
+    task.runs.clear();
+    QCOMPARE(TaskPromptComposer().compose(task, TaskMaterials()), TaskPromptComposer().compose(task));
+    QVERIFY(TaskPromptComposer().compose(task).endsWith(QStringLiteral("Catatan: PIC: Budi\n")));
+}
+
+void TestSwarm::cliGrantsReadOnlyFoldersAndStreamInput() {
+    QCOMPARE(ClaudeCli::readRule(QStringLiteral("E:\\File Bondan\\lib")), QStringLiteral("Read(//e/File Bondan/lib/**)"));
+    QCOMPARE(ClaudeCli::readRule(QStringLiteral("C:/Proyek (lama)/src/")), QStringLiteral("Read(//c/Proyek (lama)/src/**)"));
+    QCOMPARE(ClaudeCli::readRule(QStringLiteral("D:\\")), QStringLiteral("Read(//d/**)"));
+
+    const StageCatalog catalog = StageCatalog::standard();
+    AgentLaunch launch;
+    launch.agent = *catalog.profile(QStringLiteral("CODER"))->agent();
+    // Tanpa folder tambahan dan foto: argumen sama dengan argumen agent
+    QCOMPARE(ClaudeCli::arguments(launch), ClaudeCli::arguments(launch.agent));
+
+    launch.readableDirectories = QStringList({QStringLiteral("E:\\referensi"), QStringLiteral("C:\\lampiran\\t1")});
+    QStringList args = ClaudeCli::arguments(launch);
+    QCOMPARE(argValue(args, QStringLiteral("--allowedTools")),
+             QStringLiteral("Bash(git *),Read(//e/referensi/**),Read(//c/lampiran/t1/**)"));
+    // Bukan --add-dir: di mode acceptEdits folder itu ikut bisa diedit
+    QVERIFY(!args.contains(QStringLiteral("--add-dir")));
+    QVERIFY(!args.contains(QStringLiteral("--input-format")));
+    QCOMPARE(argValue(args, QStringLiteral("--permission-mode")), QStringLiteral("acceptEdits"));
+
+    launch.imagePaths = QStringList({QStringLiteral("C:\\lampiran\\t1\\foto.png")});
+    args = ClaudeCli::arguments(launch);
+    QCOMPARE(argValue(args, QStringLiteral("--input-format")), QStringLiteral("stream-json"));
+    QCOMPARE(argValue(args, QStringLiteral("--output-format")), QStringLiteral("stream-json"));
+
+    // Stage tanpa allowedTools bawaan tetap mendapat izin bacanya
+    launch.agent = *catalog.profile(QStringLiteral("SPECIFIER"))->agent();
+    QCOMPARE(argValue(ClaudeCli::arguments(launch), QStringLiteral("--allowedTools")),
+             QStringLiteral("Read(//e/referensi/**),Read(//c/lampiran/t1/**)"));
+}
+
+void TestSwarm::userMessageCarriesImages() {
+    QTemporaryDir dir;
+    const QString png = dir.filePath(QStringLiteral("mockup.png"));
+    const QByteArray pngData = pngBytes(QSize(6, 6), Qt::blue);
+    QVERIFY(writeFile(png, pngData));
+    const QString bmp = dir.filePath(QStringLiteral("lama.bmp"));
+    QVERIFY(writeFile(bmp, "BM"));
+
+    const QByteArray line = ClaudeCli::userMessage(QStringLiteral("# Task\nJudul: \u2713 \"kutip\"\n"),
+                                                   {png, bmp, dir.filePath(QStringLiteral("hilang.jpg"))});
+    // Satu baris JSON utuh per pesan
+    QVERIFY(line.endsWith('\n'));
+    QCOMPARE(line.count('\n'), qsizetype(1));
+
+    const QJsonObject root = QJsonDocument::fromJson(line).object();
+    QCOMPARE(root.value(QStringLiteral("type")).toString(), QStringLiteral("user"));
+    const QJsonObject message = root.value(QStringLiteral("message")).toObject();
+    QCOMPARE(message.value(QStringLiteral("role")).toString(), QStringLiteral("user"));
+    const QJsonArray content = message.value(QStringLiteral("content")).toArray();
+    QCOMPARE(int(content.size()), 5);
+    QCOMPARE(content.at(0).toObject().value(QStringLiteral("text")).toString(), QStringLiteral("Foto: mockup.png"));
+    const QJsonObject image = content.at(1).toObject();
+    QCOMPARE(image.value(QStringLiteral("type")).toString(), QStringLiteral("image"));
+    const QJsonObject source = image.value(QStringLiteral("source")).toObject();
+    QCOMPARE(source.value(QStringLiteral("type")).toString(), QStringLiteral("base64"));
+    QCOMPARE(source.value(QStringLiteral("media_type")).toString(), QStringLiteral("image/png"));
+    QCOMPARE(QByteArray::fromBase64(source.value(QStringLiteral("data")).toString().toLatin1()), pngData);
+    // Format yang tidak diterima Claude dan file yang hilang diganti catatan, bukan membatalkan run
+    QCOMPARE(content.at(2).toObject().value(QStringLiteral("text")).toString(), QStringLiteral("(Foto lama.bmp tidak bisa dibaca)"));
+    QCOMPARE(content.at(3).toObject().value(QStringLiteral("text")).toString(), QStringLiteral("(Foto hilang.jpg tidak bisa dibaca)"));
+    QCOMPARE(content.at(4).toObject().value(QStringLiteral("text")).toString(),
+             QStringLiteral("# Task\nJudul: \u2713 \"kutip\"\n"));
+}
+
+void TestSwarm::claudeSessionSendsImagesAsStreamJson() {
+    QTemporaryDir dir;
+    const QString echoPath = dir.filePath(QStringLiteral("echo.json"));
+    const FakeClaudeMode mode(QStringLiteral("echo:") + echoPath);
+    ClaudeCodeRuntime runtime(QCoreApplication::applicationFilePath());
+    const QString png = dir.filePath(QStringLiteral("foto.png"));
+    const QByteArray pngData = pngBytes(QSize(6, 6), Qt::red);
+    QVERIFY(writeFile(png, pngData));
+    AgentLaunch launch = fakeLaunch(dir.path());
+    launch.imagePaths = QStringList({png});
+    launch.readableDirectories = QStringList({dir.path()});
+
+    SessionRecorder recorder;
+    std::unique_ptr<AgentSession> session(runtime.createSession(launch, nullptr));
+    recorder.attach(session.get());
+    session->start();
+    QTRY_COMPARE_WITH_TIMEOUT(int(recorder.results.size()), 1, 15000);
+    QVERIFY(recorder.results.first().success);
+
+    QFile file(echoPath);
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    const QJsonObject echo = QJsonDocument::fromJson(file.readAll()).object();
+    QStringList args;
+    const QJsonArray argArray = echo.value(QStringLiteral("args")).toArray();
+    for (const QJsonValue &value : argArray) {
+        args.append(value.toString());
+    }
+    QCOMPARE(args, ClaudeCli::arguments(launch));
+    QCOMPARE(argValue(args, QStringLiteral("--input-format")), QStringLiteral("stream-json"));
+    QVERIFY(argValue(args, QStringLiteral("--allowedTools")).contains(ClaudeCli::readRule(dir.path())));
+
+    // stdin: satu pesan stream-json berisi foto lalu prompt yang sama persis
+    const QString stdinText = echo.value(QStringLiteral("stdin")).toString();
+    QCOMPARE(stdinText.toUtf8(), ClaudeCli::userMessage(launch.prompt, launch.imagePaths));
+    const QJsonArray content = QJsonDocument::fromJson(stdinText.toUtf8()).object()
+                                   .value(QStringLiteral("message")).toObject()
+                                   .value(QStringLiteral("content")).toArray();
+    QCOMPARE(content.last().toObject().value(QStringLiteral("text")).toString(), launch.prompt);
+}
+
+void TestSwarm::swarmPassesMaterialsToLaunch() {
+    SwarmFixture f;
+    TaskMaterials materials;
+    materials.attachmentDirectory = QStringLiteral("C:\\lampiran\\m1");
+    materials.imagePaths = QStringList({QStringLiteral("C:\\lampiran\\m1\\foto.png")});
+    materials.referenceDirectories = QStringList({QStringLiteral("E:\\referensi")});
+
+    QString reason;
+    QVERIFY2(f.swarm.run(makeTask(QStringLiteral("m1"), QStringLiteral("CODER")), f.dir.path(), materials, &reason),
+             qPrintable(reason));
+    FakeAgentSession *session = sessionFor(f.runtime, QStringLiteral("m1"));
+    QVERIFY(session);
+    QCOMPARE(session->launch().imagePaths, materials.imagePaths);
+    QCOMPARE(session->launch().readableDirectories,
+             QStringList({QStringLiteral("E:\\referensi"), QStringLiteral("C:\\lampiran\\m1")}));
+    QVERIFY(session->launch().prompt.contains(QStringLiteral("Foto (terlampir sebagai gambar di pesan ini): foto.png")));
+    QVERIFY(session->launch().prompt.contains(QStringLiteral("- `E:\\referensi`")));
+
+    // Tanpa bahan: tidak ada foto dan izin folder tambahan
+    QVERIFY(f.run(QStringLiteral("m2"), QStringLiteral("SPECIFIER")));
+    QVERIFY(sessionFor(f.runtime, QStringLiteral("m2"))->launch().imagePaths.isEmpty());
+    QVERIFY(sessionFor(f.runtime, QStringLiteral("m2"))->launch().readableDirectories.isEmpty());
+}
+
+void TestSwarm::realClaudeReadsAttachmentsAndReferences() {
+    if (qEnvironmentVariableIsEmpty("LASSOMOIR_REAL_CLAUDE")) {
+        QSKIP("Set LASSOMOIR_REAL_CLAUDE=1 untuk menjalankan claude sungguhan (memakai token)");
+    }
+
+    QTemporaryDir root;
+    const QString work = root.filePath(QStringLiteral("kerja"));
+    const QString reference = root.filePath(QStringLiteral("referensi (bersama)"));
+    const QString attachments = root.filePath(QStringLiteral("lampiran/t1"));
+    QVERIFY(writeFile(QDir(work).filePath(QStringLiteral("README.md")), "# Proyek uji\n"));
+    QVERIFY(writeFile(QDir(reference).filePath(QStringLiteral("kode.txt")), "kode-referensi-4821\n"));
+    QVERIFY(writeFile(QDir(attachments).filePath(QStringLiteral("warna.png")), pngBytes(QSize(64, 64), QColor(220, 20, 20))));
+    QVERIFY(writeFile(QDir(attachments).filePath(QStringLiteral("harga.csv")), "produk,harga\nkopi,15000\nteh,8000\n"));
+
+    // SPECIFIER hanya punya Read/Grep/Glob: folder referensi & lampiran terbaca, tidak bisa ditulis
+    TaskItem task = makeTask(QStringLiteral("real-lampiran"), QStringLiteral("SPECIFIER"));
+    task.title = QStringLiteral("Uji lampiran");
+    task.subtext = QStringLiteral("Jangan menulis spesifikasi. Jawab tiga baris saja:\n"
+                                  "1) warna dominan foto warna.png dalam bahasa Indonesia\n"
+                                  "2) harga kopi dari harga.csv\n"
+                                  "3) isi file kode.txt di folder referensi (baca dengan Read)");
+    task.attachments = QStringList({"warna.png", "harga.csv"});
+    task.tuning.insert(QStringLiteral("SPECIFIER"), {QStringLiteral("haiku"), QStringLiteral("low")});
+
+    const StageCatalog catalog = StageCatalog::standard();
+    ClaudeCodeRuntime runtime;
+    QString reason;
+    QVERIFY2(runtime.isAvailable(&reason), qPrintable(reason));
+    TaskPromptComposer composer;
+    SwarmCoordinator swarm(catalog, runtime, composer);
+    QList<AgentResult> results;
+    connect(&swarm, &SwarmCoordinator::runEvent, this, [&work](const TaskItem &item, const AgentEvent &event) {
+        qInfo().noquote() << RunLogFormatter::eventLine(item, event, work);
+    });
+    connect(&swarm, &SwarmCoordinator::runFinished, this, [&results](const TaskItem &item, const AgentResult &result) {
+        qInfo().noquote() << RunLogFormatter::finishLine(item, result);
+        results.append(result);
+    });
+
+    const TaskMaterials materials = TaskAttachments::materials(task, attachments, {reference});
+    QVERIFY(materials.warnings.isEmpty());
+    QVERIFY2(swarm.run(task, work, materials, &reason), qPrintable(reason));
+    QTRY_COMPARE_WITH_TIMEOUT(int(results.size()), 1, 300000);
+
+    const AgentResult result = results.first();
+    QVERIFY2(result.success, qPrintable(result.outcome + QStringLiteral(": ") + result.message));
+    QVERIFY2(result.deniedTools.isEmpty(), qPrintable(result.deniedTools.join(QStringLiteral(", "))));
+    const QString answer = result.message.toLower();
+    QVERIFY2(answer.contains(QStringLiteral("merah")), qPrintable(result.message));
+    QVERIFY2(answer.contains(QStringLiteral("15000")) || answer.contains(QStringLiteral("15.000")), qPrintable(result.message));
+    QVERIFY2(answer.contains(QStringLiteral("kode-referensi-4821")), qPrintable(result.message));
 }
 
 int main(int argc, char *argv[]) {

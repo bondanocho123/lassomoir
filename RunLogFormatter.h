@@ -28,6 +28,9 @@ QString queuedLine(const TaskItem &task);
 // "[RUN] TTT/Login ditolak: <alasan>"
 QString rejectedLine(const TaskItem &task, const QString &reason);
 
+// "[RUN] TTT/Login peringatan: <teks>", mis. lampiran atau folder referensi yang dilewati
+QString warningLine(const TaskItem &task, const QString &text);
+
 // "[AGENT:CODER] <teks>", "[AGENT:CODER] → Write src/a.cpp", "[AGENT:CODER] stderr: ...".
 // Path di dalam folder kerja ditampilkan relatif.
 QString eventLine(const TaskItem &task, const AgentEvent &event, const QString &workingDirectory);

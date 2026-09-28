@@ -407,7 +407,7 @@ QList<FileDiff> GitDiff::parse(const QString &patch) {
     return files;
 }
 
-WorkspaceDiff GitDiff::collect(const QString &workingDirectory) {
+WorkspaceDiff GitDiff::collect(const QString &workingDirectory, bool withMetrics) {
     const QString git = QStandardPaths::findExecutable(QStringLiteral("git"));
     if (git.isEmpty()) {
         return WorkspaceDiff::failure(QStringLiteral("git tidak ditemukan di PATH, jadi perubahan kode tidak bisa dibaca."));
@@ -465,8 +465,10 @@ WorkspaceDiff GitDiff::collect(const QString &workingDirectory) {
         ++listed;
     }
 
-    measureFiles(git, workingDirectory, result.baseCommit.isEmpty() ? QString() : base, &result.files);
-    result.csharpTypes = resolveCSharpInheritance(git, workingDirectory, &result.files);
+    if (withMetrics) {
+        measureFiles(git, workingDirectory, result.baseCommit.isEmpty() ? QString() : base, &result.files);
+        result.csharpTypes = resolveCSharpInheritance(git, workingDirectory, &result.files);
+    }
 
     std::sort(result.files.begin(), result.files.end(), [](const FileDiff &a, const FileDiff &b) {
         return QString::compare(a.path, b.path, Qt::CaseInsensitive) < 0;

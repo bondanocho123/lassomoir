@@ -6,36 +6,48 @@
 #include "MarkdownView.h"
 #include "MermaidRenderer.h"
 #include "PromptComposer.h"
+#include "PromptEditor.h"
 #include "ResponseDrawer.h"
 #include "StageCatalog.h"
 #include "SwarmCoordinator.h"
 #include "SwimlaneWidget.h"
+#include "TaskAttachments.h"
 #include "TaskManager.h"
 #include "WorkspaceDiff.h"
 #include "mainwindow.h"
 
 #include <QApplication>
+#include <QBuffer>
+#include <QClipboard>
 #include <QComboBox>
 #include <QDialog>
 #include <QDir>
+#include <QDropEvent>
 #include <QFile>
+#include <QFileDialog>
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMimeData>
 #include <QPlainTextEdit>
+#include <QPointer>
 #include <QProcess>
 #include <QPushButton>
 #include <QScopeGuard>
+#include <QScrollArea>
+#include <QSet>
 #include <QSplitter>
 #include <QStandardPaths>
 #include <QTabBar>
 #include <QTemporaryDir>
 #include <QTextBrowser>
 #include <QTimer>
+#include <QToolButton>
 #include <QTreeWidget>
+#include <QUrl>
 #include <QtTest>
 
 #include <algorithm>
@@ -96,6 +108,34 @@ bool writeFile(const QString &path, const QByteArray &content) {
     return file.open(QIODevice::WriteOnly | QIODevice::Truncate) && file.write(content) == content.size();
 }
 
+QImage solidImage(const QSize &size, const QColor &color) {
+    QImage image(size, QImage::Format_RGB32);
+    image.fill(color);
+    return image;
+}
+
+QByteArray jpegBytes(const QImage &image) {
+    QByteArray bytes;
+    QBuffer buffer(&bytes);
+    buffer.open(QIODevice::WriteOnly);
+    image.save(&buffer, "JPEG");
+    return bytes;
+}
+
+// Widget anak yang masih tampil. Kotak prompt dan popup menyusun ulang isinya dengan deleteLater,
+// jadi widget lama (atau baris induknya) sempat tersisa dalam keadaan tersembunyi.
+template <typename T>
+QList<T *> shownChildren(const QWidget *parent, const QString &name) {
+    QList<T *> result;
+    const QList<T *> children = parent->findChildren<T *>(name);
+    for (T *child : children) {
+        if (child->isVisibleTo(parent)) {
+            result.append(child);
+        }
+    }
+    return result;
+}
+
 }
 
 // MainWindow asli + SwarmCoordinator asli, hanya runtime agent yang palsu:
@@ -126,13 +166,22 @@ private slots:
     void reviewSurvivesRestart();
     void markdownViewRendersMermaid();
     void architectDrawerShowsCodeChanges();
+    void coderDrawerShowsCodeChanges();
     void maintainabilityViewShowsCSharpMembers();
     void umlTabShowsClassAndAgentDiagrams();
+
+    // Kotak prompt berfoto, lampiran Excel/Word/CSV, dan folder referensi
+    void promptEditorAttachesPhotosAndDocuments();
+    void newTaskWithAttachmentsFeedsRun();
+    void referenceFoldersFeedRuns();
 
 private:
     // Dialog modal membuka event loop sendiri di dalam handler klik; timer ini jalan di loop itu
     // dan mengisi/menutup dialog. m_dialogSeen tetap false bila dialog tidak pernah muncul.
     void driveModalDialog(std::function<void(QDialog *)> action);
+    // Sama, untuk dialog yang baru muncul beberapa siklus event kemudian (mis. pemilih folder
+    // yang dibuka lewat QTimer::singleShot): dicari berulang sampai ketemu
+    void driveNextModalDialog(std::function<void(QDialog *)> action);
     bool m_dialogSeen = false;
 
     // Rakit TaskManager + MainWindow seperti main.cpp (termasuk runFinished -> recordRun)
@@ -344,6 +393,36 @@ void TestGui::driveModalDialog(std::function<void(QDialog *)> action) {
     });
 }
 
+void TestGui::driveNextModalDialog(std::function<void(QDialog *)> action) {
+    m_dialogSeen = false;
+    // Timer menumpang jendela utama: ikut hilang di cleanup(), jadi tidak menyentuh test berikutnya
+    auto *poll = new QTimer(m_window.get());
+    poll->setInterval(10);
+    connect(poll, &QTimer::timeout, this, [this, poll, action]() {
+        auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+        if (!dialog) {
+            return;
+        }
+        poll->stop();
+        poll->deleteLater();
+        m_dialogSeen = true;
+        action(dialog);
+    });
+    poll->start();
+
+    auto *safety = new QTimer(m_window.get());
+    safety->setSingleShot(true);
+    connect(safety, &QTimer::timeout, this, [poll = QPointer<QTimer>(poll)]() {
+        if (poll) {
+            poll->stop();
+        }
+        if (QWidget *modal = QApplication::activeModalWidget()) {
+            modal->close();
+        }
+    });
+    safety->start(5000);
+}
+
 void TestGui::cardShowsHandCursor() {
     KanbanCardWidget *coder = card(QStringLiteral("t1"));
     QVERIFY(coder);
@@ -382,10 +461,13 @@ void TestGui::doubleClickEditsTask() {
     driveModalDialog([](QDialog *dialog) {
         QCOMPARE(dialog->windowTitle(), QStringLiteral("Edit Task"));
 
-        // Field terisi data kartu; urutan objectName "taskFormInput": judul lalu subtext
+        // Field terisi data kartu: judul (satu baris) dan subtext (kotak prompt multi-baris)
         const QList<QLineEdit *> inputs = dialog->findChildren<QLineEdit *>(QStringLiteral("taskFormInput"));
-        QCOMPARE(inputs.size(), 2);
+        QCOMPARE(inputs.size(), 1);
         QCOMPARE(inputs[0]->text(), QStringLiteral("Tulis hello"));
+        auto *prompt = dialog->findChild<QPlainTextEdit *>(QStringLiteral("taskFormPrompt"));
+        QVERIFY(prompt);
+        QVERIFY(prompt->toPlainText().isEmpty());
 
         // Stage dikunci: pindah stage tetap lewat drag di board
         // Urutan combo: kategori, stage, lalu model & effort SPECIFIER dan CODER
@@ -404,7 +486,7 @@ void TestGui::doubleClickEditsTask() {
         coderEffort->setCurrentIndex(coderEffort->findData(QStringLiteral("high")));
 
         inputs[0]->setText(QStringLiteral("Tulis hello v2"));
-        inputs[1]->setText(QStringLiteral("PIC: Budi"));
+        prompt->setPlainText(QStringLiteral("PIC: Budi"));
 
         auto *save = dialog->findChild<QPushButton *>(QStringLiteral("btnTaskFormCreate"));
         QVERIFY(save);
@@ -716,6 +798,10 @@ void TestGui::architectDrawerShowsCodeChanges() {
     auto *tabs = panel->findChild<QTabBar *>(QStringLiteral("drawerTabs"));
     QVERIFY(tabs && !tabs->isHidden());
     QCOMPARE(tabs->currentIndex(), 1);
+    // Stage peninjauan: hasil agent, perubahan kode, maintainability, dan UML semuanya tampil
+    for (int tab = 0; tab < tabs->count(); ++tab) {
+        QVERIFY(tabs->isTabVisible(tab));
+    }
 
     // git dibaca di thread pool; hasilnya menyusul
     auto *files = panel->findChild<QTreeWidget *>(QStringLiteral("diffFileList"));
@@ -765,6 +851,111 @@ void TestGui::architectDrawerShowsCodeChanges() {
     QCOMPARE(panel->taskId(), QStringLiteral("t3"));
     QVERIFY(tabs->isHidden());
     QVERIFY(panel->findChild<QTextBrowser *>(QStringLiteral("markdownView"))->isVisible());
+}
+
+void TestGui::coderDrawerShowsCodeChanges() {
+    if (QStandardPaths::findExecutable(QStringLiteral("git")).isEmpty()) {
+        QSKIP("git tidak ada di PATH");
+    }
+
+    const QDir dir(m_workDir.path());
+    auto removeRepository = qScopeGuard([dir]() {
+        QDir(dir.filePath(QStringLiteral(".git"))).removeRecursively();
+        QFile::remove(dir.filePath(QStringLiteral("hello.txt")));
+        QFile::remove(dir.filePath(QStringLiteral("dua.txt")));
+        QFile::remove(dir.filePath(QStringLiteral("tiga.txt")));
+    });
+    QVERIFY(runGit(dir.path(), {QStringLiteral("init"), QStringLiteral("-q")}));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("hello.txt")), "a\nb\n"));
+    QVERIFY(runGit(dir.path(), {QStringLiteral("add"), QStringLiteral("-A")}));
+    QVERIFY(runGit(dir.path(), {QStringLiteral("commit"), QStringLiteral("-q"), QStringLiteral("-m"), QStringLiteral("awal")}));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("hello.txt")), "a\nc\n"));
+
+    // t1 adalah kartu CODER yang belum pernah dijalankan; drawer tetap terbuka di tab perubahan kode
+    QTest::mouseClick(card(QStringLiteral("t1")), Qt::LeftButton);
+    ResponseDrawer *panel = drawer();
+    QVERIFY(panel && !panel->isHidden());
+    QCOMPARE(panel->taskId(), QStringLiteral("t1"));
+    auto *tabs = panel->findChild<QTabBar *>(QStringLiteral("drawerTabs"));
+    QVERIFY(tabs && !tabs->isHidden());
+    QCOMPARE(tabs->currentIndex(), 1);
+    // CODER menulis kode, bukan meninjaunya: hanya hasil agent dan perubahan kode
+    QVERIFY(tabs->isTabVisible(0));
+    QVERIFY(tabs->isTabVisible(1));
+    QVERIFY(!tabs->isTabVisible(2));
+    QVERIFY(!tabs->isTabVisible(3));
+
+    auto *files = panel->findChild<QTreeWidget *>(QStringLiteral("diffFileList"));
+    QVERIFY(files);
+    QTRY_COMPARE(files->topLevelItemCount(), 1);
+    QCOMPARE(tabs->tabText(1), QStringLiteral("Perubahan kode · 1"));
+    QCOMPARE(files->topLevelItem(0)->text(1), QStringLiteral("hello.txt"));
+    QCOMPARE(files->topLevelItem(0)->text(2), QStringLiteral("+1"));
+    QCOMPARE(files->topLevelItem(0)->text(3), QStringLiteral("−1"));
+    // Yang tidak ditampilkan tidak dikerjakan: tanpa pengukuran kode dan tanpa render diagram
+    QCOMPARE(tabs->tabText(2), QStringLiteral("Maintainability"));
+    QCOMPARE(tabs->tabText(3), QStringLiteral("UML"));
+    QVERIFY(m_mermaid.requests.isEmpty());
+
+    // Run dimulai: drawer beralih ke output Live
+    runButton(QStringLiteral("t1"))->click();
+    QCOMPARE(int(m_runtime.sessions.size()), 1);
+    QCOMPARE(tabs->currentIndex(), 0);
+    FakeAgentSession *session = m_runtime.sessions.last();
+    QSignalSpy requested(panel, &ResponseDrawer::diffRequested);
+
+    // Tool baca tidak mengubah folder kerja, jadi membuka tab perubahan kode tidak membaca git lagi
+    AgentEvent read;
+    read.kind = AgentEvent::Kind::ToolUse;
+    read.toolName = QStringLiteral("Read");
+    read.toolDetail = dir.filePath(QStringLiteral("hello.txt"));
+    session->emitEvent(read);
+    tabs->setCurrentIndex(1);
+    QCOMPARE(requested.count(), 0);
+    QCOMPARE(files->topLevelItemCount(), 1);
+    tabs->setCurrentIndex(0);
+
+    // Agent menulis file: diff yang sudah dibaca basi dan dibaca ulang begitu tabnya dibuka
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("dua.txt")), "x\n"));
+    AgentEvent write;
+    write.kind = AgentEvent::Kind::ToolUse;
+    write.toolName = QStringLiteral("Write");
+    write.toolDetail = dir.filePath(QStringLiteral("dua.txt"));
+    session->emitEvent(write);
+    QCOMPARE(requested.count(), 0);   // belum ada yang melihat, jadi git belum dibaca
+    tabs->setCurrentIndex(1);
+    QCOMPARE(requested.count(), 1);
+    QTRY_COMPARE(files->topLevelItemCount(), 2);
+    QCOMPARE(tabs->tabText(1), QStringLiteral("Perubahan kode · 2"));
+
+    // Run gagal setelah menulis lagi: kartu tetap di CODER dan diff yang sedang dilihat dibaca ulang
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("tiga.txt")), "y\n"));
+    write.toolDetail = dir.filePath(QStringLiteral("tiga.txt"));
+    session->emitEvent(write);
+    session->finishWith(AgentResult::failure(QStringLiteral("error_max_turns"), QStringLiteral("Kehabisan giliran")));
+    QCOMPARE(m_tasks->task(QStringLiteral("t1"))->stage, QStringLiteral("CODER"));
+    QVERIFY(m_tasks->task(QStringLiteral("t1"))->state == TaskState::Failed);
+    QCOMPARE(requested.count(), 2);
+    QCOMPARE(tabs->currentIndex(), 1);
+    QTRY_COMPARE(files->topLevelItemCount(), 3);
+    QCOMPARE(tabs->tabText(1), QStringLiteral("Perubahan kode · 3"));
+
+    // Dibuka lagi setelah gagal: yang tampil alasan gagalnya; diff tinggal satu klik
+    panel->findChild<QPushButton *>(QStringLiteral("btnDrawerClose"))->click();
+    QTRY_VERIFY(panel->isHidden());
+    QTest::mouseClick(card(QStringLiteral("t1")), Qt::LeftButton);
+    QVERIFY(!panel->isHidden());
+    QCOMPARE(tabs->currentIndex(), 0);
+    QVERIFY(panel->findChild<QTextBrowser *>(QStringLiteral("markdownView"))
+                ->toPlainText().contains(QStringLiteral("Run gagal (error_max_turns)")));
+    QTRY_COMPARE(files->topLevelItemCount(), 3);
+
+    // Dicoba lagi dan sukses: kartu maju ke CLEANER, dan drawer yang mengikutinya tidak punya tab diff
+    runButton(QStringLiteral("t1"))->click();
+    QCOMPARE(int(m_runtime.sessions.size()), 2);
+    m_runtime.sessions.last()->finishWith(successResult(QStringLiteral("Selesai")));
+    QCOMPARE(m_tasks->task(QStringLiteral("t1"))->stage, QStringLiteral("CLEANER"));
+    QVERIFY(tabs->isHidden());
 }
 
 void TestGui::maintainabilityViewShowsCSharpMembers() {
@@ -891,6 +1082,317 @@ void TestGui::umlTabShowsClassAndAgentDiagrams() {
     panel.showDiff(QStringLiteral("u1"), text);
     QCOMPARE(tabs->tabText(3), QStringLiteral("UML"));
     QVERIFY(uml->toPlainText().contains(QStringLiteral("tidak memuat tipe C#")));
+}
+
+void TestGui::promptEditorAttachesPhotosAndDocuments() {
+    PromptEditor editor;
+    editor.resize(480, 320);
+    editor.show();
+    QPlainTextEdit *text = editor.textEdit();
+    QCOMPARE(text->objectName(), QStringLiteral("taskFormPrompt"));
+    auto thumbs = [&editor]() { return shownChildren<QToolButton>(&editor, QStringLiteral("promptThumb")); };
+
+    // Ctrl+V gambar dari clipboard: jadi thumbnail, bukan teks
+    QGuiApplication::clipboard()->setImage(solidImage(QSize(300, 200), Qt::red));
+    text->paste();
+    QCOMPARE(editor.imageCount(), 1);
+    QVERIFY(text->toPlainText().isEmpty());
+    QCOMPARE(thumbs().size(), 1);
+    QVERIFY(!thumbs().first()->icon().isNull());
+    QVERIFY(!editor.findChild<QScrollArea *>(QStringLiteral("promptImageStrip"))->isHidden());
+
+    // Teks biasa tetap ditempel sebagai teks
+    QGuiApplication::clipboard()->setText(QStringLiteral("Halo agent"));
+    text->paste();
+    QCOMPARE(text->toPlainText(), QStringLiteral("Halo agent"));
+
+    // Seret file dari Explorer: foto dan dokumen masuk; format lama ditolak dengan alasannya
+    QTemporaryDir dir;
+    const QString photo = dir.filePath(QStringLiteral("foto.jpg"));
+    QVERIFY(writeFile(photo, jpegBytes(solidImage(QSize(120, 80), Qt::blue))));
+    const QString csv = dir.filePath(QStringLiteral("data.csv"));
+    QVERIFY(writeFile(csv, "produk,harga\nkopi,15000\n"));
+    const QString xls = dir.filePath(QStringLiteral("laporan.xls"));
+    QVERIFY(writeFile(xls, "lama"));
+    const QString txt = dir.filePath(QStringLiteral("catatan.txt"));
+    QVERIFY(writeFile(txt, "bukan lampiran"));
+
+    QMimeData onlyText;
+    onlyText.setUrls({QUrl::fromLocalFile(txt)});
+    QVERIFY(!editor.canTakeAttachments(&onlyText));   // file lain tetap tertempel sebagai path
+
+    QMimeData files;
+    files.setUrls({QUrl::fromLocalFile(photo), QUrl::fromLocalFile(csv), QUrl::fromLocalFile(xls), QUrl::fromLocalFile(txt)});
+    QVERIFY(editor.canTakeAttachments(&files));
+    // Seperti seret sungguhan: Drop hanya diantar ke widget yang menerima DragEnter-nya
+    QDragEnterEvent enter(QPoint(20, 20), Qt::CopyAction, &files, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&editor, &enter);
+    QVERIFY(enter.isAccepted());
+    QDropEvent drop(QPointF(20, 20), Qt::CopyAction, &files, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&editor, &drop);
+    QVERIFY2(editor.imageCount() == 2, qPrintable(editor.notice()));
+    QCOMPARE(editor.documentCount(), 1);
+    QCOMPARE(editor.notice(), QStringLiteral("laporan.xls: Format lama .xls tidak didukung; simpan ulang sebagai .xlsx"));
+    auto *hint = editor.findChild<QLabel *>(QStringLiteral("promptHint"));
+    QCOMPARE(hint->text(), editor.notice());
+    QVERIFY(hint->property("error").toBool());
+
+    // Foto tempelan diberi nama otomatis; foto dari file mempertahankan namanya
+    const QList<TaskAttachments::Draft> drafts = editor.attachments();
+    QCOMPARE(int(drafts.size()), 3);
+    QVERIFY(drafts.at(0).fileName.startsWith(QStringLiteral("tempel-")) && drafts.at(0).fileName.endsWith(QStringLiteral(".png")));
+    QCOMPARE(drafts.at(1).fileName, QStringLiteral("foto.jpg"));
+    QVERIFY(!drafts.at(1).imageData.isEmpty());
+    QCOMPARE(drafts.at(2).fileName, QStringLiteral("data.csv"));
+    QCOMPARE(drafts.at(2).sourcePath, QFileInfo(csv).absoluteFilePath());
+
+    // Dokumen yang sama tidak dilampirkan dua kali; penambahan yang berhasil menghapus pesan lama
+    QCOMPARE(editor.addFiles({csv}), 0);
+    QCOMPARE(editor.documentCount(), 1);
+    QVERIFY(editor.notice().isEmpty());
+    QVERIFY(!hint->property("error").toBool());
+
+    // Baris dokumen: label jenis, nama, ukuran
+    const QList<QLabel *> kinds = shownChildren<QLabel>(&editor, QStringLiteral("promptDocumentKind"));
+    QCOMPARE(kinds.size(), 1);
+    QCOMPARE(kinds.first()->text(), QStringLiteral("CSV"));
+    QCOMPARE(kinds.first()->property("kind").toString(), QStringLiteral("csv"));
+    QCOMPARE(shownChildren<QLabel>(&editor, QStringLiteral("promptDocumentName")).first()->text(), QStringLiteral("data.csv"));
+
+    // Klik thumbnail: pratinjau ukuran penuh; "Hapus foto" membuang foto itu
+    bool previewShown = false;
+    QTimer::singleShot(0, this, [&previewShown]() {
+        auto *preview = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+        if (!preview) {
+            return;
+        }
+        auto *image = preview->findChild<QLabel *>(QStringLiteral("imagePreview"));
+        previewShown = preview->objectName() == QLatin1String("imagePreviewDialog")
+                       && preview->windowTitle() == QLatin1String("foto.jpg")
+                       && image && image->pixmap().size() == QSize(120, 80);
+        preview->findChild<QPushButton *>(QStringLiteral("btnPreviewRemove"))->click();
+    });
+    thumbs().at(1)->click();
+    QVERIFY(previewShown);
+    QCOMPARE(editor.imageCount(), 1);
+    QCOMPARE(editor.attachments().first().fileName, drafts.at(0).fileName);
+
+    // "Tutup" di pratinjau tidak mengubah apa pun
+    QTimer::singleShot(0, this, []() {
+        if (auto *preview = qobject_cast<QDialog *>(QApplication::activeModalWidget())) {
+            preview->findChild<QPushButton *>(QStringLiteral("btnPreviewClose"))->click();
+        }
+    });
+    thumbs().first()->click();
+    QCOMPARE(editor.imageCount(), 1);
+
+    // Tombol × di pojok thumbnail dan di baris dokumen
+    thumbs().first()->findChild<QToolButton *>(QStringLiteral("btnThumbRemove"))->click();
+    QCOMPARE(editor.imageCount(), 0);
+    QVERIFY(thumbs().isEmpty());
+    QVERIFY(editor.findChild<QScrollArea *>(QStringLiteral("promptImageStrip"))->isHidden());
+    shownChildren<QToolButton>(&editor, QStringLiteral("btnDocumentRemove")).first()->click();
+    QCOMPARE(editor.documentCount(), 0);
+    QVERIFY(editor.findChild<QWidget *>(QStringLiteral("promptDocumentList"))->isHidden());
+
+    // Batas jumlah foto per task; nama tempelan yang sama tetap unik
+    for (int i = 0; i < TaskAttachments::kMaxImages; ++i) {
+        QVERIFY(editor.addImage(solidImage(QSize(8, 8), Qt::green)));
+    }
+    QVERIFY(!editor.addImage(solidImage(QSize(8, 8), Qt::green)));
+    QCOMPARE(editor.notice(), QStringLiteral("maksimal %1 foto per task").arg(TaskAttachments::kMaxImages));
+    QSet<QString> names;
+    for (const TaskAttachments::Draft &draft : editor.attachments()) {
+        names.insert(draft.fileName.toLower());
+    }
+    QCOMPARE(int(names.size()), TaskAttachments::kMaxImages);
+}
+
+void TestGui::newTaskWithAttachmentsFeedsRun() {
+    QTemporaryDir source;
+    const QString csv = source.filePath(QStringLiteral("data.csv"));
+    QVERIFY(writeFile(csv, "produk,harga\nkopi,15000\n"));
+
+    // "+" di baris project sidebar: prompt multi-baris, satu foto tempelan, satu CSV
+    driveModalDialog([csv](QDialog *dialog) {
+        QCOMPARE(dialog->windowTitle(), QStringLiteral("New Task"));
+        dialog->findChild<QLineEdit *>(QStringLiteral("taskFormInput"))->setText(QStringLiteral("Login dari mockup"));
+        auto *editor = dialog->findChild<PromptEditor *>();
+        QVERIFY(editor);
+        editor->setText(QStringLiteral("Tiru mockup terlampir.\nPakai harga dari data.csv."));
+        QVERIFY(editor->addImage(solidImage(QSize(64, 48), Qt::red)));
+        QCOMPARE(editor->addFiles({csv}), 1);
+        dialog->findChildren<QComboBox *>(QStringLiteral("taskFormCombo")).at(1)->setCurrentText(QStringLiteral("CODER"));
+        dialog->findChild<QPushButton *>(QStringLiteral("btnTaskFormCreate"))->click();
+    });
+    m_window->findChild<QPushButton *>(QStringLiteral("btnProjectNewTask"))->click();
+    QVERIFY(m_dialogSeen);
+
+    std::optional<TaskItem> created;
+    for (const TaskItem &task : m_tasks->tasksForProject(QStringLiteral("Demo"))) {
+        if (task.title == QLatin1String("Login dari mockup")) {
+            created = task;
+        }
+    }
+    QVERIFY(created);
+    QCOMPARE(created->subtext, QStringLiteral("Tiru mockup terlampir.\nPakai harga dari data.csv."));
+    QCOMPARE(int(created->attachments.size()), 2);
+    QVERIFY(created->attachments.at(0).endsWith(QStringLiteral(".png")));
+    QCOMPARE(created->attachments.at(1), QStringLiteral("data.csv"));
+
+    // Lampiran disalin ke folder lampiran task; file asal tidak dipakai lagi
+    const QDir attachments(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+                           + QStringLiteral("/projects/Demo/attachments/") + created->id);
+    QVERIFY(QFileInfo::exists(attachments.filePath(created->attachments.at(0))));
+    QVERIFY(QFileInfo::exists(attachments.filePath(QStringLiteral("data.csv"))));
+    QVERIFY(QFile::remove(csv));
+
+    // Kartu: ringkasan prompt dan penanda lampiran
+    KanbanCardWidget *mockup = card(created->id);
+    QVERIFY(mockup);
+    QCOMPARE(mockup->findChild<QLabel *>(QStringLiteral("labelSubtext"))->text(),
+             QStringLiteral("Tiru mockup terlampir.\nPakai harga dari data.csv."));
+    auto *attachmentLabel = mockup->findChild<QLabel *>(QStringLiteral("labelAttachments"));
+    QVERIFY(!attachmentLabel->isHidden());
+    QCOMPARE(attachmentLabel->text(), QStringLiteral("1 foto · 1 file"));
+    QVERIFY(card(QStringLiteral("t1"))->findChild<QLabel *>(QStringLiteral("labelAttachments"))->isHidden());
+
+    // Run: foto jadi blok gambar, isi CSV masuk prompt, folder lampiran boleh dibaca agent
+    runButton(created->id)->click();
+    FakeAgentSession *session = m_runtime.sessions.last();
+    const AgentLaunch launch = session->launch();
+    QCOMPARE(launch.imagePaths, QStringList({QDir::toNativeSeparators(attachments.filePath(created->attachments.at(0)))}));
+    QCOMPARE(launch.readableDirectories, QStringList({QDir::toNativeSeparators(attachments.absolutePath())}));
+    QVERIFY(launch.prompt.contains(QStringLiteral("# Instruksi\n\nTiru mockup terlampir.\nPakai harga dari data.csv.")));
+    QVERIFY(launch.prompt.contains(QStringLiteral("## data.csv\n```csv\nproduk,harga\nkopi,15000\n")));
+    QVERIFY(consoleText().contains(QStringLiteral("+ Lampiran (")));
+    session->finishWith(successResult(QStringLiteral("Selesai")));
+
+    // Setelah aplikasi dibuka lagi, lampiran tetap terbaca dari session.json
+    m_window.reset();
+    m_tasks.reset();
+    createWindow();
+    mockup = card(created->id);
+    QVERIFY(mockup);
+    QCOMPARE(mockup->findChild<QLabel *>(QStringLiteral("labelAttachments"))->text(), QStringLiteral("1 foto · 1 file"));
+
+    // Edit: lampiran lama tampil di kotak prompt; foto dihapus, prompt dipanjangkan
+    driveModalDialog([](QDialog *dialog) {
+        auto *editor = dialog->findChild<PromptEditor *>();
+        QVERIFY(editor);
+        QCOMPARE(editor->imageCount(), 1);
+        QCOMPARE(editor->documentCount(), 1);
+        const QList<QToolButton *> thumbs = shownChildren<QToolButton>(editor, QStringLiteral("promptThumb"));
+        QCOMPARE(thumbs.size(), 1);
+        QVERIFY(!thumbs.first()->icon().isNull());
+        thumbs.first()->findChild<QToolButton *>(QStringLiteral("btnThumbRemove"))->click();
+        editor->setText(QStringLiteral("satu\ndua\n\ntiga\nempat\nlima"));
+        dialog->findChild<QPushButton *>(QStringLiteral("btnTaskFormCreate"))->click();
+    });
+    QTest::mouseDClick(mockup, Qt::LeftButton);
+    QVERIFY(m_dialogSeen);
+
+    const std::optional<TaskItem> edited = m_tasks->task(created->id);
+    QCOMPARE(edited->attachments, QStringList({"data.csv"}));
+    QVERIFY(!QFileInfo::exists(attachments.filePath(created->attachments.at(0))));
+    QCOMPARE(mockup->findChild<QLabel *>(QStringLiteral("labelAttachments"))->text(), QStringLiteral("1 file"));
+    // Prompt panjang: kartu hanya menampilkan tiga baris pertama, lengkapnya di tooltip
+    auto *subtext = mockup->findChild<QLabel *>(QStringLiteral("labelSubtext"));
+    QCOMPARE(subtext->text(), QStringLiteral("satu\ndua\ntiga…"));
+    QCOMPARE(subtext->toolTip(), QStringLiteral("satu\ndua\n\ntiga\nempat\nlima"));
+}
+
+void TestGui::referenceFoldersFeedRuns() {
+    QTemporaryDir shared;
+    const QString reference = QDir(shared.path()).filePath(QStringLiteral("design system (v2)"));
+    QVERIFY(QDir().mkpath(reference));
+
+    SwimlaneWidget *swimlane = m_window->findChild<SwimlaneWidget *>();
+    auto *button = swimlane->findChild<QPushButton *>(QStringLiteral("btnReferenceDirs"));
+    QVERIFY(button);
+    QCOMPARE(button->text(), QStringLiteral("Referensi"));
+    QVERIFY(!button->icon().isNull());
+    // Referensi, bukan salinan: swimlane diganti saat jendela dibuat ulang di bawah
+    auto shownPopup = [&swimlane]() -> QFrame * {
+        const QList<QFrame *> popups = swimlane->findChildren<QFrame *>(QStringLiteral("referencePopup"));
+        for (QFrame *popup : popups) {
+            if (popup->isVisible()) {
+                return popup;
+            }
+        }
+        return nullptr;
+    };
+    // Pilih folder lewat popup "Referensi" -> "Tambah folder…" -> pemilih folder
+    auto addThroughPopup = [&](const QString &dir) {
+        button->click();
+        QFrame *popup = shownPopup();
+        QVERIFY(popup);
+        driveNextModalDialog([dir](QDialog *dialog) {
+            auto *picker = qobject_cast<QFileDialog *>(dialog);
+            QVERIFY(picker);
+            QVERIFY(picker->windowTitle().startsWith(QStringLiteral("Folder referensi untuk Demo")));
+            picker->selectFile(dir);
+            dialog->accept();   // QFileDialog::accept() memeriksa pilihan; lewat QDialog karena protected di sana
+        });
+        popup->findChild<QPushButton *>(QStringLiteral("btnReferenceAdd"))->click();
+        QTRY_VERIFY(m_dialogSeen);
+    };
+
+    // Popup kosong
+    button->click();
+    QFrame *popup = shownPopup();
+    QVERIFY(popup);
+    QVERIFY(popup->findChild<QLabel *>(QStringLiteral("referencePopupEmpty")));
+    popup->close();
+
+    addThroughPopup(reference);
+    QTRY_COMPARE(button->text(), QStringLiteral("Referensi · 1"));
+    QVERIFY(button->toolTip().contains(QDir::toNativeSeparators(reference)));
+    QVERIFY(consoleText().contains(QStringLiteral("[SYSTEM] Folder referensi Demo + %1").arg(QDir::toNativeSeparators(reference))));
+
+    // Folder kerja sendiri (atau isinya) sudah terbaca agent: ditolak
+    addThroughPopup(m_workDir.path());
+    QTRY_VERIFY(consoleText().contains(QStringLiteral("tidak ditambahkan: sudah termasuk folder kerja Demo")));
+    QCOMPARE(button->text(), QStringLiteral("Referensi · 1"));
+
+    // Run: folder referensi boleh dibaca (izin Read), dan disebut di prompt
+    runButton(QStringLiteral("t1"))->click();
+    FakeAgentSession *session = m_runtime.sessions.last();
+    QCOMPARE(session->launch().readableDirectories, QStringList({QDir::toNativeSeparators(reference)}));
+    QVERIFY(session->launch().imagePaths.isEmpty());
+    QVERIFY(session->launch().prompt.contains(
+        QStringLiteral("# Folder referensi (hanya dibaca)\n")));
+    QVERIFY(session->launch().prompt.contains(QStringLiteral("- `%1`").arg(QDir::toNativeSeparators(reference))));
+    session->finishWith(successResult(QStringLiteral("Selesai")));
+
+    // Tersimpan di session.json: masih ada setelah aplikasi dibuka lagi
+    m_window.reset();
+    m_tasks.reset();
+    createWindow();
+    swimlane = m_window->findChild<SwimlaneWidget *>();
+    button = swimlane->findChild<QPushButton *>(QStringLiteral("btnReferenceDirs"));
+    QCOMPARE(button->text(), QStringLiteral("Referensi · 1"));
+
+    // × di popup menghapus folder; popup yang sama tetap terbuka dengan daftar yang baru
+    button->click();
+    popup = shownPopup();
+    QVERIFY(popup);
+    QCOMPARE(shownChildren<QLabel>(popup, QStringLiteral("referenceRowName")).first()->text(),
+             QStringLiteral("design system (v2)"));
+    shownChildren<QToolButton>(popup, QStringLiteral("btnReferenceRemove")).first()->click();
+    QCOMPARE(button->text(), QStringLiteral("Referensi"));
+    QCOMPARE(shownPopup(), popup);
+    QVERIFY(shownChildren<QToolButton>(popup, QStringLiteral("btnReferenceRemove")).isEmpty());
+    QCOMPARE(shownChildren<QLabel>(popup, QStringLiteral("referencePopupEmpty")).size(), 1);
+    // Tetap terbuka setelah event berikutnya diproses (tombol × lama baru benar-benar dihapus di sini)
+    QTest::qWait(50);
+    QCOMPARE(shownPopup(), popup);
+    popup->close();
+    QVERIFY(consoleText().contains(QStringLiteral("[SYSTEM] Folder referensi Demo − %1").arg(QDir::toNativeSeparators(reference))));
+
+    runButton(QStringLiteral("t3"))->click();
+    QVERIFY(m_runtime.sessions.last()->launch().readableDirectories.isEmpty());
+    QVERIFY(!m_runtime.sessions.last()->launch().prompt.contains(QStringLiteral("Folder referensi")));
 }
 
 int main(int argc, char *argv[]) {

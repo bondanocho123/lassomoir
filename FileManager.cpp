@@ -129,6 +129,16 @@ QList<TaskItem> FileManager::loadTasks(const QString &projectId, QString *error)
     if (!workingDirectory.isEmpty()) {
         m_workingDirs.insert(projectId, workingDirectory);
     }
+    QStringList referenceDirs;
+    const QJsonArray references = root.value(QStringLiteral("referenceDirectories")).toArray();
+    for (const QJsonValue &reference : references) {
+        if (!reference.toString().isEmpty()) {
+            referenceDirs.append(reference.toString());
+        }
+    }
+    if (!referenceDirs.isEmpty()) {
+        m_referenceDirs.insert(projectId, referenceDirs);
+    }
 
     const QJsonArray tasksArray = root.value(QStringLiteral("tasks")).toArray();
     result.reserve(tasksArray.size());
@@ -162,6 +172,10 @@ bool FileManager::saveTasks(const QString &projectId, const QList<TaskItem> &tas
     if (!workingDirectory.isEmpty()) {
         root[QStringLiteral("workingDirectory")] = workingDirectory;
     }
+    const QStringList referenceDirs = m_referenceDirs.value(projectId);
+    if (!referenceDirs.isEmpty()) {
+        root[QStringLiteral("referenceDirectories")] = QJsonArray::fromStringList(referenceDirs);
+    }
     root[QStringLiteral("tasks")] = taskArray;
 
     const QString path = projectFilePath(projectId);
@@ -189,6 +203,9 @@ QJsonObject FileManager::taskToJson(TaskItem task){
     obj[QStringLiteral("category")] = task.category;
     obj[QStringLiteral("title")] = task.title;
     obj[QStringLiteral("subtext")] = task.subtext;
+    if (!task.attachments.isEmpty()) {
+        obj[QStringLiteral("attachments")] = QJsonArray::fromStringList(task.attachments);
+    }
     obj[QStringLiteral("state")] = taskStateKey(task.state);
 
     // Riwayat run: dokumen hasil agent + keputusan review, dipakai untuk prompt stage berikutnya
@@ -231,6 +248,12 @@ TaskItem FileManager::taskFromJson(QJsonObject obj, QString *error){
     result.category = obj.value(QStringLiteral("category")).toString();
     result.title = obj.value(QStringLiteral("title")).toString();
     result.subtext = obj.value(QStringLiteral("subtext")).toString();
+    const QJsonArray attachments = obj.value(QStringLiteral("attachments")).toArray();
+    for (const QJsonValue &attachment : attachments) {
+        if (!attachment.toString().isEmpty()) {
+            result.attachments.append(attachment.toString());
+        }
+    }
     // File lama tanpa field di bawah tetap terbaca: status Idle, riwayat kosong.
     // Field "badge" lama diabaikan; badge sekarang dihitung dari riwayat run.
     result.state = taskStateFromKey(obj.value(QStringLiteral("state")).toString());
@@ -273,6 +296,7 @@ bool FileManager::deleteProject(const QString &projectId, QString *error){
     m_pendingSaves.remove(projectId);
     m_pendingProjects.remove(projectId);
     m_workingDirs.remove(projectId);
+    m_referenceDirs.remove(projectId);
 
     QDir projectDir(QStringLiteral("%1/projects/%2").arg(m_basePath, projectId));
     if (!projectDir.exists()) {
@@ -296,4 +320,24 @@ QString FileManager::workingDirectory(const QString &projectId) const {
 
 void FileManager::setWorkingDirectory(const QString &projectId, const QString &dir) {
     m_workingDirs.insert(projectId, dir);
+}
+
+QStringList FileManager::referenceDirectories(const QString &projectId) const {
+    return m_referenceDirs.value(projectId);
+}
+
+void FileManager::setReferenceDirectories(const QString &projectId, const QStringList &dirs) {
+    if (dirs.isEmpty()) {
+        m_referenceDirs.remove(projectId);
+    } else {
+        m_referenceDirs.insert(projectId, dirs);
+    }
+}
+
+QString FileManager::attachmentDirectory(const QString &projectId, const QString &taskId) const {
+    // Tanpa id, path-nya menunjuk folder induk yang dipakai bersama; kosong berarti "tidak ada"
+    if (projectId.isEmpty() || taskId.isEmpty()) {
+        return QString();
+    }
+    return QStringLiteral("%1/projects/%2/attachments/%3").arg(m_basePath, projectId, taskId);
 }

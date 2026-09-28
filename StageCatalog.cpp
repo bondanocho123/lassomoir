@@ -42,7 +42,7 @@ StageCatalog StageCatalog::standard() {
                      autoAdvance),
         StageProfile(QStringLiteral("ARCHITECT"),
                      agent(QStringLiteral("ARCHITECT"), {"Read", "Grep", "Glob"}, {}, "sonnet", "medium", 2),
-                     autoAdvance),
+                     gate),
         StageProfile(QStringLiteral("HARDENER"),
                      agent(QStringLiteral("HARDENER"), {"Read", "Grep", "Glob", "Edit", "Write", "Bash"}, {},
                            "sonnet", "medium", 1),

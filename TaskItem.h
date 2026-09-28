@@ -10,6 +10,7 @@
 #include <QList>
 #include <QSet>
 #include <QString>
+#include <QStringList>
 
 // Status task di stage-nya (disimpan di session.json). Run yang sedang antre/berjalan
 // adalah status runtime terpisah (RunState) dan tidak disimpan.
@@ -60,7 +61,9 @@ struct TaskItem {
     QString stage; // "WAITING", "CODER", "DONE", dll.
     QString category; // "component", "utility"
     QString title;
-    QString subtext;
+    QString subtext;    // catatan / prompt untuk agent, boleh multi-baris
+    // Nama file lampiran (foto & dokumen) di folder lampiran task, lihat FileManager::attachmentDirectory
+    QStringList attachments;
     TaskState state = TaskState::Idle;
     QList<StageRun> runs;   // kronologis, run terlama dulu
 
