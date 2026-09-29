@@ -194,10 +194,6 @@ private:
     void logGitResult(const TaskItem &task, const TaskGit::Result &result);
     // Buang worktree task (dihapus) di thread pool; branch-nya dibiarkan
     void removeWorktreeLater(const TaskItem &task);
-    // Keputusan "Setujui" apa adanya lewat TaskManager, beserta baris konsolnya
-    void approveTask(const TaskItem &task, const QString &note);
-    // QA pada task ber-branch: merge ke branch dasarnya dulu, baru disetujui (→ DONE)
-    void mergeThenApprove(const TaskItem &task, const QString &note);
     // Folder kerja tersimpan yang masih ada; kalau tidak ada, tanya pengguna
     QString ensureWorkingDirectory(const QString &projectId);
     // Pemilih folder -> FileManager -> tombol header swimlane; kosong bila dibatalkan

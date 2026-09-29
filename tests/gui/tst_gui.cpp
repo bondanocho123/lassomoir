@@ -1,4 +1,5 @@
 #include "CodeMetrics.h"
+#include "DiagramViewer.h"
 #include "FakeAgentRuntime.h"
 #include "GitSandbox.h"
 #include "KanbanCardWidget.h"
@@ -26,6 +27,7 @@
 #include <QDropEvent>
 #include <QFile>
 #include <QFileDialog>
+#include <QGraphicsView>
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -40,16 +42,19 @@
 #include <QPushButton>
 #include <QScopeGuard>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QSet>
 #include <QSplitter>
 #include <QStandardPaths>
 #include <QTabBar>
 #include <QTemporaryDir>
+#include <QTextBlock>
 #include <QTextBrowser>
 #include <QTimer>
 #include <QToolButton>
 #include <QTreeWidget>
 #include <QUrl>
+#include <QWheelEvent>
 #include <QtTest>
 
 #include <algorithm>
@@ -173,10 +178,15 @@ private slots:
     void drawerExpandFillsBoardAndRestores();
     void reviewSurvivesRestart();
     void markdownViewRendersMermaid();
+    // Diagram bisa di-zoom: klik diagram -> DiagramViewer
+    void markdownViewOpensZoomableDiagram();
+    void diagramViewerZoomsAndPans();
+    void diagramViewerKeepsSmallDiagramAtActualSize();
     void architectDrawerShowsCodeChanges();
     void coderDrawerShowsCodeChanges();
-    // Alur git: CODER di worktree -> QA (commit + push) -> dikembalikan -> QA lagi -> merge
-    void qaFlowCommitsPushesAndMerges();
+    // Alur git: CODER di worktree -> QA (commit + push) -> dikembalikan -> QA lagi -> disetujui
+    // tanpa merge (branch dibiarkan untuk di-PR manual)
+    void qaFlowCommitsPushesWithoutMerging();
     void maintainabilityViewShowsCSharpMembers();
     void umlTabShowsClassAndAgentDiagrams();
 
@@ -828,6 +838,209 @@ void TestGui::markdownViewRendersMermaid() {
     QVERIFY(plain.toPlainText().contains(code));
 }
 
+void TestGui::markdownViewOpensZoomableDiagram() {
+    FakeMermaidRenderer renderer;
+    MarkdownView view(&renderer);
+    view.resize(420, 600);
+    view.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&view));
+
+    const QString code = QStringLiteral("sequenceDiagram\n  Kasir->>OrderService: Place");
+    const QString markdown = QStringLiteral("# Alur\n\n```mermaid\n%1\n```\n\nSelesai.").arg(code);
+    view.showMarkdown(markdown);
+    // Diagram 1600 × 800 logis (piksel 2×): lebih lebar dari panel, jadi diperkecil + keterangan
+    QImage image(3200, 1600, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::white);
+    image.setDevicePixelRatio(2.0);
+    renderer.complete(code, image);
+    QVERIFY(view.toPlainText().contains(QStringLiteral("Klik diagram untuk membukanya di penampil zoom")));
+
+    // Klik gambar diagram seperti pengguna
+    int imageAt = -1;
+    for (QTextBlock block = view.document()->begin(); block.isValid() && imageAt < 0; block = block.next()) {
+        for (auto part = block.begin(); !part.atEnd(); ++part) {
+            if (part.fragment().charFormat().isImageFormat()) {
+                imageAt = part.fragment().position();
+                break;
+            }
+        }
+    }
+    QVERIFY(imageAt >= 0);
+    QTextCursor cursor(view.document());
+    cursor.setPosition(imageAt);
+    const QRect caret = view.cursorRect(cursor);
+    const QPoint onImage(caret.left() + 40, caret.center().y());
+    // Importer Markdown Qt membuang link di sekeliling gambar; MarkdownView memasangnya lagi
+    QCOMPARE(view.anchorAt(onImage), QStringLiteral("mermaid://") + MermaidRenderer::keyFor(code));
+    QTest::mouseClick(view.viewport(), Qt::LeftButton, {}, onImage);
+
+    const QList<DiagramViewer *> viewers = view.findChildren<DiagramViewer *>();
+    QCOMPARE(viewers.size(), 1);
+    DiagramViewer *viewer = viewers.first();
+    QVERIFY(QTest::qWaitForWindowExposed(viewer));
+    QCOMPARE(viewer->windowTitle(), QStringLiteral("Diagram sequence"));
+    QCOMPARE(viewer->key(), MermaidRenderer::keyFor(code));
+    // Lebih besar dari jendela penampil: mulai dipaskan
+    QVERIFY(viewer->fitsToWindow());
+    QVERIFY(viewer->zoom() < 1.0);
+
+    // Klik lagi: jendela yang sama dimunculkan, bukan jendela kedua
+    QTest::mouseClick(view.viewport(), Qt::LeftButton, {}, onImage);
+    QCOMPARE(view.findChildren<DiagramViewer *>().size(), 1);
+
+    // Dokumen tanpa diagram melepas gambarnya; saat tampil lagi, diagram diminta ulang ke renderer.
+    // Penampil yang terbuka tetap memegang salinannya sendiri.
+    view.showMarkdown(QStringLiteral("Tanpa diagram."));
+    view.showMarkdown(markdown);
+    QCOMPARE(int(renderer.requests.count(code)), 2);
+    QVERIFY(view.toPlainText().contains(QStringLiteral("Merender diagram")));
+    QVERIFY(viewer->isVisible());
+
+    // Judul penampil dari jenis diagram; komentar dan front matter dilewati
+    QCOMPARE(DiagramViewer::titleFor(QStringLiteral("classDiagram\n  class Order")), QStringLiteral("Diagram kelas"));
+    QCOMPARE(DiagramViewer::titleFor(QStringLiteral("%%{init: {'theme': 'base'}}%%\nsequenceDiagram\n  A->>B: x")),
+             QStringLiteral("Diagram sequence"));
+    QCOMPARE(DiagramViewer::titleFor(QStringLiteral("---\ntitle: Alur\n---\nflowchart LR\n  A-->B")),
+             QStringLiteral("Flowchart"));
+    QCOMPARE(DiagramViewer::titleFor(QStringLiteral("pie title Biaya\n  \"A\": 1")), QStringLiteral("Diagram"));
+}
+
+void TestGui::diagramViewerZoomsAndPans() {
+    // Diagram 1500 × 600 logis (piksel 2×) di jendela 800 × 600
+    QImage image(3000, 1200, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::white);
+    image.setDevicePixelRatio(2.0);
+    QPointer<DiagramViewer> viewer = new DiagramViewer(QStringLiteral("k1"), image, QStringLiteral("Diagram kelas"));
+    auto closeViewer = qScopeGuard([&viewer]() { delete viewer.data(); });
+    viewer->resize(800, 600);
+    viewer->show();
+    viewer->activateWindow();
+    QVERIFY(QTest::qWaitForWindowActive(viewer));
+
+    auto *canvas = viewer->findChild<QGraphicsView *>(QStringLiteral("diagramCanvas"));
+    auto *level = viewer->findChild<QLabel *>(QStringLiteral("diagramZoomLevel"));
+    auto *fit = viewer->findChild<QPushButton *>(QStringLiteral("btnDiagramFit"));
+    auto *actual = viewer->findChild<QPushButton *>(QStringLiteral("btnDiagramActualSize"));
+    auto *zoomIn = viewer->findChild<QPushButton *>(QStringLiteral("btnDiagramZoomIn"));
+    QVERIFY(canvas && level && fit && actual && zoomIn);
+    auto percent = [&viewer]() { return QStringLiteral("%1%").arg(qRound(viewer->zoom() * 100)); };
+
+    // Lebih besar dari jendela: mulai Paskan, seluruh diagram terlihat tanpa perlu digeser
+    QVERIFY(viewer->fitsToWindow());
+    QCOMPARE(viewer->zoom(), viewer->fitZoom());
+    QVERIFY(viewer->zoom() < 0.6);
+    QCOMPARE(level->text(), percent());
+    QVERIFY(fit->isChecked());
+    QVERIFY(!actual->isChecked());
+    QCOMPARE(canvas->horizontalScrollBar()->maximum(), 0);
+    QCOMPARE(canvas->verticalScrollBar()->maximum(), 0);
+
+    // Tombol +: anak tangga zoom berikutnya, keluar dari mode Paskan
+    const qreal fitted = viewer->zoom();
+    zoomIn->click();
+    QVERIFY(viewer->zoom() > fitted);
+    QVERIFY(!viewer->fitsToWindow());
+    QVERIFY(!fit->isChecked());
+    QCOMPARE(level->text(), percent());
+
+    // 100% = ukuran asli; diagram lebih besar dari jendela jadi bisa digeser
+    actual->click();
+    QCOMPARE(viewer->zoom(), 1.0);
+    QVERIFY(actual->isChecked());
+    QCOMPARE(level->text(), QStringLiteral("100%"));
+    QVERIFY(canvas->horizontalScrollBar()->maximum() > 0);
+    QVERIFY(canvas->verticalScrollBar()->maximum() > 0);
+
+    // Ctrl + scroll (juga pinch touchpad): zoom di titik kursor, titik diagram di bawahnya tetap
+    const QPoint pointer(200, 150);
+    const QPointF under = canvas->mapToScene(pointer);
+    QWheelEvent pinch(QPointF(pointer), QPointF(canvas->viewport()->mapToGlobal(pointer)), QPoint(), QPoint(0, 120),
+                      Qt::NoButton, Qt::ControlModifier, Qt::NoScrollPhase, false);
+    QApplication::sendEvent(canvas->viewport(), &pinch);
+    QVERIFY(qAbs(viewer->zoom() - 1.2) < 1e-9);
+    const QPointF still = canvas->mapToScene(pointer);
+    QVERIFY2(qAbs(still.x() - under.x()) < 2 && qAbs(still.y() - under.y()) < 2,
+             qPrintable(QStringLiteral("(%1, %2) -> (%3, %4)").arg(under.x()).arg(under.y()).arg(still.x()).arg(still.y())));
+
+    // Scroll biasa menggeser, bukan zoom
+    canvas->verticalScrollBar()->setValue(0);
+    QWheelEvent scroll(QPointF(pointer), QPointF(canvas->viewport()->mapToGlobal(pointer)), QPoint(), QPoint(0, -120),
+                       Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+    QApplication::sendEvent(canvas->viewport(), &scroll);
+    QVERIFY(qAbs(viewer->zoom() - 1.2) < 1e-9);
+    QVERIFY(canvas->verticalScrollBar()->value() > 0);
+
+    // Seret ke kiri: diagram bergeser, yang tampil bagian kanannya
+    canvas->horizontalScrollBar()->setValue(0);
+    QTest::mousePress(canvas->viewport(), Qt::LeftButton, {}, QPoint(400, 300));
+    QTest::mouseMove(canvas->viewport(), QPoint(300, 300));
+    QTest::mouseRelease(canvas->viewport(), Qt::LeftButton, {}, QPoint(300, 300));
+    QCOMPARE(canvas->horizontalScrollBar()->value(), 100);
+
+    // Klik ganda: Paskan; klik ganda lagi: 100% di titik yang diklik
+    QTest::mouseDClick(canvas->viewport(), Qt::LeftButton, {}, QPoint(300, 200));
+    QVERIFY(viewer->fitsToWindow());
+    QTest::mouseDClick(canvas->viewport(), Qt::LeftButton, {}, QPoint(300, 200));
+    QCOMPARE(viewer->zoom(), 1.0);
+    QVERIFY(!viewer->fitsToWindow());
+
+    // Pintasan keyboard
+    QTest::keyClick(canvas, Qt::Key_0, Qt::ControlModifier);
+    QVERIFY(viewer->fitsToWindow());
+    QTest::keyClick(canvas, Qt::Key_1, Qt::ControlModifier);
+    QCOMPARE(viewer->zoom(), 1.0);
+    QTest::keyClick(canvas, Qt::Key_Equal, Qt::ControlModifier);
+    QCOMPARE(viewer->zoom(), 1.25);
+    QTest::keyClick(canvas, Qt::Key_Minus, Qt::ControlModifier);
+    QCOMPARE(viewer->zoom(), 1.0);
+
+    // Mode Paskan ikut ukuran jendela
+    viewer->fitToWindow();
+    const qreal before = viewer->zoom();
+    viewer->resize(1100, 760);
+    QTRY_VERIFY(viewer->zoom() > before);
+    QCOMPARE(viewer->zoom(), viewer->fitZoom());
+    QVERIFY(viewer->fitsToWindow());
+
+    // Batas atas 400%: tombol + nonaktif
+    for (int i = 0; i < 20 && zoomIn->isEnabled(); ++i) {
+        zoomIn->click();
+    }
+    QCOMPARE(viewer->zoom(), 4.0);
+    QVERIFY(!zoomIn->isEnabled());
+    QCOMPARE(level->text(), QStringLiteral("400%"));
+
+    // Esc menutup dan menghapus jendela
+    QTest::keyClick(canvas, Qt::Key_Escape);
+    QTRY_VERIFY(viewer.isNull());
+}
+
+void TestGui::diagramViewerKeepsSmallDiagramAtActualSize() {
+    QImage image(240, 120, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::white);
+    QPointer<DiagramViewer> viewer = new DiagramViewer(QStringLiteral("k2"), image, QStringLiteral("Flowchart"));
+    auto closeViewer = qScopeGuard([&viewer]() { delete viewer.data(); });
+    viewer->show();
+    QVERIFY(QTest::qWaitForWindowExposed(viewer));
+
+    // Muat di jendela (minimal 720 × 480): tampil 100%, tidak diperbesar otomatis
+    QVERIFY(viewer->width() >= 720 && viewer->height() >= 480);
+    QCOMPARE(viewer->zoom(), 1.0);
+    QVERIFY(!viewer->fitsToWindow());
+    QVERIFY(viewer->findChild<QPushButton *>(QStringLiteral("btnDiagramActualSize"))->isChecked());
+
+    // Paskan memperbesar diagram kecil sampai memenuhi jendela
+    viewer->fitToWindow();
+    QVERIFY(viewer->zoom() > 1.0);
+    QCOMPARE(viewer->zoom(), viewer->fitZoom());
+
+    // − dari Paskan turun ke anak tangga di bawahnya
+    const qreal fitted = viewer->zoom();
+    viewer->zoomOut();
+    QVERIFY(viewer->zoom() < fitted);
+    QVERIFY(!viewer->fitsToWindow());
+}
+
 void TestGui::architectDrawerShowsCodeChanges() {
     if (QStandardPaths::findExecutable(QStringLiteral("git")).isEmpty()) {
         QSKIP("git tidak ada di PATH");
@@ -1037,7 +1250,7 @@ void TestGui::coderDrawerShowsCodeChanges() {
     QVERIFY(tabs->isHidden());
 }
 
-void TestGui::qaFlowCommitsPushesAndMerges() {
+void TestGui::qaFlowCommitsPushesWithoutMerging() {
     if (QStandardPaths::findExecutable(QStringLiteral("git")).isEmpty()) {
         QSKIP("git tidak ada di PATH");
     }
@@ -1100,13 +1313,13 @@ void TestGui::qaFlowCommitsPushesAndMerges() {
     m_runtime.sessions.last()->finishWith(successResult(QStringLiteral("Kriteria 1 gagal: form tanpa validasi")));
     QVERIFY(m_tasks->task(QStringLiteral("t5"))->state == TaskState::AwaitingReview);
 
-    // Drawer QA: tombol setuju sekaligus merge; QA menolak lewat "Kembalikan ke CODER"
+    // Drawer QA: tombol setuju biasa (tidak pernah menyentuh main); QA menolak lewat "Kembalikan ke CODER"
     runButton(QStringLiteral("t5"))->click();   // 📋
     ResponseDrawer *panel = drawer();
     QVERIFY(panel && !panel->isHidden());
     QCOMPARE(panel->taskId(), QStringLiteral("t5"));
     auto *approve = panel->findChild<QPushButton *>(QStringLiteral("btnDrawerApprove"));
-    QCOMPARE(approve->text(), QStringLiteral("Setujui && merge ke main"));
+    QCOMPARE(approve->text(), QStringLiteral("Setujui → DONE"));
     auto *branchLabel = panel->findChild<QLabel *>(QStringLiteral("drawerBranch"));
     QCOMPARE(branchLabel->text(), QStringLiteral("Branch lassomoir/t5-tambah-login dari main"));
     panel->findChild<QPlainTextEdit *>(QStringLiteral("drawerNote"))->setPlainText(QStringLiteral("Tambah validasi"));
@@ -1124,6 +1337,17 @@ void TestGui::qaFlowCommitsPushesAndMerges() {
     m_runtime.sessions.last()->finishWith(successResult(QStringLiteral("Validasi ditambah")));
     QCOMPARE(m_tasks->task(QStringLiteral("t5"))->stage, QStringLiteral("QA"));
 
+    // Sebelum ▶ QA (yang otomatis commit + push), diff putaran ini sudah bisa dilihat lebih dulu:
+    // drawer yang masih terbuka ikut menampilkan tab Perubahan kode begitu task kembali ke QA
+    QVERIFY(!panel->isHidden());
+    auto *codeTabs = panel->findChild<QTabBar *>(QStringLiteral("drawerTabs"));
+    QVERIFY(codeTabs && !codeTabs->isHidden());
+    QVERIFY(!codeTabs->isTabVisible(2));   // Maintainability: hanya ARCHITECT
+    QVERIFY(!codeTabs->isTabVisible(3));   // UML: hanya ARCHITECT
+    auto *files = panel->findChild<QTreeWidget *>(QStringLiteral("diffFileList"));
+    QTRY_COMPARE(files->topLevelItemCount(), 1);
+    QCOMPARE(files->topLevelItem(0)->text(1), QStringLiteral("login.txt"));   // perubahan sejak titik cabang, belum di-commit
+
     // ▶ QA putaran 2: commit kedua, dan QA melihat laporannya yang dulu
     runButton(QStringLiteral("t5"))->click();
     QTRY_COMPARE_WITH_TIMEOUT(int(m_runtime.sessions.size()), 4, kGitTimeoutMs);
@@ -1133,23 +1357,39 @@ void TestGui::qaFlowCommitsPushesAndMerges() {
                 .contains(QStringLiteral("putaran 2")));
     m_runtime.sessions.last()->finishWith(successResult(QStringLiteral("Semua kriteria lulus")));
 
-    // Setujui & merge: kode masuk main di folder kerja project, origin terbarui, worktree dibuang → DONE
+    // Main tetap disimpan komitnya sebelum task terakhir: dipakai untuk memastikan main tak tersentuh
+    const QString mainBeforeApprove = GitSandbox::output(dir.path(), {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+
+    // Setujui (tanpa merge — main diproteksi): task maju ke DONE seketika, tanpa menunggu git apa pun
     runButton(QStringLiteral("t5"))->click();   // 📋
     QVERIFY(!panel->isHidden());
     QVERIFY(approve->isVisibleTo(panel));
     approve->click();
-    QTRY_COMPARE_WITH_TIMEOUT(m_tasks->task(QStringLiteral("t5"))->stage, QStringLiteral("DONE"), kGitTimeoutMs);
-    QCOMPARE(readFile(dir.filePath(QStringLiteral("login.txt"))), QByteArray("form\nvalidasi\n"));
-    QCOMPARE(GitSandbox::output(origin, {QStringLiteral("rev-parse"), QStringLiteral("main")}),
-             GitSandbox::output(dir.path(), {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}));
-    QVERIFY(!QFileInfo::exists(worktree));
-    const TaskBranch merged = m_tasks->task(QStringLiteral("t5"))->branch;
-    QVERIFY(!merged.mergedCommit.isEmpty());
-    QVERIFY(!merged.hasWorktree());
+    QCOMPARE(m_tasks->task(QStringLiteral("t5"))->stage, QStringLiteral("DONE"));
     QCOMPARE(card(QStringLiteral("t5"))->badge(), QStringLiteral("✓ 2 · ↺ 1"));
-    QVERIFY(consoleText().contains(QStringLiteral("[GIT] Demo/Tambah login merge lassomoir/t5-tambah-login → main")));
     QVERIFY(consoleText().contains(QStringLiteral("[GATE] Demo/Tambah login QA disetujui → DONE")));
-    QVERIFY(branchLabel->text().startsWith(QStringLiteral("Di-merge ke main @ ") + merged.mergedCommit));
+
+    // main/folder kerja project tidak pernah tersentuh: tidak ada merge otomatis
+    QVERIFY(!QFileInfo::exists(dir.filePath(QStringLiteral("login.txt"))));
+    QCOMPARE(GitSandbox::output(dir.path(), {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}), mainBeforeApprove);
+    QCOMPARE(GitSandbox::output(origin, {QStringLiteral("rev-parse"), QStringLiteral("main")}), mainBeforeApprove);
+
+    // Worktree dibuang (async) begitu DONE; branch task tetap ada di lokal & remote untuk di-PR manual.
+    // Ditunggu lewat state TaskManager (bukan keberadaan folder saja): penghapusan folder terjadi di
+    // thread lain sesaat sebelum sinyal finished-nya diproses GUI, jadi memeriksa folder duluan rentan
+    // balapan terhadap setBranch() yang baru menyusul.
+    QTRY_VERIFY_WITH_TIMEOUT(!m_tasks->task(QStringLiteral("t5"))->branch.hasWorktree(), kGitTimeoutMs);
+    const TaskBranch afterDone = m_tasks->task(QStringLiteral("t5"))->branch;
+    QVERIFY(!QFileInfo::exists(worktree));
+    QVERIFY(afterDone.mergedCommit.isEmpty());
+    QCOMPARE(afterDone.name, branch.name);
+    QVERIFY(runGit(dir.path(), {QStringLiteral("show-ref"), QStringLiteral("--verify"), QStringLiteral("--quiet"),
+                                QStringLiteral("refs/heads/") + branch.name}));
+    QVERIFY(runGit(origin, {QStringLiteral("show-ref"), QStringLiteral("--verify"), QStringLiteral("--quiet"),
+                            QStringLiteral("refs/heads/") + branch.name}));
+    QVERIFY(consoleText().contains(QStringLiteral("dihapus; branch lassomoir/t5-tambah-login tetap ada")));
+    // Drawer masih menampilkan task ini; label branch tidak berubah karena tidak pernah di-merge
+    QCOMPARE(branchLabel->text(), QStringLiteral("Branch lassomoir/t5-tambah-login dari main"));
 
     // Task lain yang dihapus: worktree-nya ikut dibuang, branch-nya tetap
     TaskItem other = task;

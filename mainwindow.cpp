@@ -799,6 +799,12 @@ void MainWindow::handleTaskChanged(const TaskItem &task) {
 }
 
 void MainWindow::handleTaskMoved(const TaskItem &task, const QString &fromStage) {
+    // Task selesai (approve QA, atau drag manual): worktree-nya tidak diperlukan lagi.
+    // Branch dibiarkan tetap ada (lokal & remote) supaya bisa di-PR manual.
+    if (task.stage == QLatin1String("DONE") && task.branch.hasWorktree()) {
+        removeWorktreeLater(task);
+    }
+
     auto *swimlane = m_swimlanes.value(task.projectId, nullptr);
     KanbanCardWidget *card = swimlane ? swimlane->cardById(task.id) : nullptr;
     if (!card) return;
@@ -854,73 +860,19 @@ void MainWindow::handleApproveRequested(const QString &taskId, const QString &no
     const std::optional<TaskItem> before = m_tasks.task(taskId);
     if (!before) return;
 
-    // QA pada task ber-branch: kodenya di-merge dulu, baru task maju ke DONE
-    const bool merges = TaskGit::isHandoffStage(before->stage) && !before->branch.isEmpty()
-                        && before->branch.mergedCommit.isEmpty() && before->state == TaskState::AwaitingReview;
-    if (merges) {
-        mergeThenApprove(*before, note);
-    } else {
-        approveTask(*before, note);
-    }
-}
-
-void MainWindow::approveTask(const TaskItem &before, const QString &note) {
     QString reason;
     m_userMoveInProgress = true;
-    const bool approved = m_tasks.approve(before.id, note, &reason);
+    const bool approved = m_tasks.approve(taskId, note, &reason);
     m_userMoveInProgress = false;
     if (!approved) {
-        ui->consolePanel->appendLog(RunLogFormatter::gateLine(before, QString("gagal disetujui: %1").arg(reason)));
+        ui->consolePanel->appendLog(RunLogFormatter::gateLine(*before, QString("gagal disetujui: %1").arg(reason)));
         return;
     }
-    const std::optional<TaskItem> after = m_tasks.task(before.id);
+    const std::optional<TaskItem> after = m_tasks.task(taskId);
     ui->consolePanel->appendLog(RunLogFormatter::gateLine(
-        before, QString("%1 disetujui → %2%3")
-                    .arg(before.stage, after ? after->stage : QString(),
-                         note.isEmpty() ? QString() : QStringLiteral(" (dengan catatan)"))));
-}
-
-void MainWindow::mergeThenApprove(const TaskItem &task, const QString &note) {
-    if (m_gitBusy.contains(task.id)) return;
-
-    // Merge mengubah isi folder kerja project, jadi tidak boleh bersamaan dengan agent yang menulis di sana
-    const QString projectDir = m_fileManager->workingDirectory(task.projectId);
-    QString blocked;
-    if (projectDir.isEmpty() || !QDir(projectDir).exists()) {
-        blocked = QStringLiteral("folder kerja project belum dipilih atau sudah tidak ada");
-    } else if (m_swarm.isWriting(projectDir)) {
-        blocked = QStringLiteral("masih ada agent yang menulis di folder kerja project; tunggu sampai selesai");
-    }
-    if (!blocked.isEmpty()) {
-        ui->consolePanel->appendLog(RunLogFormatter::gateLine(task, QString("gagal disetujui: %1").arg(blocked)));
-        m_drawer->setGitActivity(task.id, blocked, false);
-        return;
-    }
-
-    m_gitBusy.insert(task.id);
-    const QString activity = QString("Merge %1 ke %2…").arg(task.branch.name, task.branch.base);
-    m_drawer->setGitActivity(task.id, activity, true);
-    ui->consolePanel->appendLog(RunLogFormatter::gitLine(task, activity));
-
-    auto *watcher = new QFutureWatcher<TaskGit::Result>(this);
-    connect(watcher, &QFutureWatcher<TaskGit::Result>::finished, this, [this, watcher, taskId = task.id, note]() {
-        watcher->deleteLater();
-        m_gitBusy.remove(taskId);
-        const TaskGit::Result result = watcher->result();
-        const std::optional<TaskItem> current = m_tasks.task(taskId);
-        if (!current) return;
-
-        logGitResult(*current, result);
-        if (!result.error.isEmpty()) {
-            ui->consolePanel->appendLog(RunLogFormatter::gateLine(*current, QString("gagal disetujui: %1").arg(result.error)));
-            m_drawer->setGitActivity(taskId, result.error, false);
-            return;
-        }
-        m_tasks.setBranch(taskId, result.branch);
-        m_drawer->setGitActivity(taskId, QString(), false);
-        approveTask(*m_tasks.task(taskId), note);
-    });
-    watcher->setFuture(QtConcurrent::run(&TaskGit::merge, projectDir, task));
+        *before, QString("%1 disetujui → %2%3")
+                     .arg(before->stage, after ? after->stage : QString(),
+                          note.isEmpty() ? QString() : QStringLiteral(" (dengan catatan)"))));
 }
 
 void MainWindow::handleRevisionRequested(const QString &taskId, const QString &note) {
@@ -1116,7 +1068,11 @@ void MainWindow::removeWorktreeLater(const TaskItem &task) {
         logGitResult(task, result);
         if (!result.error.isEmpty()) {
             ui->consolePanel->appendLog(RunLogFormatter::gitLine(task, QStringLiteral("gagal: ") + result.error));
+            return;
         }
+        // Task bisa saja sudah dihapus selagi ini berjalan (mis. dipanggil dari handleTaskRemoved);
+        // setBranch cukup diam-diam gagal untuk task yang sudah tidak ada
+        m_tasks.setBranch(task.id, result.branch);
     });
     watcher->setFuture(QtConcurrent::run(&TaskGit::removeWorktree, projectDir, task.branch));
 }

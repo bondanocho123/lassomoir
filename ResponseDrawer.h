@@ -26,8 +26,9 @@ class QTabBar;
 
 // Panel hasil agent untuk satu task: pemilih run (termasuk "Live" saat berjalan), metrik,
 // dokumen Markdown/Mermaid, dan panel keputusan saat task menunggu review. Di stage yang
-// berurusan dengan kode ada tab tambahan: perubahan kode folder kerja (CODER dan ARCHITECT),
-// serta di stage peninjauan (ARCHITECT) Maintainability Index-nya dan diagram UML.
+// berurusan dengan kode ada tab tambahan: perubahan kode folder kerja (CODER menulisnya, QA dan
+// ARCHITECT meninjaunya), serta di stage peninjauan (ARCHITECT) Maintainability Index-nya dan
+// diagram UML.
 // Pasif: data datang dari MainWindow, keputusan dan permintaan diff dikirim balik lewat sinyal.
 class ResponseDrawer : public QWidget {
     Q_OBJECT
@@ -35,7 +36,8 @@ class ResponseDrawer : public QWidget {
 public:
     explicit ResponseDrawer(MermaidRenderer *renderer, QWidget *parent = nullptr);
 
-    // Stage yang menampilkan tab perubahan kode: CODER menulisnya, ARCHITECT meninjaunya
+    // Stage yang menampilkan tab perubahan kode: CODER menulisnya, QA dan ARCHITECT meninjaunya.
+    // Di QA ini juga yang membuat diff putaran baru sudah bisa dilihat sebelum ▶ (commit + push otomatis).
     static bool showsCodeChanges(const QString &stageKey);
     // Stage peninjauan kode: selain diff ada tab Maintainability dan UML
     static bool showsCodeAnalysis(const QString &stageKey);
@@ -54,10 +56,6 @@ public:
 
     // Jawaban diffRequested; diabaikan bila drawer sudah beralih ke task atau stage lain
     void showDiff(const QString &taskId, const WorkspaceDiff &diff);
-
-    // Status git task yang sedang tampil (mis. "Merge … ke development…" atau alasan merge gagal).
-    // busy = tombol keputusan dinonaktifkan sampai git selesai. Teks kosong = sembunyikan.
-    void setGitActivity(const QString &taskId, const QString &text, bool busy);
 
     // Sinkronkan ikon/tooltip tombol expand dengan keadaan drawer (tanpa memancarkan sinyal)
     void setExpanded(bool expanded);
@@ -109,7 +107,6 @@ private:
     QWidget *m_reviewPanel;
     QPlainTextEdit *m_note;
     QLabel *m_noteHint;
-    QLabel *m_gitActivity;
     QPushButton *m_approve;
     QPushButton *m_revise;
     QWidget *m_sendBackRow;

@@ -376,6 +376,7 @@ private slots:
 
     // Mermaid (fungsi murni)
     void mermaidHelpers();
+    void mermaidReportsSizeAndPlansDetailPass();
 
     // Perubahan kode untuk stage peninjauan (parser murni + git sungguhan)
     void gitDiffParsesUnifiedDiff();
@@ -393,9 +394,8 @@ private slots:
 
     // Alur git per task: branch + worktree, serah-terima ke QA, merge (git sungguhan)
     void taskGitNamesBranches();
-    void taskGitWorktreeHandoffAndMerge();
+    void taskGitWorktreeAndHandoff();
     void taskGitSkipsOrRejectsUnusableFolders();
-    void taskGitMergeStopsSafely();
 
     // Diagram kelas UML (Mermaid) dari tipe C# yang berubah
     void csharpMetricsRecordsOutline();
@@ -1406,11 +1406,61 @@ void TestSwarm::mermaidHelpers() {
     QVERIFY(EdgeMermaidRenderer::trimTransparent(empty).isNull());
 
     // Kode diagram tidak bisa menyisipkan tag, dan "%2" di dalamnya tidak diganti konfigurasi
-    const QString page = EdgeMermaidRenderer::pageHtml(QStringLiteral("graph TD\n A-->B</pre><script>alert(1)</script>"));
+    const QSize firstCanvas = EdgeMermaidRenderer::firstPass().canvas;
+    const QString page = EdgeMermaidRenderer::pageHtml(QStringLiteral("graph TD\n A-->B</pre><script>alert(1)</script>"),
+                                                       firstCanvas);
     QVERIFY(!page.contains(QStringLiteral("<script>alert(1)")));
     QVERIFY(page.contains(QStringLiteral("&lt;/pre&gt;&lt;script&gt;")));
     QVERIFY(page.contains(QStringLiteral("securityLevel: 'strict'")));
-    QVERIFY(EdgeMermaidRenderer::pageHtml(QStringLiteral("graph TD; A[%2]-->B")).contains(QStringLiteral("A[%2]")));
+    QVERIFY(EdgeMermaidRenderer::pageHtml(QStringLiteral("graph TD; A[%2]-->B"), firstCanvas).contains(QStringLiteral("A[%2]")));
+}
+
+void TestSwarm::mermaidReportsSizeAndPlansDetailPass() {
+    // Lintasan pertama semua diagram: kanvas 1400 × 2400 pada skala 2
+    const EdgeMermaidRenderer::Pass first = EdgeMermaidRenderer::firstPass();
+    QCOMPARE(first.canvas, QSize(1400, 2400));
+    QCOMPARE(first.scale, 2.0);
+
+    // Ukuran kanvas ditulis di halaman: viewport yang dilihat skrip headless lebih kecil dari
+    // --window-size, padahal screenshot memotret seluas --window-size
+    const QString page = EdgeMermaidRenderer::pageHtml(QStringLiteral("graph TD; A-->B"), QSize(6694, 431));
+    QVERIFY(page.contains(QStringLiteral("width:6694px")));
+    QVERIFY(page.contains(QStringLiteral("(6694-2*8)/w,(431-2*8)/h")));
+    QVERIFY(page.contains(QStringLiteral("startOnLoad: false")));
+
+    // Laporan halaman dari --dump-dom (angka asli Edge untuk 14 kelas berjajar)
+    const EdgeMermaidRenderer::Report wide = EdgeMermaidRenderer::readReport(
+        "<html><body><div id=\"diagram\"><svg></svg></div>"
+        "<pre id=\"lassomoir-render\" hidden=\"\">ok 6675.90625 412.5 0.20281890567291894</pre></body></html>");
+    QVERIFY(wide.ok);
+    QVERIFY(wide.error.isEmpty());
+    QCOMPARE(wide.natural, QSizeF(6675.90625, 412.5));
+    QVERIFY(qAbs(wide.fit - 0.2028189) < 1e-6);
+
+    // Kode rusak: pesan Mermaid jadi satu baris, baris penunjuk "----^" dibuang
+    const EdgeMermaidRenderer::Report broken = EdgeMermaidRenderer::readReport(
+        "<pre id=\"lassomoir-render\" hidden=\"\">error Parse%20error%20on%20line%202%3A%0Agraph%20TDA--%3E%0A"
+        "------------%5E%0AExpecting%20'AMP'%2C%20got%20'EOF'</pre>");
+    QVERIFY(!broken.ok);
+    QCOMPARE(broken.error, QStringLiteral("Parse error on line 2: graph TDA--> Expecting 'AMP', got 'EOF'"));
+
+    // Tanpa laporan: dianggap tidak diperkecil, seperti renderer lama
+    const EdgeMermaidRenderer::Report missing = EdgeMermaidRenderer::readReport("<html><body></body></html>");
+    QVERIFY(!missing.ok);
+    QVERIFY(missing.error.isEmpty());
+    QCOMPARE(missing.fit, 1.0);
+
+    // Lintasan kedua: kanvas pas seukuran diagram asli (+ tepi 8 px + cadangan 2 px), ±10 MP
+    const EdgeMermaidRenderer::Pass detail = EdgeMermaidRenderer::detailPass(wide.natural);
+    QCOMPARE(detail.canvas, QSize(6676 + 18, 413 + 18));
+    QCOMPARE(detail.scale, 1.86);
+    QVERIFY(detail.canvas.width() * detail.scale * detail.canvas.height() * detail.scale <= 10000000.0);
+    // Diagram sedang tetap skala 2; sisi screenshot tidak lewat 16000 px
+    QCOMPARE(EdgeMermaidRenderer::detailPass(QSizeF(1500, 900)).scale, 2.0);
+    const EdgeMermaidRenderer::Pass strip = EdgeMermaidRenderer::detailPass(QSizeF(12000, 200));
+    QVERIFY(strip.canvas.width() * strip.scale <= 16000.0);
+    // Terlalu besar untuk dirender ulang
+    QCOMPARE(EdgeMermaidRenderer::detailPass(QSizeF(40000, 300)).scale, 0.0);
 }
 
 void TestSwarm::gitDiffParsesUnifiedDiff() {
@@ -2243,7 +2293,7 @@ void TestSwarm::taskGitNamesBranches() {
     QVERIFY(!TaskGit::startsBranch(branched, catalog));
 }
 
-void TestSwarm::taskGitWorktreeHandoffAndMerge() {
+void TestSwarm::taskGitWorktreeAndHandoff() {
     if (QStandardPaths::findExecutable(QStringLiteral("git")).isEmpty()) {
         QSKIP("git tidak ada di PATH");
     }
@@ -2255,6 +2305,8 @@ void TestSwarm::taskGitWorktreeHandoffAndMerge() {
     QVERIFY(runGit(root.path(), {QStringLiteral("init"), QStringLiteral("-q"), QStringLiteral("--bare"), origin}));
     QVERIFY(runGit(repo, {QStringLiteral("remote"), QStringLiteral("add"), QStringLiteral("origin"), origin}));
     QVERIFY(runGit(repo, {QStringLiteral("push"), QStringLiteral("-q"), QStringLiteral("origin"), QStringLiteral("development")}));
+    // Branch dasar tidak pernah disentuh oleh TaskGit sekarang (tidak ada lagi merge otomatis)
+    const QString developmentAtStart = GitSandbox::output(repo, {QStringLiteral("rev-parse"), QStringLiteral("development")});
 
     TaskItem task = makeTask(QStringLiteral("t1"), QStringLiteral("CODER"), QStringLiteral("Demo"));
     task.title = QStringLiteral("Tambah Login Admin");
@@ -2325,32 +2377,29 @@ void TestSwarm::taskGitWorktreeHandoffAndMerge() {
     QVERIFY(GitDiff::collect(branch.directory(), false, QStringLiteral("0000000000000000000000000000000000000000"))
                 .error.startsWith(QStringLiteral("Commit dasar 0000000 tidak ada")));
 
-    // Merge ke development di folder kerja project + push; worktree dan branch lokal dibuang
-    const TaskGit::Result merged = TaskGit::merge(repo, task);
-    QVERIFY2(merged.error.isEmpty(), qPrintable(merged.error));
-    QVERIFY2(merged.warnings.isEmpty(), qPrintable(merged.warnings.join(QStringLiteral("; "))));
-    QCOMPARE(readFile(repo + QStringLiteral("/login.txt")), QByteArray("form\nvalidasi\n"));
-    QCOMPARE(GitSandbox::output(repo, {QStringLiteral("log"), QStringLiteral("-1"), QStringLiteral("--format=%s")}),
-             QStringLiteral("Merge lassomoir/t1-tambah-login-admin: Tambah Login Admin"));
-    QCOMPARE(merged.branch.mergedCommit, GitSandbox::output(repo, {QStringLiteral("rev-parse"), QStringLiteral("--short"), QStringLiteral("HEAD")}));
-    QCOMPARE(GitSandbox::output(origin, {QStringLiteral("rev-parse"), QStringLiteral("development")}),
-             GitSandbox::output(repo, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}));
-    QVERIFY(!merged.branch.hasWorktree());
+    // QA disetujui: hanya worktree-nya yang dibuang (tanpa merge otomatis); branch tetap ada
+    // di lokal & remote, siap di-PR manual — development sama sekali tidak tersentuh
+    task.branch = branch;
+    const TaskGit::Result removed = TaskGit::removeWorktree(repo, task.branch);
+    QVERIFY2(removed.error.isEmpty(), qPrintable(removed.error));
+    QVERIFY(!removed.branch.hasWorktree());
     QVERIFY(!QFileInfo::exists(branch.worktree));
-    QVERIFY(!runGit(repo, {QStringLiteral("show-ref"), QStringLiteral("--verify"), QStringLiteral("--quiet"),
-                           QStringLiteral("refs/heads/") + branch.name}));
+    QVERIFY(runGit(repo, {QStringLiteral("show-ref"), QStringLiteral("--verify"), QStringLiteral("--quiet"),
+                          QStringLiteral("refs/heads/") + branch.name}));
     QVERIFY(runGit(origin, {QStringLiteral("show-ref"), QStringLiteral("--verify"), QStringLiteral("--quiet"),
-                            QStringLiteral("refs/heads/") + branch.name}));   // branch remote dibiarkan
+                            QStringLiteral("refs/heads/") + branch.name}));
+    QCOMPARE(GitSandbox::output(repo, {QStringLiteral("rev-parse"), QStringLiteral("development")}), developmentAtStart);
+    QCOMPARE(GitSandbox::output(origin, {QStringLiteral("rev-parse"), QStringLiteral("development")}), developmentAtStart);
+    QVERIFY(!GitSandbox::output(repo, {QStringLiteral("worktree"), QStringLiteral("list")}).contains(QStringLiteral("worktrees")));
 
-    // Dibuka lagi setelah merge: branch dengan nama yang sama dibuat ulang dari development terbaru
+    // Dibuka lagi (mis. task di-drag manual kembali ke CODER): branch yang sama dipasang ulang
     TaskItem reopened = task;
     reopened.stage = QStringLiteral("CODER");
-    reopened.branch = merged.branch;
+    reopened.branch = removed.branch;
     const TaskGit::Result reattached = TaskGit::ensureWorktree(repo, path, reopened);
     QVERIFY2(reattached.error.isEmpty(), qPrintable(reattached.error));
     QCOMPARE(reattached.branch.name, branch.name);
-    QVERIFY(reattached.branch.mergedCommit.isEmpty());
-    QCOMPARE(reattached.branch.baseCommit, GitSandbox::output(repo, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}));
+    QCOMPARE(reattached.branch.baseCommit, branch.baseCommit);
     QCOMPARE(readFile(reattached.branch.worktree + QStringLiteral("/login.txt")), QByteArray("form\nvalidasi\n"));
 }
 
@@ -2413,64 +2462,6 @@ void TestSwarm::taskGitSkipsOrRejectsUnusableFolders() {
     QCOMPARE(result.branch.subdir, QStringLiteral("src/app"));
     QCOMPARE(result.branch.directory(), result.branch.worktree + QStringLiteral("/src/app"));
     QCOMPARE(readFile(result.branch.directory() + QStringLiteral("/x.txt")), QByteArray("x\n"));
-}
-
-void TestSwarm::taskGitMergeStopsSafely() {
-    if (QStandardPaths::findExecutable(QStringLiteral("git")).isEmpty()) {
-        QSKIP("git tidak ada di PATH");
-    }
-    const GitSandbox sandbox;
-    QTemporaryDir root;
-    const QString repo = root.filePath(QStringLiteral("repo"));
-    QVERIFY(initRepository(repo, QStringLiteral("main")));
-
-    TaskItem task = makeTask(QStringLiteral("t3"), QStringLiteral("QA"));
-    task.title = QStringLiteral("Ubah salam");
-    const TaskGit::Result prepared = TaskGit::ensureWorktree(repo, root.filePath(QStringLiteral("wt/t3")), task);
-    QVERIFY2(prepared.error.isEmpty(), qPrintable(prepared.error));
-    task.branch = prepared.branch;
-    const QString worktree = task.branch.worktree;
-
-    // Tanpa remote: commit tetap jalan, branch hanya ada di lokal
-    QVERIFY(writeFile(worktree + QStringLiteral("/app.txt"), "halo\n"));
-    const TaskGit::Result handed = TaskGit::handoff(task);
-    QVERIFY2(handed.error.isEmpty(), qPrintable(handed.error));
-    QVERIFY(handed.warnings.isEmpty());
-    QVERIFY(handed.log.last().startsWith(QStringLiteral("tidak ada remote origin")));
-
-    // Perubahan yang belum diuji QA menahan merge
-    QVERIFY(writeFile(worktree + QStringLiteral("/app.txt"), "halo lagi\n"));
-    TaskGit::Result merged = TaskGit::merge(repo, task);
-    QVERIFY(merged.error.contains(QStringLiteral("belum diuji QA (app.txt)")));
-    QVERIFY(runGit(worktree, {QStringLiteral("checkout"), QStringLiteral("--"), QStringLiteral("app.txt")}));
-
-    // Folder kerja project sedang di branch lain
-    QVERIFY(runGit(repo, {QStringLiteral("switch"), QStringLiteral("-q"), QStringLiteral("-c"), QStringLiteral("fitur-lain")}));
-    merged = TaskGit::merge(repo, task);
-    QVERIFY(merged.error.contains(QStringLiteral("sedang di fitur-lain, bukan main")));
-    QVERIFY(runGit(repo, {QStringLiteral("switch"), QStringLiteral("-q"), QStringLiteral("main")}));
-
-    // Konflik dengan main: merge dibatalkan bersih, worktree tetap ada untuk diperbaiki
-    QVERIFY(writeFile(repo + QStringLiteral("/app.txt"), "hai\n"));
-    QVERIFY(runGit(repo, {QStringLiteral("commit"), QStringLiteral("-q"), QStringLiteral("-am"), QStringLiteral("ubah di main")}));
-    const QString before = GitSandbox::output(repo, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
-    merged = TaskGit::merge(repo, task);
-    QVERIFY(merged.error.startsWith(QStringLiteral("merge lassomoir/t3-ubah-salam ke main dibatalkan")));
-    QVERIFY2(merged.error.contains(QStringLiteral("CONFLICT")), qPrintable(merged.error));
-    QVERIFY(!runGit(repo, {QStringLiteral("rev-parse"), QStringLiteral("-q"), QStringLiteral("--verify"), QStringLiteral("MERGE_HEAD")}));
-    QCOMPARE(GitSandbox::output(repo, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}), before);
-    QVERIFY(GitSandbox::output(repo, {QStringLiteral("status"), QStringLiteral("--porcelain")}).isEmpty());
-    QVERIFY(merged.branch.mergedCommit.isEmpty());
-    QVERIFY(QFileInfo::exists(worktree));
-
-    // Task dihapus: worktree dibuang, branch-nya dibiarkan
-    const TaskGit::Result removed = TaskGit::removeWorktree(repo, task.branch);
-    QVERIFY2(removed.error.isEmpty(), qPrintable(removed.error));
-    QVERIFY(!removed.branch.hasWorktree());
-    QVERIFY(!QFileInfo::exists(worktree));
-    QVERIFY(runGit(repo, {QStringLiteral("show-ref"), QStringLiteral("--verify"), QStringLiteral("--quiet"),
-                          QStringLiteral("refs/heads/lassomoir/t3-ubah-salam")}));
-    QVERIFY(!GitSandbox::output(repo, {QStringLiteral("worktree"), QStringLiteral("list")}).contains(QStringLiteral("/wt/")));
 }
 
 namespace {
@@ -2723,6 +2714,43 @@ void TestSwarm::realEdgeRendersMermaid() {
     renderer.render(code);
     QTRY_COMPARE_WITH_TIMEOUT(int(images.size()), 2, 5000);
     QVERIFY(timer.elapsed() < 1000);
+    QCOMPARE(images.last().devicePixelRatio(), 2.0);
+
+    // Diagram kelas jauh lebih lebar dari kanvas pertama: dirender ulang seukuran aslinya, jadi
+    // ukuran logisnya ukuran asli dan tetap tajam saat di-zoom
+    QString wide = QStringLiteral("classDiagram\n  class Base {\n    <<abstract>>\n    +Compute()* double\n  }");
+    for (int i = 0; i < 12; ++i) {
+        wide += QStringLiteral("\n  class Calculation%1 {\n    +double Weight$\n"
+                               "    +ComputeScore(context: AssessmentContext) double\n  }\n  Base <|-- Calculation%1")
+                    .arg(i);
+    }
+    timer.restart();
+    renderer.render(wide);
+    QTRY_VERIFY_WITH_TIMEOUT(images.size() == 3 || !errors.isEmpty(), 90000);
+    QVERIFY2(errors.isEmpty(), qPrintable(errors.join(QStringLiteral(", "))));
+    qInfo("diagram lebar (dua lintasan): %lld ms", timer.elapsed());
+    const QImage detailed = images.last();
+    QVERIFY2(detailed.deviceIndependentSize().width() > 3000,
+             qPrintable(QStringLiteral("lebar logis %1").arg(detailed.deviceIndependentSize().width())));
+    QVERIFY2(detailed.devicePixelRatio() >= 1.5 && detailed.devicePixelRatio() <= 2.0,
+             qPrintable(QStringLiteral("skala %1").arg(detailed.devicePixelRatio())));
+    QVERIFY(qreal(detailed.width()) * detailed.height() <= 10000000.0);
+    if (!out.isEmpty()) {
+        const QFileInfo info(out);
+        detailed.save(info.dir().filePath(info.completeBaseName() + QStringLiteral("-lebar.png")));
+    }
+
+    // Kerapatan pikselnya ikut tersimpan di cache
+    renderer.render(wide);
+    QTRY_COMPARE_WITH_TIMEOUT(int(images.size()), 4, 5000);
+    QCOMPARE(images.last().devicePixelRatio(), detailed.devicePixelRatio());
+    QCOMPARE(images.last().size(), detailed.size());
+
+    // Kode rusak: gagal dengan pesan Mermaid (kode tetap tampil di dokumen), bukan gambar bom error
+    renderer.render(QStringLiteral("graph TD\n  A-->"));
+    QTRY_VERIFY_WITH_TIMEOUT(!errors.isEmpty(), 60000);
+    QVERIFY2(errors.last().startsWith(QStringLiteral("Mermaid: Parse error")), qPrintable(errors.last()));
+    QCOMPARE(int(images.size()), 4);
 }
 
 void TestSwarm::documentTextReadsCsv() {

@@ -26,7 +26,7 @@ private:
     QString m_program;
 };
 
-// Beberapa baris pertama keluaran git (stdout lalu stderr): konflik merge dilaporkan di stdout
+// Beberapa baris pertama keluaran git (stdout lalu stderr), untuk pesan error yang ringkas
 QString summary(const GitOutput &output, int maxLines = 4) {
     const QString text = (QString::fromUtf8(output.out) + QLatin1Char('\n') + output.err).trimmed();
     QStringList lines;
@@ -92,19 +92,14 @@ bool isLinkedWorktree(const QString &path) {
     return !path.isEmpty() && QFileInfo(path + QStringLiteral("/.git")).isFile();
 }
 
-// Push ke origin bila remote itu ada. Gagal hanya jadi peringatan: commit/merge lokal tetap sah.
-void pushToOrigin(const Git &git, const QString &directory, const QString &ref, bool setUpstream,
-                  TaskGit::Result *result) {
+// Push branch ke origin (dengan -u) bila remote itu ada. Gagal hanya jadi peringatan: commit lokal tetap sah.
+void pushToOrigin(const Git &git, const QString &directory, const QString &ref, TaskGit::Result *result) {
     if (!git(directory, {QStringLiteral("remote"), QStringLiteral("get-url"), QStringLiteral("origin")}).ok()) {
         result->log.append(QStringLiteral("tidak ada remote origin: %1 hanya ada di lokal").arg(ref));
         return;
     }
-    QStringList arguments = {QStringLiteral("push")};
-    if (setUpstream) {
-        arguments.append(QStringLiteral("-u"));
-    }
-    arguments << QStringLiteral("origin") << ref;
-    const GitOutput push = git(directory, arguments, kNetworkTimeoutMs);
+    const GitOutput push = git(directory, {QStringLiteral("push"), QStringLiteral("-u"), QStringLiteral("origin"), ref},
+                               kNetworkTimeoutMs);
     if (!push.ok()) {
         result->warnings.append(QStringLiteral("push %1 ke origin gagal: %2").arg(ref, summary(push)));
         return;
@@ -199,7 +194,7 @@ TaskGit::Result TaskGit::ensureWorktree(const QString &projectDir, const QString
     const QString base = task.branch.base.isEmpty() ? currentBranch(git, projectDir) : task.branch.base;
     if (base.isEmpty()) {
         result.error = QStringLiteral("folder kerja sedang tidak di branch mana pun (detached HEAD); "
-                                      "checkout dulu branch yang akan jadi tujuan merge");
+                                      "checkout dulu branch yang akan jadi dasar task ini");
         return result;
     }
     QString subdir = git(projectDir, {QStringLiteral("rev-parse"), QStringLiteral("--show-prefix")}).text();
@@ -298,89 +293,7 @@ TaskGit::Result TaskGit::handoff(const TaskItem &task) {
         return result;
     }
 
-    pushToOrigin(git, branch.worktree, branch.name, true, &result);
-    return result;
-}
-
-TaskGit::Result TaskGit::merge(const QString &projectDir, const TaskItem &task) {
-    Result result;
-    result.branch = task.branch;
-    const TaskBranch &branch = task.branch;
-    if (branch.isEmpty()) {
-        result.error = QStringLiteral("task ini tidak punya branch");
-        return result;
-    }
-    const Git git(GitProcess::executable());
-    if (!git.isAvailable()) {
-        result.error = QStringLiteral("git tidak ditemukan di PATH");
-        return result;
-    }
-
-    // Yang di-merge harus persis yang diuji QA: perubahan tracked yang belum di-commit berarti belum diuji
-    if (isLinkedWorktree(branch.worktree)) {
-        const GitOutput status = git(branch.worktree, {QStringLiteral("status"), QStringLiteral("--porcelain"),
-                                                       QStringLiteral("--untracked-files=no")});
-        if (!status.ok()) {
-            result.error = summary(status);
-            return result;
-        }
-        if (!status.text().isEmpty()) {
-            // Tanpa trim: dua kolom status di awal baris pertama bisa diawali spasi (" M app.txt")
-            QStringList files;
-            for (const QString &line : QString::fromUtf8(status.out).split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
-                files.append(line.mid(3).trimmed());
-            }
-            result.error = QStringLiteral("worktree masih punya perubahan yang belum diuji QA (%1); jalankan QA lagi "
-                                          "supaya ikut di-commit")
-                               .arg(files.mid(0, 3).join(QStringLiteral(", ")) + (files.size() > 3 ? QStringLiteral(", …") : QString()));
-            return result;
-        }
-    }
-
-    const QString head = currentBranch(git, projectDir);
-    if (head != branch.base) {
-        result.error = QStringLiteral("folder kerja project sedang di %1, bukan %2: checkout %2 dulu lalu setujui lagi")
-                           .arg(head.isEmpty() ? QStringLiteral("detached HEAD") : head, branch.base);
-        return result;
-    }
-
-    const QString message = QStringLiteral("Merge %1: %2").arg(branch.name, subjectFor(task));
-    const GitOutput merged = git(projectDir, {QStringLiteral("merge"), QStringLiteral("--no-ff"), QStringLiteral("--no-edit"),
-                                              QStringLiteral("-m"), message, branch.name});
-    if (!merged.ok()) {
-        // Konflik meninggalkan merge setengah jalan: folder kerja dikembalikan seperti sebelum merge
-        if (git(projectDir, {QStringLiteral("rev-parse"), QStringLiteral("-q"), QStringLiteral("--verify"),
-                             QStringLiteral("MERGE_HEAD")}).ok()) {
-            git(projectDir, {QStringLiteral("merge"), QStringLiteral("--abort")});
-        }
-        result.error = QStringLiteral("merge %1 ke %2 dibatalkan: %3").arg(branch.name, branch.base, summary(merged));
-        return result;
-    }
-    const QString mergeCommit = git(projectDir, {QStringLiteral("rev-parse"), QStringLiteral("--short"), QStringLiteral("HEAD")}).text();
-    result.branch.mergedCommit = mergeCommit;
-    result.log.append(QStringLiteral("merge %1 → %2 (%3)").arg(branch.name, branch.base, mergeCommit));
-    pushToOrigin(git, projectDir, branch.base, false, &result);
-
-    // Worktree dan branch lokal sudah tidak diperlukan; branch di remote dibiarkan
-    if (branch.hasWorktree()) {
-        const GitOutput removed = git(projectDir, {QStringLiteral("worktree"), QStringLiteral("remove"),
-                                                   QStringLiteral("--force"), branch.worktree});
-        if (removed.ok() || !QFileInfo::exists(branch.worktree)) {
-            result.branch.worktree.clear();
-        } else {
-            result.warnings.append(QStringLiteral("worktree %1 tidak bisa dibuang: %2")
-                                       .arg(QDir::toNativeSeparators(branch.worktree), summary(removed)));
-        }
-    }
-    git(projectDir, {QStringLiteral("worktree"), QStringLiteral("prune")});
-    if (!result.branch.hasWorktree()) {
-        const GitOutput deleted = git(projectDir, {QStringLiteral("branch"), QStringLiteral("-d"), branch.name});
-        if (deleted.ok()) {
-            result.log.append(QStringLiteral("worktree dan branch lokal %1 dibuang").arg(branch.name));
-        } else {
-            result.warnings.append(QStringLiteral("branch lokal %1 tidak bisa dihapus: %2").arg(branch.name, summary(deleted)));
-        }
-    }
+    pushToOrigin(git, branch.worktree, branch.name, &result);
     return result;
 }
 

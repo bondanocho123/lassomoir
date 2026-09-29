@@ -19,6 +19,7 @@ SOURCES += \
     ../../ClaudeCodeRuntime.cpp \
     ../../CodeMetrics.cpp \
     ../../ConsolePanelWidget.cpp \
+    ../../DiagramViewer.cpp \
     ../../DiffView.cpp \
     ../../DocumentText.cpp \
     ../../FileManager.cpp \
@@ -61,6 +62,7 @@ HEADERS += \
     ../../ClaudeCodeRuntime.h \
     ../../CodeMetrics.h \
     ../../ConsolePanelWidget.h \
+    ../../DiagramViewer.h \
     ../../DiffView.h \
     ../../DocumentText.h \
     ../../FileManager.h \

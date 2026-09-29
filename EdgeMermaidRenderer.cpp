@@ -4,17 +4,31 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QStandardPaths>
+#include <QStringList>
 #include <QUrl>
+#include <QtMath>
+
+#include <algorithm>
+#include <cmath>
 
 namespace {
 
 constexpr int kTimeoutMs = 30000;
-constexpr qreal kScale = 2.0;   // sama dengan --force-device-scale-factor
+constexpr qreal kScale = 2.0;               // skala perangkat lintasan pertama, sekaligus batas atas
+constexpr int kCanvasWidth = 1400;          // kanvas lintasan pertama (piksel CSS)
+constexpr int kCanvasHeight = 2400;
+constexpr int kPadding = 8;                 // tepi #diagram di halaman render (piksel CSS)
+constexpr qreal kMaxPixels = 10000000.0;    // lintasan kedua: ±40 MB per diagram di memori
+constexpr qreal kMaxSide = 16000.0;         // sisi screenshot terbesar (piksel perangkat)
+constexpr int kMaxCanvas = 30000;           // diagram yang lebih besar tidak dirender ulang
+constexpr char kRatioText[] = "LassomoirRatio";   // teks PNG di cache: devicePixelRatio gambar
 
-// Tema "base" Mermaid dengan palet aplikasi (lihat styles.qss)
+// Tema "base" Mermaid dengan palet aplikasi (lihat styles.qss). startOnLoad mati: halaman
+// menjalankan mermaid.run() sendiri supaya bisa mengukur hasilnya dan melaporkan gagal render.
 constexpr char kMermaidConfig[] =
-    "{startOnLoad: true, securityLevel: 'strict', theme: 'base', themeVariables: {"
+    "{startOnLoad: false, securityLevel: 'strict', theme: 'base', themeVariables: {"
     "primaryColor: '#f2e3d1', primaryBorderColor: '#a9743f', primaryTextColor: '#3d3730',"
     "secondaryColor: '#e3ebf6', tertiaryColor: '#fbf8f3', lineColor: '#33517a',"
     "noteBkgColor: '#fbeccf', noteBorderColor: '#b7791f',"
@@ -94,14 +108,17 @@ void EdgeMermaidRenderer::render(const QString &code) {
     if (QFileInfo::exists(cached)) {
         QImage image(cached);
         if (!image.isNull()) {
-            image.setDevicePixelRatio(kScale);
+            bool known = false;
+            const qreal ratio = image.text(QLatin1String(kRatioText)).toDouble(&known);
+            image.convertTo(QImage::Format_ARGB32_Premultiplied);
+            image.setDevicePixelRatio(known && ratio > 0 ? ratio : kScale);
             QMetaObject::invokeMethod(this, [this, key, image]() { emit rendered(key, image); },
                                       Qt::QueuedConnection);
             return;
         }
     }
 
-    if (m_currentKey == key) {
+    if (m_current.key == key) {
         return;
     }
     for (const auto &pending : std::as_const(m_queue)) {
@@ -140,19 +157,96 @@ QImage EdgeMermaidRenderer::trimTransparent(const QImage &source, int margin) {
     return image.copy(box);
 }
 
-QString EdgeMermaidRenderer::pageHtml(const QString &code) {
-    // Satu kali arg() dengan dua nilai: isi kode tidak dipindai ulang sebagai penanda %1/%2.
-    // Wadah selebar jendela (bukan inline-block): SVG Mermaid memakai width 100% + max-width
-    // ukuran aslinya, dan di wadah shrink-to-fit lebarnya jatuh ke default 300px sehingga
-    // diagram lebar ikut mengecil. Tepi kosong dipotong trimTransparent().
+QString EdgeMermaidRenderer::pageHtml(const QString &code, const QSize &canvas) {
+    // Satu kali arg() dengan semua nilai: isi kode tidak dipindai ulang sebagai penanda %1..%5.
+    // Wadah selebar kanvas (bukan inline-block): gantt memakai lebar wadahnya sebagai lebar diagram.
+    // Skrip membaca ukuran asli SVG (viewBox), memperkecilnya bila tidak muat kanvas, lalu melapor
+    // di #lassomoir-render untuk --dump-dom. Kanvas ditulis eksplisit karena viewport yang dilihat
+    // skrip di headless lebih kecil dari --window-size (ruang UI browser), padahal screenshot
+    // memotret seluas --window-size.
     return QStringLiteral(
                "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
                "<style>html,body{margin:0;padding:0;background:transparent}"
-               "#diagram{display:block;width:1380px;padding:8px;box-sizing:border-box}</style>"
+               "#diagram{display:block;width:%3px;padding:%5px;box-sizing:border-box}"
+               "#diagram svg{display:block}</style>"
                "<script src=\"mermaid.min.js\"></script></head><body>"
                "<div id=\"diagram\"><pre class=\"mermaid\">%1</pre></div>"
-               "<script>mermaid.initialize(%2);</script></body></html>")
-        .arg(code.trimmed().toHtmlEscaped(), QString::fromLatin1(kMermaidConfig));
+               "<pre id=\"lassomoir-render\" hidden></pre>"
+               "<script>"
+               "function report(text){document.getElementById('lassomoir-render').textContent=text;}"
+               "mermaid.initialize(%2);"
+               "mermaid.run({querySelector:'.mermaid'}).then(function(){"
+               "var svg=document.querySelector('#diagram svg');"
+               "var box=svg.viewBox&&svg.viewBox.baseVal;var rect=svg.getBoundingClientRect();"
+               "var w=box&&box.width?box.width:rect.width;var h=box&&box.height?box.height:rect.height;"
+               "var fit=Math.min(1,(%3-2*%5)/w,(%4-2*%5)/h);"
+               "svg.style.maxWidth='none';svg.setAttribute('width',w*fit);svg.setAttribute('height',h*fit);"
+               "report('ok '+w+' '+h+' '+fit);"
+               "}).catch(function(error){"
+               "report('error '+encodeURIComponent(String(error&&error.message||error)));});"
+               "</script></body></html>")
+        .arg(code.trimmed().toHtmlEscaped(), QString::fromLatin1(kMermaidConfig), QString::number(canvas.width()),
+             QString::number(canvas.height()), QString::number(kPadding));
+}
+
+EdgeMermaidRenderer::Report EdgeMermaidRenderer::readReport(const QByteArray &dom) {
+    static const QRegularExpression marker(QStringLiteral(R"(<pre id="lassomoir-render"[^>]*>([^<]*)</pre>)"));
+    static const QRegularExpression pointer(QStringLiteral(R"(^-*\^$)"));
+
+    Report report;
+    const QString text = marker.match(QString::fromUtf8(dom)).captured(1).trimmed();
+    if (text.startsWith(QLatin1String("error "))) {
+        // Pesan parse Mermaid berbaris-baris: posisi, potongan kode, penunjuk "----^", lalu token
+        // yang diharapkan. Penunjuk tidak berarti di satu baris, jadi dibuang.
+        QStringList parts;
+        const QStringList lines = QUrl::fromPercentEncoding(text.mid(6).toUtf8()).split(QLatin1Char('\n'));
+        for (const QString &line : lines) {
+            const QString trimmed = line.trimmed();
+            if (!trimmed.isEmpty() && !pointer.match(trimmed).hasMatch()) {
+                parts << trimmed;
+            }
+        }
+        report.error = parts.isEmpty() ? QStringLiteral("kode diagram tidak valid") : parts.join(QLatin1Char(' '));
+        if (report.error.size() > 300) {
+            report.error = report.error.left(299) + QChar(u'…');
+        }
+        return report;
+    }
+
+    const QStringList values = text.split(QLatin1Char(' '));
+    if (values.size() == 4 && values.first() == QLatin1String("ok")) {
+        bool widthOk = false;
+        bool heightOk = false;
+        bool fitOk = false;
+        const qreal width = values.at(1).toDouble(&widthOk);
+        const qreal height = values.at(2).toDouble(&heightOk);
+        const qreal fit = values.at(3).toDouble(&fitOk);
+        if (widthOk && heightOk && fitOk && width > 0 && height > 0 && fit > 0) {
+            report.ok = true;
+            report.natural = QSizeF(width, height);
+            report.fit = qMin(fit, 1.0);
+        }
+    }
+    return report;
+}
+
+EdgeMermaidRenderer::Pass EdgeMermaidRenderer::firstPass() {
+    return Pass{QSize(kCanvasWidth, kCanvasHeight), kScale};
+}
+
+EdgeMermaidRenderer::Pass EdgeMermaidRenderer::detailPass(const QSizeF &natural) {
+    Pass pass;
+    // +2: cadangan pembulatan, supaya diagram muat tanpa diperkecil lagi
+    pass.canvas = QSize(qCeil(natural.width()) + 2 * kPadding + 2, qCeil(natural.height()) + 2 * kPadding + 2);
+    if (pass.canvas.width() > kMaxCanvas || pass.canvas.height() > kMaxCanvas) {
+        return pass;
+    }
+    const qreal width = pass.canvas.width();
+    const qreal height = pass.canvas.height();
+    const qreal scale = std::min({kScale, std::sqrt(kMaxPixels / (width * height)), kMaxSide / width, kMaxSide / height});
+    // Dua desimal: angka yang sama dipakai --force-device-scale-factor dan devicePixelRatio gambar
+    pass.scale = std::floor(scale * 100.0) / 100.0;
+    return pass;
 }
 
 void EdgeMermaidRenderer::startNext() {
@@ -160,7 +254,7 @@ void EdgeMermaidRenderer::startNext() {
         return;
     }
     const QPair<QString, QString> next = m_queue.takeFirst();
-    m_currentKey = next.first;
+    m_current = Job{next.first, next.second, firstPass(), QImage()};
 
     QString reason;
     if (!isAvailable(&reason)) {
@@ -171,17 +265,20 @@ void EdgeMermaidRenderer::startNext() {
         finishCurrent(QImage(), QStringLiteral("mermaid.min.js tidak bisa disiapkan"));
         return;
     }
+    launch();
+}
 
-    const QString page = m_workDir.filePath(m_currentKey + QStringLiteral(".html"));
+void EdgeMermaidRenderer::launch() {
+    const QString page = m_workDir.filePath(m_current.key + QStringLiteral(".html"));
     QFile file(page);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         finishCurrent(QImage(), QStringLiteral("halaman render tidak bisa ditulis"));
         return;
     }
-    file.write(pageHtml(next.second).toUtf8());
+    file.write(pageHtml(m_current.code, m_current.pass.canvas).toUtf8());
     file.close();
 
-    const QString screenshot = m_workDir.filePath(m_currentKey + QStringLiteral(".png"));
+    const QString screenshot = m_workDir.filePath(m_current.key + QStringLiteral(".png"));
     m_process = new QProcess(this);
     m_process->setProgram(m_browser);
     m_process->setArguments({
@@ -192,15 +289,18 @@ void EdgeMermaidRenderer::startNext() {
         QStringLiteral("--no-default-browser-check"),
         QStringLiteral("--disable-extensions"),
         QStringLiteral("--user-data-dir=%1").arg(QDir::toNativeSeparators(m_workDir.filePath(QStringLiteral("profile")))),
-        QStringLiteral("--force-device-scale-factor=2"),
+        QStringLiteral("--force-device-scale-factor=%1").arg(m_current.pass.scale),
         // Latar transparan: tepi kosong dipotong trimTransparent(), diagram menyatu dengan panel
         QStringLiteral("--default-background-color=00000000"),
-        QStringLiteral("--window-size=1400,2400"),
-        // Menunggu render Mermaid (asinkron) selesai sebelum screenshot diambil
+        QStringLiteral("--window-size=%1,%2").arg(m_current.pass.canvas.width()).arg(m_current.pass.canvas.height()),
+        // Menunggu render Mermaid (asinkron) selesai sebelum DOM dan screenshot diambil
         QStringLiteral("--virtual-time-budget=10000"),
+        // Laporan ukuran diagram (stdout) dan screenshot dari satu proses
+        QStringLiteral("--dump-dom"),
         QStringLiteral("--screenshot=%1").arg(QDir::toNativeSeparators(screenshot)),
         QUrl::fromLocalFile(page).toString(),
     });
+    m_process->setStandardErrorFile(QProcess::nullDevice());   // log browser tidak dipakai
     connect(m_process, &QProcess::finished, this, &EdgeMermaidRenderer::onFinished);
     connect(m_process, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
         if (error == QProcess::FailedToStart) {
@@ -212,10 +312,16 @@ void EdgeMermaidRenderer::startNext() {
 }
 
 void EdgeMermaidRenderer::onFinished() {
-    const QString screenshot = m_workDir.filePath(m_currentKey + QStringLiteral(".png"));
+    const Report report = readReport(m_process->readAllStandardOutput());
+    const QString screenshot = m_workDir.filePath(m_current.key + QStringLiteral(".png"));
     QImage image(screenshot);
+    QFile::remove(screenshot);
+    QFile::remove(m_workDir.filePath(m_current.key + QStringLiteral(".html")));
+
     QString error;
-    if (image.isNull()) {
+    if (!report.error.isEmpty()) {
+        error = QStringLiteral("Mermaid: %1").arg(report.error);
+    } else if (image.isNull()) {
         error = QStringLiteral("browser tidak menghasilkan gambar");
     } else {
         image = trimTransparent(image);
@@ -223,33 +329,63 @@ void EdgeMermaidRenderer::onFinished() {
             error = QStringLiteral("diagram kosong; periksa sintaks Mermaid");
         }
     }
-
-    if (error.isEmpty()) {
-        QDir().mkpath(m_cacheDir);
-        image.save(cachePath(m_currentKey), "PNG");
-        image.setDevicePixelRatio(kScale);
+    if (!error.isEmpty()) {
+        finishCurrent(QImage(), error);
+        return;
     }
-    QFile::remove(screenshot);
-    QFile::remove(m_workDir.filePath(m_currentKey + QStringLiteral(".html")));
-    finishCurrent(image, error);
+
+    // Kerapatan piksel = skala perangkat × skala diagram di kanvas, jadi ukuran logis gambar sama
+    // dengan ukuran asli diagram (100% di penampil zoom). Tanpa laporan: fit 1, seperti dulu.
+    const qreal ratio = m_current.pass.scale * report.fit;
+    image.setDevicePixelRatio(ratio);
+    if (report.ok && report.fit < 1.0 && m_current.fallback.isNull()) {
+        // Diagram lebih besar dari kanvas pertama sehingga diperkecil: render lagi seukuran aslinya,
+        // kecuali hasilnya nyaris tidak lebih tajam
+        const Pass detail = detailPass(report.natural);
+        if (detail.scale > ratio * 1.1) {
+            m_current.fallback = image;
+            m_current.pass = detail;
+            m_timeout.stop();
+            releaseProcess();
+            launch();
+            return;
+        }
+    }
+    finishCurrent(image, QString());
 }
 
-void EdgeMermaidRenderer::finishCurrent(const QImage &image, const QString &error) {
+void EdgeMermaidRenderer::finishCurrent(QImage image, const QString &error) {
     m_timeout.stop();
-    const QString key = m_currentKey;
-    m_currentKey.clear();
-    if (m_process) {
-        m_process->disconnect(this);
-        m_process->deleteLater();
-        m_process = nullptr;
+    releaseProcess();
+    // Lintasan kedua gagal: pakai hasil lintasan pertama (diagram diperkecil agar muat kanvas)
+    const bool useFallback = !error.isEmpty() && !m_current.fallback.isNull();
+    if (useFallback) {
+        image = m_current.fallback;
     }
+    const QString key = m_current.key;
+    m_current = Job();
 
-    if (error.isEmpty()) {
+    if (error.isEmpty() || useFallback) {
+        // Kerapatan piksel ikut disimpan: gambar seukuran asli tidak selalu berskala 2
+        const qreal ratio = image.devicePixelRatio();
+        image.setText(QLatin1String(kRatioText), QString::number(ratio));
+        QDir().mkpath(m_cacheDir);
+        image.save(cachePath(key), "PNG");
+        image.convertTo(QImage::Format_ARGB32_Premultiplied);
+        image.setDevicePixelRatio(ratio);
         emit rendered(key, image);
     } else {
         emit failed(key, error);
     }
     startNext();
+}
+
+void EdgeMermaidRenderer::releaseProcess() {
+    if (m_process) {
+        m_process->disconnect(this);
+        m_process->deleteLater();
+        m_process = nullptr;
+    }
 }
 
 QString EdgeMermaidRenderer::cachePath(const QString &key) const {

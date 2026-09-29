@@ -3,8 +3,9 @@
 #include <QCryptographicHash>
 
 namespace {
-// Naikkan bila tema diagram atau versi mermaid.min.js berubah
-constexpr char kRendererVersion[] = "lassomoir-mermaid-2|mermaid-11.17.2|";
+// Naikkan bila tema diagram, cara render, atau versi mermaid.min.js berubah
+// (3: diagram besar dirender seukuran aslinya, kerapatan piksel disimpan di PNG)
+constexpr char kRendererVersion[] = "lassomoir-mermaid-3|mermaid-11.17.2|";
 }
 
 QString MermaidRenderer::keyFor(const QString &code) {

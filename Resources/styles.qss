@@ -841,16 +841,6 @@ QLabel#drawerNoteHint {
     font-size: 11px;
 }
 
-/* Merge saat QA disetujui: merah = alasan gagal, navy = sedang berjalan */
-QLabel#drawerGitActivity {
-    color: #9b2c1f;
-    font-size: 11px;
-}
-
-QLabel#drawerGitActivity[busy="true"] {
-    color: #33517a;
-}
-
 /* Setujui = aksi utama (coklat), Revisi/Kembalikan = sekunder (outline navy) */
 QPushButton#btnDrawerApprove {
     background-color: #8f5f31;
@@ -1055,4 +1045,75 @@ QTreeWidget#miFileList QHeaderView::section {
 QLabel#miLegend {
     font-size: 11px;
     color: #8a7f70;
+}
+
+/* ============ Penampil diagram yang bisa di-zoom (DiagramViewer) ============ */
+QDialog#diagramViewer {
+    background-color: #fbf8f3;
+}
+
+QWidget#diagramToolbar {
+    background-color: #fbf8f3;
+    border-bottom: 1px solid #e2d5c1;
+}
+
+/* Tombol zoom: outline navy seperti tombol sekunder drawer; yang aktif (Paskan/100%) terisi navy */
+QPushButton#btnDiagramZoomOut,
+QPushButton#btnDiagramZoomIn,
+QPushButton#btnDiagramFit,
+QPushButton#btnDiagramActualSize,
+QPushButton#btnDiagramOpenExternal {
+    background-color: #ffffff;
+    color: #33517a;
+    border: 1px solid #b9c6da;
+    border-radius: 4px;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+QPushButton#btnDiagramZoomOut,
+QPushButton#btnDiagramZoomIn {
+    padding: 0;
+    font-size: 16px;
+}
+
+QPushButton#btnDiagramZoomOut:hover,
+QPushButton#btnDiagramZoomIn:hover,
+QPushButton#btnDiagramFit:hover,
+QPushButton#btnDiagramActualSize:hover,
+QPushButton#btnDiagramOpenExternal:hover {
+    background-color: #eef2f8;
+    border: 1px solid #33517a;
+}
+
+QPushButton#btnDiagramFit:checked,
+QPushButton#btnDiagramActualSize:checked {
+    background-color: #33517a;
+    color: #ffffff;
+    border: 1px solid #33517a;
+}
+
+QPushButton#btnDiagramZoomOut:disabled,
+QPushButton#btnDiagramZoomIn:disabled {
+    color: #c9d3e2;
+    border: 1px solid #dfe5ee;
+}
+
+QLabel#diagramZoomLevel {
+    min-width: 46px;
+    font-size: 12px;
+    font-weight: bold;
+    color: #3d3730;
+}
+
+QLabel#diagramHint {
+    font-size: 11px;
+    color: #8a7f70;
+}
+
+/* Meja di sekeliling kertas putih diagram (kertas digambar DiagramViewer) */
+QGraphicsView#diagramCanvas {
+    background-color: #ece5da;
+    border: none;
 }

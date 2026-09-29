@@ -14,6 +14,7 @@ class MermaidRenderer;
 
 // Penampil Markdown (dialek GitHub: tabel, daftar, kode) yang menggambar blok ```mermaid
 // sebagai diagram lewat MermaidRenderer. Tanpa renderer, blok Mermaid tampil sebagai kode.
+// Klik diagram membukanya di DiagramViewer (bisa di-zoom dan digeser).
 class MarkdownView : public QTextBrowser {
     Q_OBJECT
 
@@ -27,20 +28,27 @@ protected:
     // mermaid://<key> -> gambar hasil render, diperkecil agar muat lebar panel
     QVariant loadResource(int type, const QUrl &name) override;
     void resizeEvent(QResizeEvent *event) override;
+    // Tooltip di atas diagram: diagram bisa diklik untuk di-zoom
+    bool viewportEvent(QEvent *event) override;
 
 private:
-    // Blok Mermaid -> gambar / "Merender diagram…" / kode + pesan gagal; posisi gulir dijaga
+    // Blok Mermaid -> gambar / "Merender diagram…" / kode + pesan gagal; posisi gulir dijaga.
+    // Gambar diagram yang tidak lagi ada di dokumen dilepas dari memori.
     void rebuild();
+    // Jadikan setiap gambar diagram link mermaid://<key> (bisa diklik, kursor tangan)
+    void linkDiagrams();
     // Lebar logis maksimum gambar di dalam panel
     int availableImageWidth() const;
     void onRendered(const QString &key, const QImage &image);
     void onFailed(const QString &key, const QString &error);
-    // Diagram -> buka PNG ukuran penuh di viewer bawaan; http(s)/file -> aplikasi default
+    // Diagram -> DiagramViewer; http(s)/file -> aplikasi default
     void onAnchorClicked(const QUrl &url);
 
     MermaidRenderer *m_renderer;
     QString m_markdown;
     QHash<QString, QImage> m_images;   // key -> diagram
+    QHash<QString, QImage> m_fitted;   // key -> diagram yang sudah diperkecil selebar panel
+    QHash<QString, QString> m_codes;   // key -> kode Mermaid di dokumen ini (judul penampil zoom)
     QHash<QString, QString> m_errors;  // key -> alasan gagal
     QSet<QString> m_requested;         // key yang sudah diminta ke renderer
     QTimer m_resizeDebounce;           // gambar disesuaikan ulang setelah lebar berhenti berubah

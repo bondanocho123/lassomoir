@@ -148,8 +148,9 @@ Konvensi nama sinyal di kode sudah tepat dan dipertahankan: **peristiwa** dalam 
 | `KanbanCardWidget` | View | Menampilkan satu task, sumber drag | Menyimpan data selain `taskId` + cache tampilan |
 | `ConsolePanelWidget` | View | Log read-only + input perintah | Menjalankan perintah sendiri |
 | `ResponseDrawer` ✅ | View | Drawer hasil agent (pengganti ReviewDialog): pilih run / Live, metrik, dokumen, keputusan Setujui · Revisi · Kembalikan | Mengubah state sendiri (kirim intent ke `TaskManager`) |
-| `MarkdownView` ✅ | View | Markdown dialek GitHub + blok ```mermaid``` sebagai gambar lewat `MermaidRenderer` | Tahu cara menggambar diagram |
-| `MermaidRenderer` / `EdgeMermaidRenderer` ✅ | Infra | Kode Mermaid → PNG: Edge/Chrome headless + `mermaid.min.js` bundel (`:/vendor`), cache per diagram | — |
+| `MarkdownView` ✅ | View | Markdown dialek GitHub + blok ```mermaid``` sebagai gambar lewat `MermaidRenderer`; klik diagram membuka `DiagramViewer` | Tahu cara menggambar diagram |
+| `DiagramViewer` ✅ | View | Jendela non-modal satu diagram: zoom (Ctrl + scroll/pinch di titik kursor, −/+, Paskan, 100%), geser dengan seret, klik ganda Paskan ↔ 100% | Merender diagram sendiri |
+| `MermaidRenderer` / `EdgeMermaidRenderer` ✅ | Infra | Kode Mermaid → PNG: Edge/Chrome headless + `mermaid.min.js` bundel (`:/vendor`); diagram yang lebih besar dari kanvas 1400 × 2400 dirender ulang seukuran aslinya (tajam saat di-zoom); cache per diagram beserta kerapatan pikselnya | — |
 | `TaskManager` | Domain | State task, validasi transisi, sinyal perubahan | Menyentuh file atau proses |
 | `SessionStore` ⬜ | Infra | Load/save JSON secara atomik, cek `schemaVersion` | Dipanggil langsung dari widget |
 | `StageProfile` ✅ | Domain | Satu stage = key + `AgentDefinition` opsional + `TransitionPolicy` | Menjalankan agent |

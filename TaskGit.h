@@ -10,9 +10,10 @@
 
 class StageCatalog;
 
-// Alur git per task: branch + worktree sendiri, serah-terima ke QA (commit + push), lalu merge ke
-// branch dasar saat QA disetujui. Fungsi yang menjalankan git memblokir: panggil lewat QtConcurrent,
-// lalu terapkan Result-nya di thread GUI.
+// Alur git per task: branch + worktree sendiri, lalu serah-terima ke QA (commit + push) sebelum
+// agent QA jalan. Menyetujui QA tidak menyentuh branch dasar (bisa diproteksi, mis. wajib PR);
+// worktree-nya dibuang dan branch-nya dibiarkan siap di-PR manual. Fungsi yang menjalankan git
+// memblokir: panggil lewat QtConcurrent, lalu terapkan Result-nya di thread GUI.
 namespace TaskGit {
 
 struct Result {
@@ -23,7 +24,7 @@ struct Result {
     TaskBranch branch;      // keadaan branch task sesudah operasi
 };
 
-// Stage tempat kode diserahkan (commit + push sebelum agent-nya jalan) dan di-merge saat disetujui
+// Stage tempat kode diserahkan: commit + push sebelum agent-nya jalan
 bool isHandoffStage(const QString &stageKey);
 
 // "lassomoir/<id>-<judul>" dari huruf/angka ASCII, jadi selalu sah sebagai nama branch
@@ -37,16 +38,15 @@ bool looksLikeRepository(const QString &directory);
 bool startsBranch(const TaskItem &task, const StageCatalog &catalog);
 
 // Pastikan task punya worktree di path: branch baru dari branch yang aktif di projectDir, atau
-// branch yang sudah ada dipasang lagi (worktree hilang, atau task dibuka lagi setelah merge)
+// branch yang sudah ada dipasang lagi (mis. worktree-nya sempat dibuang)
 Result ensureWorktree(const QString &projectDir, const QString &path, const TaskItem &task);
 
 // Serah-terima ke QA: commit semua perubahan worktree (bila ada), lalu push branch ke origin
 Result handoff(const TaskItem &task);
 
-// Merge branch task ke base di projectDir, push base, lalu buang worktree dan branch lokalnya
-Result merge(const QString &projectDir, const TaskItem &task);
-
-// Buang worktree task yang dihapus; branch-nya dibiarkan
+// Buang worktree task (dihapus, atau sudah disetujui QA); branch-nya dibiarkan di lokal & remote
+// supaya bisa di-PR manual — main/branch dasar lain mungkin diproteksi, jadi aplikasi ini tidak
+// pernah merge sendiri.
 Result removeWorktree(const QString &projectDir, const TaskBranch &branch);
 
 // Bersihkan catatan worktree yang foldernya sudah tidak ada (mis. project dihapus)

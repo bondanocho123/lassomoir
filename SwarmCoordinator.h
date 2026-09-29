@@ -42,9 +42,6 @@ public:
 
     RunState state(const QString &taskId) const;
 
-    // Sedang ada agent penulis di folder ini? (mis. sebelum aplikasi sendiri menjalankan git merge di sana)
-    bool isWriting(const QString &directory) const;
-
 signals:
     // Diteruskan dari semua gerombolan
     void runQueued(const TaskItem &task);

@@ -92,10 +92,6 @@ RunState SwarmCoordinator::state(const QString &taskId) const {
     return RunState::Idle;
 }
 
-bool SwarmCoordinator::isWriting(const QString &directory) const {
-    return m_guard.isLocked(directory);
-}
-
 StageSwarm *SwarmCoordinator::swarmFor(const QString &stageKey) const {
     for (StageSwarm *swarm : m_swarms) {
         if (swarm->stageKey() == stageKey) {
