@@ -354,7 +354,8 @@ QPushButton#btnReferenceAdd:hover {
 /* ============ Menu klik kanan kartu (Edit / Pindah ke stage / Hapus task) ============ */
 
 QMenu#cardContextMenu,
-QMenu#cardMoveMenu {
+QMenu#cardMoveMenu,
+QMenu#taskFormBranchMenu {
     background-color: #ffffff;
     border: 1px solid #e2d5c1;
     border-radius: 6px;
@@ -364,13 +365,15 @@ QMenu#cardMoveMenu {
 }
 
 QMenu#cardContextMenu::item,
-QMenu#cardMoveMenu::item {
+QMenu#cardMoveMenu::item,
+QMenu#taskFormBranchMenu::item {
     padding: 5px 16px 5px 12px;
     background: transparent;
 }
 
 QMenu#cardContextMenu::item:selected,
-QMenu#cardMoveMenu::item:selected {
+QMenu#cardMoveMenu::item:selected,
+QMenu#taskFormBranchMenu::item:selected {
     background-color: #f2e3d1;
     color: #3d3730;
 }
@@ -382,6 +385,11 @@ QMenu#cardContextMenu::item {
 
 QMenu#cardContextMenu::right-arrow {
     margin-right: 8px;
+}
+
+/* Menu branch di form task: tetap lebar walau nama branch pendek */
+QMenu#taskFormBranchMenu {
+    min-width: 200px;
 }
 
 QMenu#cardContextMenu::item:disabled,
@@ -481,9 +489,11 @@ QDialog#NewTaskDialog {
     background-color: #ffffff;
 }
 
+/* Nama project di kepala form */
 QLabel#taskFormSubtitle {
-    color: #8a7f70;
-    font-size: 11px;
+    color: #3d3730;
+    font-size: 20px;
+    font-weight: bold;
 }
 
 QFrame#taskFormDivider {
@@ -518,7 +528,38 @@ QLineEdit#taskFormInput:focus {
     border: 1px solid #a9743f;
 }
 
-QComboBox#taskFormCombo, QComboBox#taskFormBranch {
+/* Pilihan branch: label + caret tanpa kotak input; kliknya membuka menu branch */
+QPushButton#taskFormBranch {
+    background: transparent;
+    border: none;
+    padding: 2px 18px 2px 0px;
+    text-align: left;
+    font-size: 13px;
+    font-weight: bold;
+    color: #33517a;
+}
+
+QPushButton#taskFormBranch:hover,
+QPushButton#taskFormBranch:pressed {
+    color: #1f3656;
+}
+
+/* Pesan pengganti daftar branch (memuat, bukan repository, ...): tanpa caret */
+QPushButton#taskFormBranch:disabled {
+    padding-right: 0px;
+    font-weight: normal;
+    color: #8a7f70;
+}
+
+QPushButton#taskFormBranch::menu-indicator {
+    image: url(:/icons/chevron-down.svg);
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    width: 11px;
+    height: 11px;
+}
+
+QComboBox#taskFormCombo {
     background-color: #ffffff;
     border: 1px solid #d1d5db;
     border-radius: 4px;
@@ -527,22 +568,16 @@ QComboBox#taskFormCombo, QComboBox#taskFormBranch {
     color: #111827;
 }
 
-QComboBox#taskFormCombo:focus, QComboBox#taskFormBranch:focus {
+QComboBox#taskFormCombo:focus {
     border: 1px solid #a9743f;
 }
 
-/* Pesan pengganti daftar branch (memuat, bukan repository, ...) */
-QComboBox#taskFormBranch:disabled {
-    background-color: #faf6f0;
-    color: #8a7f70;
-}
-
-QComboBox#taskFormCombo::drop-down, QComboBox#taskFormBranch::drop-down {
+QComboBox#taskFormCombo::drop-down {
     border: none;
     width: 20px;
 }
 
-QComboBox#taskFormCombo::down-arrow, QComboBox#taskFormBranch::down-arrow {
+QComboBox#taskFormCombo::down-arrow {
     image: none;
     width: 0;
     height: 0;
@@ -552,7 +587,7 @@ QComboBox#taskFormCombo::down-arrow, QComboBox#taskFormBranch::down-arrow {
     border-top: 5px solid #8a7f70;
 }
 
-QComboBox#taskFormCombo QAbstractItemView, QComboBox#taskFormBranch QAbstractItemView {
+QComboBox#taskFormCombo QAbstractItemView {
     background-color: #ffffff;
     border: 1px solid #d1d5db;
     outline: none;

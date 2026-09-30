@@ -10,13 +10,18 @@
 #include <QFutureWatcher>
 #include <QSet>
 #include <QtConcurrent/QtConcurrentRun>
+#include <QFont>
 #include <QHBoxLayout>
 #include <QKeySequence>
+#include <QAction>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QPushButton>
 #include <QShortcut>
 #include <QVBoxLayout>
+
+#include <algorithm>
 
 namespace {
 const QStringList kCategoryPresets = {
@@ -41,6 +46,12 @@ const QString kBranchHint = QStringLiteral("Task bercabang dari branch ini. Bran
                                            "saat task dibuat dan sebelum setiap run.");
 const QString kOriginPrefix = QStringLiteral("origin/");
 const QString kTaskBranchPrefix = QStringLiteral("lassomoir/");
+constexpr int kBranchLabelMaxWidth = 380;   // nama branch lebih panjang dipendekkan di tengah
+
+// "&" di nama branch jangan dibaca sebagai penanda shortcut tombol/menu
+QString escapeMnemonic(QString text) {
+    return text.replace(QLatin1Char('&'), QStringLiteral("&&"));
+}
 
 // Hasil fetch origin + daftar branch sesudahnya
 struct FetchedBranches {
@@ -86,13 +97,19 @@ NewTaskDialog::NewTaskDialog(const QString &projectId, const StageCatalog &catal
     root->addWidget(subtitle);
     root->addWidget(buildDivider());
 
-    // Branch dipilih paling dulu: seluruh pekerjaan task berangkat dari branch ini
-    m_branchInput = new QComboBox(this);
-    m_branchInput->setObjectName("taskFormBranch");
+    // Branch dipilih paling dulu: seluruh pekerjaan task berangkat dari branch ini. Tampil sebagai
+    // label + caret (menu-indicator di styles.qss), selebar namanya dan menempel kiri.
+    m_branchButton = new QPushButton(this);
+    m_branchButton->setObjectName("taskFormBranch");
+    m_branchButton->setCursor(Qt::PointingHandCursor);
+    m_branchMenu = new QMenu(this);
+    m_branchMenu->setObjectName("taskFormBranchMenu");
+    m_branchMenu->setToolTipsVisible(true);
     m_branchHint = new QLabel(this);
     m_branchHint->setObjectName("taskFormHint");
     m_branchHint->setWordWrap(true);
-    QWidget *branchField = buildField("BRANCH", m_branchInput);
+    QWidget *branchField = buildField("BRANCH", m_branchButton);
+    branchField->layout()->setAlignment(m_branchButton, Qt::AlignLeft);
     branchField->layout()->addWidget(m_branchHint);
     root->addWidget(branchField);
     showBranchMessage("Folder kerja belum dipilih",
@@ -228,7 +245,7 @@ void NewTaskDialog::loadBranches(const QString &workingDirectory) {
         m_branchesLoading = false;
         showBranches(watcher->result());
         updateCreateButtonEnabled();
-        if (m_branchSelectable) {
+        if (!m_branchOptions.isEmpty()) {
             fetchBranches(workingDirectory);
         }
     });
@@ -262,7 +279,7 @@ void NewTaskDialog::showBranches(const GitBranchList &list) {
         showBranchMessage("Branch tidak bisa dibaca", list.error);
         return;
     }
-    const QString selected = m_branchSelectable ? m_branchInput->currentData().toString() : QString();
+    const QString selected = m_branchOptions.isEmpty() ? QString() : m_branch;
 
     QSet<QString> locals;
     for (const GitBranch &branch : list.branches) {
@@ -272,8 +289,8 @@ void NewTaskDialog::showBranches(const GitBranchList &list) {
     }
 
     // Urutan GitHistory dipertahankan: yang aktif, lokal lain, lalu yang hanya ada di origin
-    m_branchInput->clear();
-    int current = -1;
+    QList<BranchOption> options;
+    QString current;
     for (const GitBranch &branch : list.branches) {
         QString base = branch.name;
         if (branch.remote) {
@@ -295,39 +312,76 @@ void NewTaskDialog::showBranches(const GitBranchList &list) {
         } else if (!branch.track.isEmpty()) {
             tip.append(QString("%1 dibanding %2").arg(branch.track, branch.upstream));
         }
-        m_branchInput->addItem(branch.current ? QString("%1 (aktif)").arg(base) : branch.name, base);
-        m_branchInput->setItemData(m_branchInput->count() - 1, tip.join('\n'), Qt::ToolTipRole);
+        options.append({branch.current ? QString("%1 (aktif)").arg(base) : branch.name, base, tip.join('\n')});
         if (branch.current) {
-            current = m_branchInput->count() - 1;
+            current = base;
         }
     }
-    if (m_branchInput->count() == 0) {
+    if (options.isEmpty()) {
         showBranchMessage("Repository belum punya commit", "Task berjalan tanpa branch sampai ada commit pertama.");
         return;
     }
 
     // Pilihan pengguna dipertahankan saat daftar diperbarui; task yang diedit tetap di branch dasar
-    // pilihannya; task baru mulai dari branch yang aktif
-    const QString chosen = !selected.isEmpty() ? selected : m_original.branch.base;
-    int index = chosen.isEmpty() ? current : m_branchInput->findData(chosen);
-    if (!chosen.isEmpty() && index < 0) {
-        m_branchInput->addItem(chosen, chosen);
-        index = m_branchInput->count() - 1;
-        m_branchInput->setItemData(index, QString("Tidak ditemukan di repository"), Qt::ToolTipRole);
+    // pilihannya; task baru mulai dari branch yang aktif (atau yang teratas bila detached HEAD)
+    QString chosen = !selected.isEmpty() ? selected : m_original.branch.base;
+    if (chosen.isEmpty()) {
+        chosen = current.isEmpty() ? options.first().base : current;
     }
-    m_branchInput->setCurrentIndex(qMax(0, index));
-    m_branchInput->setEnabled(true);
-    m_branchSelectable = true;
+    const bool known = std::any_of(options.cbegin(), options.cend(),
+                                   [&chosen](const BranchOption &option) { return option.base == chosen; });
+    if (!known) {
+        options.append({chosen, chosen, QStringLiteral("Tidak ditemukan di repository")});
+    }
+
+    m_branchOptions = options;
+    m_branchMenu->clear();
+    for (const BranchOption &option : std::as_const(m_branchOptions)) {
+        QAction *action = m_branchMenu->addAction(escapeMnemonic(option.text));
+        action->setData(option.base);
+        action->setToolTip(option.tip);
+        const QString base = option.base;
+        connect(action, &QAction::triggered, this, [this, base]() { selectBranch(base); });
+    }
+    m_branchButton->setMenu(m_branchMenu);
+    m_branchButton->setEnabled(true);
     m_branchHint->setText(kBranchHint);
+    selectBranch(chosen);
 }
 
 void NewTaskDialog::showBranchMessage(const QString &message, const QString &hint) {
-    m_branchSelectable = false;
-    m_branchInput->clear();
-    m_branchInput->addItem(message, QString());
-    m_branchInput->setEnabled(false);
+    m_branchOptions.clear();
+    m_branch.clear();
+    m_branchMenu->clear();
+    // Tanpa menu: tidak ada caret, dan klik tidak membuka apa-apa
+    m_branchButton->setMenu(nullptr);
+    m_branchButton->setText(escapeMnemonic(message));
+    m_branchButton->setToolTip(QString());
+    m_branchButton->setEnabled(false);
     m_branchHint->setText(hint);
     m_branchHint->setVisible(!hint.isEmpty());
+}
+
+void NewTaskDialog::selectBranch(const QString &base) {
+    m_branch = base;
+    QString text = base;
+    QString tip;
+    for (const BranchOption &option : std::as_const(m_branchOptions)) {
+        if (option.base == base) {
+            text = option.text;
+            tip = option.tip;
+        }
+    }
+    for (QAction *action : m_branchMenu->actions()) {
+        QFont font = action->font();
+        font.setBold(action->data().toString() == base);
+        action->setFont(font);
+    }
+    // Lebar label mengikuti font dari styles.qss, jadi dipoles dulu sebelum dipendekkan
+    m_branchButton->ensurePolished();
+    const QString shown = m_branchButton->fontMetrics().elidedText(text, Qt::ElideMiddle, kBranchLabelMaxWidth);
+    m_branchButton->setText(escapeMnemonic(shown));
+    m_branchButton->setToolTip(shown == text ? tip : text + QLatin1Char('\n') + tip);
 }
 
 QWidget *NewTaskDialog::buildTuningRow(const QString &stageKey, const AgentDefinition &defaults) {
@@ -397,8 +451,8 @@ TaskItem NewTaskDialog::resultTask() const {
     item.category = m_categoryInput->currentText().trimmed();
     item.title = m_titleInput->text().trimmed();
     item.subtext = m_promptInput->text().trimmed();
-    if (m_branchSelectable) {
-        item.branch.base = m_branchInput->currentData().toString();
+    if (!m_branchOptions.isEmpty()) {
+        item.branch.base = m_branch;
     }
     for (auto it = m_tuningInputs.cbegin(); it != m_tuningInputs.cend(); ++it) {
         const AgentTuning tuning{it->model->currentData().toString(), it->effort->currentData().toString()};

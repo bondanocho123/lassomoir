@@ -16,6 +16,7 @@ struct GitBranchList;
 class QLineEdit;
 class QComboBox;
 class QLabel;
+class QMenu;
 class QPushButton;
 class QFrame;
 
@@ -60,12 +61,20 @@ private:
     TaskItem m_original;
     bool m_editing = false;
 
-    // Branch dasar task (data item = nama branch lokal; branch yang baru ada di origin dibuat di
-    // lokal saat di-pull). Berisi pesan saja (disabled) selama tidak ada branch yang bisa dipilih.
-    QComboBox *m_branchInput;
+    // Satu pilihan di menu branch
+    struct BranchOption {
+        QString text;   // yang tampil: "main (aktif)", "fitur", "origin/rilis"
+        QString base;   // nama branch lokal; yang baru ada di origin dibuat di lokal saat di-pull
+        QString tip;
+    };
+    // Branch dasar task: label + caret tanpa kotak input, kliknya membuka menu branch. Tanpa menu
+    // (disabled, berisi pesan saja) selama tidak ada branch yang bisa dipilih.
+    QPushButton *m_branchButton;
+    QMenu *m_branchMenu;
+    QList<BranchOption> m_branchOptions;   // kosong = tidak ada branch yang bisa dipilih
+    QString m_branch;                      // base yang terpilih
     QLabel *m_branchHint;
     bool m_branchesLoading = false;
-    bool m_branchSelectable = false;
 
     QLineEdit *m_titleInput;
     PromptEditor *m_promptInput;   // subtext multi-baris + foto & dokumen lampiran
@@ -95,8 +104,10 @@ private:
     // Branch lokal + branch origin yang belum ada di lokal; branch kerja task (lassomoir/...) tidak.
     // Pilihan yang sedang aktif dipertahankan bila masih ada.
     void showBranches(const GitBranchList &list);
-    // Combo berisi satu pesan (tidak bisa dipilih); hint menjelaskan akibatnya
+    // Label berisi satu pesan (tidak bisa dipilih); hint menjelaskan akibatnya
     void showBranchMessage(const QString &message, const QString &hint);
+    // Tandai base terpilih: teks label, tooltip, dan item tebal di menu
+    void selectBranch(const QString &base);
 };
 
 #endif // NEWTASKDIALOG_H
