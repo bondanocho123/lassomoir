@@ -755,6 +755,12 @@ KanbanCardWidget *MainWindow::createCard(SwimlaneWidget *swimlane, const TaskIte
         }
         showDeleteConfirmPopup(card, question, [this, taskId]() { handleDeleteTaskRequested(taskId); });
     });
+    // Submenu "Pindah ke stage": aturannya sama dengan drag. handleTaskMoved() memindahkan
+    // widget-nya; bila ditolak (gate), handleTaskMoveRejected() mencatat alasannya di konsol.
+    card->setMoveTargets(m_catalog.keys());
+    connect(card, &KanbanCardWidget::moveRequested, this, [this](const QString &taskId, const QString &stage) {
+        m_tasks.moveTask(taskId, stage);
+    });
     // 📋 (menunggu review) dan klik biasa pada kartu sama-sama membuka drawer hasil agent
     connect(card, &KanbanCardWidget::reviewRequested, this, &MainWindow::openDrawer);
     connect(card, &KanbanCardWidget::detailsRequested, this, &MainWindow::openDrawer);

@@ -6,6 +6,7 @@
 
 #include <QWidget>
 #include <QPoint>
+#include <QStringList>
 
 #include "AgentTypes.h"
 #include "TaskItem.h"
@@ -52,6 +53,13 @@ public:
     void setTaskState(TaskState state, const QString &detail = QString());
     TaskState taskState() const { return m_taskState; }
 
+    // Stage tempat kartu sekarang berada; diatur kolom saat kartu masuk ke dalamnya
+    void setStage(const QString &stage) { m_stage = stage; }
+    QString stage() const { return m_stage; }
+
+    // Semua stage pipeline (urut) untuk submenu "Pindah ke stage" di menu klik kanan
+    void setMoveTargets(const QStringList &stages) { m_moveTargets = stages; }
+
 signals:
     void cardClicked(const QString &cardId);
     // Tombol ▶ di pojok kanan atas kartu diklik saat Idle
@@ -66,6 +74,8 @@ signals:
     void editRequested(const QString &cardId);
     // "Hapus task" di menu klik kanan; konfirmasinya urusan penerima sinyal
     void deleteRequested(const QString &cardId);
+    // Stage dipilih di submenu "Pindah ke stage"; boleh-tidaknya diputuskan penerima sinyal
+    void moveRequested(const QString &cardId, const QString &targetStage);
 
 protected:
     //Event penanganan drag and drop
@@ -73,7 +83,7 @@ protected:
     void mouseReleaseEvent(QMouseEvent *event) override;
     void mouseDoubleClickEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
-    // Klik kanan: menu Edit / Hapus task
+    // Klik kanan: menu Edit / Pindah ke stage / Hapus task
     void contextMenuEvent(QContextMenuEvent *event) override;
     // Kedip run di atas latar styles.qss
     void paintEvent(QPaintEvent *event) override;
@@ -93,6 +103,8 @@ private :
     QString m_title;
     QString m_subtext;
     QString m_badge;
+    QString m_stage;
+    QStringList m_moveTargets;
 
     // Status tombol run
     bool m_runEnabled = false;

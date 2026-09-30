@@ -187,6 +187,7 @@ private slots:
     void doubleClickEditsTask();
     void cancelledEditKeepsTask();
     void deleteTaskFromCardMenu();
+    void moveTaskFromCardMenu();
 
     // Review gate, drawer, dan viewer
     void specifierReviewApproveFlow();
@@ -905,6 +906,67 @@ void TestGui::deleteTaskFromCardMenu() {
     createWindow();
     QVERIFY(!card(QStringLiteral("t1")));
     QVERIFY(card(QStringLiteral("t2")) && card(QStringLiteral("t3")));
+}
+
+void TestGui::moveTaskFromCardMenu() {
+    SwimlaneWidget *swimlane = m_window->findChild<SwimlaneWidget *>();
+    KanbanCardWidget *coder = card(QStringLiteral("t1"));
+    KanbanCardWidget *spec = card(QStringLiteral("t3"));
+    QVERIFY(swimlane && coder && spec);
+
+    // Klik kanan -> "Pindah ke stage" -> pilih stage; menu dibuang setelah dipakai
+    const auto moveVia = [](KanbanCardWidget *target, const QString &stage) -> bool {
+        QContextMenuEvent event(QContextMenuEvent::Mouse, QPoint(10, 10), target->mapToGlobal(QPoint(10, 10)));
+        QApplication::sendEvent(target, &event);
+        auto *menu = target->findChild<QMenu *>(QStringLiteral("cardContextMenu"));
+        auto *move = menu ? menu->findChild<QMenu *>(QStringLiteral("cardMoveMenu")) : nullptr;
+        QAction *action = move ? move->findChild<QAction *>(QStringLiteral("actionMoveTo_") + stage) : nullptr;
+        const bool triggered = action && move->isEnabled() && action->isEnabled();
+        if (triggered) {
+            action->trigger();
+        }
+        delete menu;
+        return triggered;
+    };
+
+    // Submenu memuat semua stage; stage sekarang bertanda ✓ dan tidak bisa dipilih
+    {
+        QContextMenuEvent event(QContextMenuEvent::Mouse, QPoint(10, 10), coder->mapToGlobal(QPoint(10, 10)));
+        QApplication::sendEvent(coder, &event);
+        auto *menu = coder->findChild<QMenu *>(QStringLiteral("cardContextMenu"));
+        QVERIFY(menu);
+        auto *move = menu->findChild<QMenu *>(QStringLiteral("cardMoveMenu"));
+        QVERIFY(move && move->isEnabled());
+        QCOMPARE(move->actions().size(), swimlane->columns().size());
+        QAction *current = move->findChild<QAction *>(QStringLiteral("actionMoveTo_CODER"));
+        QVERIFY(current && current->isChecked() && !current->isEnabled());
+        delete menu;
+    }
+
+    // Maju ke CLEANER: kartu pindah kolom, task ikut, konsol mencatatnya
+    QVERIFY(moveVia(coder, QStringLiteral("CLEANER")));
+    QCOMPARE(swimlane->stageOf(coder), QStringLiteral("CLEANER"));
+    QCOMPARE(coder->stage(), QStringLiteral("CLEANER"));
+    QCOMPARE(m_tasks->task(QStringLiteral("t1"))->stage, QStringLiteral("CLEANER"));
+    QVERIFY(consoleText().contains(QStringLiteral("[TASK] Demo/Tulis hello CODER → CLEANER")));
+
+    // Mundur selalu boleh
+    QVERIFY(moveVia(coder, QStringLiteral("WAITING")));
+    QCOMPARE(swimlane->stageOf(coder), QStringLiteral("WAITING"));
+    QCOMPARE(m_tasks->task(QStringLiteral("t1"))->stage, QStringLiteral("WAITING"));
+
+    // Gate tetap berlaku: SPECIFIER belum disetujui, jadi tidak bisa maju
+    QVERIFY(moveVia(spec, QStringLiteral("CODER")));
+    QCOMPARE(swimlane->stageOf(spec), QStringLiteral("SPECIFIER"));
+    QCOMPARE(m_tasks->task(QStringLiteral("t3"))->stage, QStringLiteral("SPECIFIER"));
+    QVERIFY(consoleText().contains(
+        QStringLiteral("[GATE] Demo/Sederhanakan landing tidak bisa dipindah: stage SPECIFIER butuh review")));
+
+    // Agent sedang berjalan: submenu dikunci, sama seperti drag
+    runButton(QStringLiteral("t3"))->click();
+    QVERIFY(spec->runState() == RunState::Running);
+    QVERIFY(!moveVia(spec, QStringLiteral("WAITING")));
+    QCOMPARE(m_tasks->task(QStringLiteral("t3"))->stage, QStringLiteral("SPECIFIER"));
 }
 
 void TestGui::specifierReviewApproveFlow() {

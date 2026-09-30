@@ -80,6 +80,7 @@ void KanbanColumnWidget::addCard(KanbanCardWidget *card) {
     //Sisipkan sebelum spacer terbawah (Jika ada spacer di index terakhir)
     int targetIndex = qMax(0, m_cardListLayout->count()-1);
     m_cardListLayout->insertWidget(targetIndex, card);
+    card->setStage(m_stageName);
     card->setRunEnabled(m_runnable);
     card->show();
 }
@@ -87,7 +88,8 @@ void KanbanColumnWidget::addCard(KanbanCardWidget *card) {
 void KanbanColumnWidget::insertCard(int index, KanbanCardWidget *card){
     if (!card || !m_cardListLayout) return;
     m_cardListLayout->insertWidget(index, card);
-    // Kartu yang di-drop ke kolom lain ikut menyesuaikan tombol run-nya
+    // Kartu yang di-drop ke kolom lain ikut menyesuaikan stage dan tombol run-nya
+    card->setStage(m_stageName);
     card->setRunEnabled(m_runnable);
     card->show();
 }
