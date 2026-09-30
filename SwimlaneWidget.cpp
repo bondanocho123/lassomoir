@@ -1,7 +1,9 @@
 #include "SwimlaneWidget.h"
+#include "GitHistory.h"
 #include "KanbanColumnWidget.h"
 #include "KanbanCardWidget.h"
 #include "StageCatalog.h"
+#include "StageInfo.h"
 #include "ui_SwimlaneWidget.h"
 
 #include <QDir>
@@ -36,10 +38,17 @@ SwimlaneWidget::SwimlaneWidget(const QString &projectId, const StageCatalog &cat
     ui->btnReferenceDirs->setIconSize(QSize(iconSide, iconSide));
     ui->btnReferenceDirs->setIcon(QIcon(":/icons/folders.svg"));
     connect(ui->btnReferenceDirs, &QPushButton::clicked, this, &SwimlaneWidget::showReferencePopup);
+    ui->btnBranch->ensurePolished();
+    ui->btnBranch->setIconSize(QSize(iconSide, iconSide));
+    ui->btnBranch->setIcon(QIcon(":/icons/branch.svg"));
+    connect(ui->btnBranch, &QPushButton::clicked, this, [this]() {
+        emit branchViewRequested(m_projectId);
+    });
 
     initializeColumns(catalog);
     setProjectTitle(m_projectId);
     setWorkingDirectory(QString());
+    setGitHead(GitHead());
     setReferenceDirectories(QStringList());
 }
 
@@ -66,6 +75,29 @@ void SwimlaneWidget::setWorkingDirectory(const QString &path) {
     ui->btnWorkingDir->setText(name.isEmpty() ? path : name);
     ui->btnWorkingDir->setToolTip(QString("Folder kerja agent: %1\nKlik untuk mengganti")
                                       .arg(QDir::toNativeSeparators(path)));
+}
+
+void SwimlaneWidget::setGitHead(const GitHead &head) {
+    ui->btnBranch->setVisible(head.repository);
+    if (!head.repository) {
+        return;
+    }
+
+    QString text;
+    QString tip;
+    if (!head.branch.isEmpty()) {
+        text = head.branch;
+        tip = head.commit.isEmpty() ? QStringLiteral("Folder kerja di branch %1 (belum punya commit)").arg(head.branch)
+                                    : QStringLiteral("Folder kerja sedang di branch %1 (%2)").arg(head.branch, head.commit);
+    } else {
+        text = QStringLiteral("HEAD %1").arg(head.commit);
+        tip = QStringLiteral("Folder kerja tidak di branch mana pun (detached HEAD di %1)").arg(head.commit);
+    }
+    // Nama branch task bisa panjang: dipendekkan di tengah, lengkapnya di tooltip. "&" digandakan
+    // supaya tidak dibaca sebagai penanda shortcut.
+    text = ui->btnBranch->fontMetrics().elidedText(text, Qt::ElideMiddle, 180);
+    ui->btnBranch->setText(text.replace(QLatin1Char('&'), QStringLiteral("&&")));
+    ui->btnBranch->setToolTip(tip + QStringLiteral("\nKlik untuk melihat branch, daftar commit, dan membandingkan perubahan"));
 }
 
 void SwimlaneWidget::setReferenceDirectories(const QStringList &dirs) {
@@ -260,6 +292,7 @@ void SwimlaneWidget::initializeColumns(const StageCatalog &catalog) {
         auto *colWidget = new KanbanColumnWidget(this);
         colWidget->setFixedWidth(400);
         colWidget->setStageName(stage);
+        colWidget->setStageInfo(StageInfo::html(catalog, stage));
 
         // Tombol run kartu hanya aktif di stage yang punya agent
         const StageProfile *profile = catalog.profile(stage);

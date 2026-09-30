@@ -113,6 +113,11 @@ private slots:
     // Tombol × di popup folder referensi swimlane
     void removeReferenceDirectory(const QString &projectId, const QString &dir);
 
+    // Jendela branch & commit project: dari tombol branch di header swimlane (branch aktif folder
+    // kerja), atau dari "Lihat commit" di drawer task (branch task dibanding branch dasarnya)
+    void showBranchViewer(const QString &projectId, const QString &branch = QString(),
+                          const QString &compareWith = QString());
+
 private:
     Ui::MainWindow *ui;
     const StageCatalog &m_catalog;
@@ -125,14 +130,14 @@ private:
     SplitterPaneAnimator *m_drawerAnimator = nullptr;
     // Nomor permintaan diff terbaru; hanya jawabannya yang ditampilkan di drawer
     int m_diffRequest = 0;
-    // Task yang sedang menunggu git (worktree, commit + push ke QA, merge); run dan keputusan
-    // berikutnya ditolak sampai selesai
+    // Task yang sedang menunggu git (pull, worktree, commit + push ke QA); run berikutnya ditolak
+    // sampai selesai
     QSet<QString> m_gitBusy;
     // Tombol stop ditekan selagi git menyiapkan run: agent tidak dijalankan sesudahnya
     QSet<QString> m_gitCancelled;
     // Saat memuat dari disk tidak perlu menulis ulang session.json per task
     bool m_loading = false;
-    // Perpindahan yang dipicu pengguna (drag / keputusan review) sudah dicatat pemanggilnya
+    // Perpindahan karena keputusan review sudah dicatat pemanggilnya ([GATE] ...)
     bool m_userMoveInProgress = false;
     // Daftar swimlane yang aktif (Key: projectId, misal "TTT", "spacewar")
     QMap<QString, SwimlaneWidget*> m_swimlanes;
@@ -181,9 +186,12 @@ private:
     void openDrawer(const QString &taskId);
     // Segarkan drawer bila sedang menampilkan task ini
     void refreshDrawer(const TaskItem &task);
-    // Tombol ▶ diklik: pastikan folder kerja ada, siapkan branch/worktree task (dan di QA: commit +
-    // push) bila perlu, lalu serahkan ke SwarmCoordinator
+    // Tombol ▶ diklik: pastikan folder kerja ada, pull dulu (folder kerja di repository git), siapkan
+    // branch/worktree task (dan di QA: commit + push) bila perlu, lalu serahkan ke SwarmCoordinator
     void handleRunRequested(const QString &projectId, const QString &taskId);
+    // Task baru (atau yang branch dasarnya diganti) langsung pull branch dasarnya di thread pool;
+    // hasilnya dicatat di kartu konsol task. Gagal tidak menghalangi apa pun: run tetap pull lagi.
+    void pullBaseLater(const TaskItem &task);
     // Baca lampiran & folder referensi lalu jalankan agent di folder itu; false bila ditolak
     bool startAgentRun(const TaskItem &task, const QString &workingDirectory);
     // Git selesai menyiapkan run task (requested = data saat ▶ diklik)
@@ -192,6 +200,10 @@ private:
     QString taskDirectory(const TaskItem &task) const;
     // Baris [GIT] untuk yang sudah dikerjakan dan peringatannya
     void logGitResult(const TaskItem &task, const TaskGit::Result &result);
+    // Notifikasi milik task ke kartu task-nya di panel konsol
+    void logTask(const TaskItem &task, const QString &line);
+    // Status run (antre / berjalan = berkedip / selesai) di kartu kanban dan kartu konsol task
+    void showRunState(const TaskItem &task, RunState state);
     // Buang worktree task (dihapus) di thread pool; branch-nya dibiarkan
     void removeWorktreeLater(const TaskItem &task);
     // Folder kerja tersimpan yang masih ada; kalau tidak ada, tanya pengguna
@@ -204,11 +216,16 @@ private:
     bool addReferenceDirectory(const QString &projectId, const QString &dir);
     // Simpan foto & dokumen dari form task ke folder lampiran task; kembalikan nama yang tersimpan
     QStringList saveAttachments(const TaskItem &task, const QList<TaskAttachments::Draft> &drafts);
+    // Baca branch aktif folder kerja project (git di thread pool) untuk tombol branch di header
+    // swimlane; folder yang jelas bukan repository langsung menyembunyikan tombolnya
+    void refreshGitHead(const QString &projectId);
 
 protected:
     // Tukar icon tombol baris sidebar jadi putih selama kursor berada di atasnya,
     // supaya tetap terbaca di atas background hover yang gelap
     bool eventFilter(QObject *watched, QEvent *event) override;
+    // Jendela kembali aktif: branch folder kerja project yang tampil bisa sudah diganti di luar aplikasi
+    void changeEvent(QEvent *event) override;
 };
 
 #endif // MAINWINDOW_H

@@ -4,6 +4,10 @@
 
 #include <QDir>
 #include <QFileInfo>
+#include <QHash>
+#include <QMutex>
+
+#include <memory>
 
 namespace {
 
@@ -92,9 +96,38 @@ bool isLinkedWorktree(const QString &path) {
     return !path.isEmpty() && QFileInfo(path + QStringLiteral("/.git")).isFile();
 }
 
+bool hasOrigin(const Git &git, const QString &directory) {
+    return git(directory, {QStringLiteral("remote"), QStringLiteral("get-url"), QStringLiteral("origin")}).ok();
+}
+
+// Pull yang berjalan bersamaan di repository yang sama (mis. dua task dari branch dasar yang sama)
+// berebut ref yang sama, jadi bergiliran per repository (git dir bersama semua worktree-nya)
+std::shared_ptr<QMutex> repositoryLock(const Git &git, const QString &directory) {
+    static QMutex guard;
+    static QHash<QString, std::shared_ptr<QMutex>> locks;
+    const GitOutput common = git(directory, {QStringLiteral("rev-parse"), QStringLiteral("--path-format=absolute"),
+                                             QStringLiteral("--git-common-dir")});
+    const QString key = common.ok() ? QDir::cleanPath(common.text()) : QDir::cleanPath(directory);
+    const QMutexLocker locker(&guard);
+    std::shared_ptr<QMutex> &lock = locks[key];
+    if (!lock) {
+        lock = std::make_shared<QMutex>();
+    }
+    return lock;
+}
+
+// exit 0 = ancestor ada di riwayat descendant; exit 1 = tidak; lainnya = git gagal (dianggap tidak)
+bool isAncestor(const Git &git, const QString &directory, const QString &ancestor, const QString &descendant) {
+    return git(directory, {QStringLiteral("merge-base"), QStringLiteral("--is-ancestor"), ancestor, descendant}).ok();
+}
+
+QString commitCount(const Git &git, const QString &directory, const QString &from, const QString &to) {
+    return git(directory, {QStringLiteral("rev-list"), QStringLiteral("--count"), from + QStringLiteral("..") + to}).text();
+}
+
 // Push branch ke origin (dengan -u) bila remote itu ada. Gagal hanya jadi peringatan: commit lokal tetap sah.
 void pushToOrigin(const Git &git, const QString &directory, const QString &ref, TaskGit::Result *result) {
-    if (!git(directory, {QStringLiteral("remote"), QStringLiteral("get-url"), QStringLiteral("origin")}).ok()) {
+    if (!hasOrigin(git, directory)) {
         result->log.append(QStringLiteral("tidak ada remote origin: %1 hanya ada di lokal").arg(ref));
         return;
     }
@@ -105,6 +138,13 @@ void pushToOrigin(const Git &git, const QString &directory, const QString &ref, 
         return;
     }
     result->log.append(QStringLiteral("push %1 → origin").arg(ref));
+}
+
+// Log & peringatan satu langkah ditambahkan ke hasil gabungan; error-nya menggantikan
+void appendStep(TaskGit::Result *into, const TaskGit::Result &step) {
+    into->log += step.log;
+    into->warnings += step.warnings;
+    into->error = step.error;
 }
 
 }
@@ -147,7 +187,8 @@ bool TaskGit::startsBranch(const TaskItem &task, const StageCatalog &catalog) {
         const StageProfile *profile = catalog.profile(stageKey);
         return profile && profile->agent() && profile->agent()->writesWorkspace();
     };
-    if (!writes(task.stage)) {
+    const StageProfile *profile = catalog.profile(task.stage);
+    if (!profile || !profile->agent() || (task.branch.base.isEmpty() && !writes(task.stage))) {
         return false;
     }
     for (const StageRun &run : task.runs) {
@@ -241,6 +282,174 @@ TaskGit::Result TaskGit::ensureWorktree(const QString &projectDir, const QString
     result.log.append(existing ? QStringLiteral("worktree dipasang lagi untuk branch %1 · %2").arg(name, shownPath)
                                : QStringLiteral("branch %1 dari %2 (%3) · worktree %4")
                                      .arg(name, base, branch.baseCommit.left(7), shownPath));
+    return result;
+}
+
+TaskGit::Result TaskGit::fetchOrigin(const QString &directory) {
+    Result result;
+    const Git git(GitProcess::executable());
+    if (!git.isAvailable()) {
+        result.error = QStringLiteral("git tidak ditemukan di PATH");
+        return result;
+    }
+    if (!hasOrigin(git, directory)) {
+        result.log.append(QStringLiteral("tidak ada remote origin: tidak ada yang di-fetch"));
+        return result;
+    }
+    const std::shared_ptr<QMutex> lock = repositoryLock(git, directory);
+    const QMutexLocker locker(lock.get());
+    const GitOutput fetch = git(directory, {QStringLiteral("fetch"), QStringLiteral("--quiet"), QStringLiteral("--prune"),
+                                            QStringLiteral("origin")},
+                                kNetworkTimeoutMs);
+    if (!fetch.ok()) {
+        result.error = QStringLiteral("fetch dari origin gagal: %1").arg(summary(fetch));
+    }
+    return result;
+}
+
+TaskGit::Result TaskGit::pull(const QString &directory, const QString &branch) {
+    Result result;
+    const Git git(GitProcess::executable());
+    if (!git.isAvailable()) {
+        result.error = QStringLiteral("git tidak ditemukan di PATH");
+        return result;
+    }
+    if (!hasOrigin(git, directory)) {
+        result.log.append(QStringLiteral("tidak ada remote origin: %1 tidak di-pull").arg(branch));
+        return result;
+    }
+    const std::shared_ptr<QMutex> lock = repositoryLock(git, directory);
+    const QMutexLocker locker(lock.get());
+
+    const QString localRef = QStringLiteral("refs/heads/") + branch;
+    const QString remoteRef = QStringLiteral("refs/remotes/origin/") + branch;
+    const GitOutput fetch = git(directory, {QStringLiteral("fetch"), QStringLiteral("--quiet"), QStringLiteral("origin"),
+                                            QStringLiteral("+%1:%2").arg(localRef, remoteRef)},
+                                kNetworkTimeoutMs);
+    if (!fetch.ok()) {
+        if (fetch.err.contains(QLatin1String("couldn't find remote ref"))) {
+            result.log.append(QStringLiteral("%1 belum ada di origin: tidak ada yang di-pull").arg(branch));
+        } else {
+            result.error = QStringLiteral("pull %1 gagal, fetch dari origin: %2").arg(branch, summary(fetch));
+        }
+        return result;
+    }
+    const QString remote = git(directory, {QStringLiteral("rev-parse"), QStringLiteral("-q"), QStringLiteral("--verify"),
+                                           remoteRef}).text();
+    const QString local = git(directory, {QStringLiteral("rev-parse"), QStringLiteral("-q"), QStringLiteral("--verify"),
+                                          localRef}).text();
+    // Folder tempat branch di-checkout: di sana pull juga memperbarui isi folder. Branch yang belum
+    // punya commit (repository baru) hanya bisa aktif di folder ini sendiri.
+    const QString checkedOut = local.isEmpty()
+        ? (currentBranch(git, directory) == branch ? directory : QString())
+        : git(directory, {QStringLiteral("for-each-ref"), QStringLiteral("--format=%(worktreepath)"), localRef}).text();
+
+    if (local.isEmpty() && checkedOut.isEmpty()) {
+        // Branch yang baru ada di origin dibuat di lokal. Upstream-nya dipasang git sendiri
+        // (branch.autoSetupMerge); --track tidak dipakai karena menolak clone single-branch.
+        const GitOutput created = git(directory, {QStringLiteral("branch"), QStringLiteral("--quiet"), branch, remoteRef});
+        if (!created.ok()) {
+            result.error = QStringLiteral("pull %1 gagal: branch lokalnya tidak bisa dibuat: %2").arg(branch, summary(created));
+            return result;
+        }
+        result.log.append(QStringLiteral("pull %1: branch lokal dibuat dari origin/%1 (%2)").arg(branch, remote.left(7)));
+        return result;
+    }
+    if (local == remote) {
+        result.log.append(QStringLiteral("pull %1: sudah terbaru (%2)").arg(branch, local.left(7)));
+        return result;
+    }
+    if (!local.isEmpty() && !isAncestor(git, directory, local, remote)) {
+        if (isAncestor(git, directory, remote, local)) {
+            result.log.append(QStringLiteral("pull %1: sudah terbaru; lokal %2 commit di depan origin (belum di-push)")
+                                  .arg(branch, commitCount(git, directory, remote, local)));
+            return result;
+        }
+        result.error = QStringLiteral("pull %1 gagal: branch lokal dan origin/%1 sudah bercabang (masing-masing punya "
+                                      "commit yang tidak dimiliki yang lain). Satukan dulu dengan git pull (merge atau "
+                                      "rebase), lalu coba lagi").arg(branch);
+        return result;
+    }
+
+    if (checkedOut.isEmpty()) {
+        // Branch yang tidak sedang di-checkout cukup dimajukan ref-nya; nilai lama ikut diberikan
+        // supaya git menolak bila ref-nya berubah di tengah jalan
+        const GitOutput moved = git(directory, {QStringLiteral("update-ref"), QStringLiteral("-m"),
+                                                QStringLiteral("pull: fast-forward"), localRef, remote, local});
+        if (!moved.ok()) {
+            result.error = QStringLiteral("pull %1 gagal: %2").arg(branch, summary(moved));
+            return result;
+        }
+    } else {
+        const GitOutput merged = git(checkedOut, {QStringLiteral("merge"), QStringLiteral("--ff-only"), QStringLiteral("--quiet"),
+                                                  remoteRef});
+        if (!merged.ok()) {
+            const QString where = QDir::toNativeSeparators(checkedOut);
+            result.error = merged.err.contains(QLatin1String("would be overwritten"))
+                ? QStringLiteral("pull %1 gagal: perubahan yang belum di-commit di %2 bentrok dengan commit baru dari "
+                                 "origin. Commit atau stash dulu, lalu coba lagi").arg(branch, where)
+                : QStringLiteral("pull %1 di %2 gagal: %3").arg(branch, where, summary(merged));
+            return result;
+        }
+    }
+    result.log.append(local.isEmpty()
+                          ? QStringLiteral("pull %1: %2 dari origin").arg(branch, remote.left(7))
+                          : QStringLiteral("pull %1: %2 commit baru dari origin (%3 → %4)")
+                                .arg(branch, commitCount(git, directory, local, remote), local.left(7), remote.left(7)));
+    return result;
+}
+
+TaskGit::Result TaskGit::prepareRun(const QString &projectDir, const QString &worktreePath, const TaskItem &task,
+                                    bool branched, bool handoff) {
+    Result result;
+    result.branch = task.branch;
+    const Git git(GitProcess::executable());
+    if (!git.isAvailable()) {
+        result.error = QStringLiteral("git tidak ditemukan di PATH");
+        return result;
+    }
+
+    if (!branched) {
+        const QString head = currentBranch(git, projectDir);
+        if (head.isEmpty()) {
+            result.log.append(QStringLiteral("folder kerja sedang tidak di branch mana pun (detached HEAD): "
+                                             "tidak ada yang di-pull"));
+            return result;
+        }
+        appendStep(&result, pull(projectDir, head));
+        return result;
+    }
+
+    // Branch dasar di-pull dulu supaya branch task bercabang dari kode terbaru
+    if (task.branch.isEmpty()) {
+        const QString base = task.branch.base.isEmpty() ? currentBranch(git, projectDir) : task.branch.base;
+        if (!base.isEmpty()) {
+            appendStep(&result, pull(projectDir, base));
+            if (!result.error.isEmpty()) {
+                return result;
+            }
+        }
+    }
+
+    const Result prepared = ensureWorktree(projectDir, worktreePath, task);
+    appendStep(&result, prepared);
+    result.branch = prepared.branch;
+    result.skipped = prepared.skipped;
+    if (!result.error.isEmpty() || result.skipped) {
+        return result;
+    }
+    // Branch task yang sudah ada bisa punya commit baru di origin (mis. perbaikan langsung di MR)
+    if (!task.branch.isEmpty()) {
+        appendStep(&result, pull(result.branch.worktree, result.branch.name));
+        if (!result.error.isEmpty()) {
+            return result;
+        }
+    }
+    if (handoff) {
+        TaskItem current = task;
+        current.branch = result.branch;
+        appendStep(&result, TaskGit::handoff(current));
+    }
     return result;
 }
 

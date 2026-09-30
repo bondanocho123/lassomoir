@@ -26,14 +26,8 @@
     letter-spacing: 0.8px;
 }
 
-#textBrowserLog {
-    background-color: #fafbfb;
-    border: 1px solid #e5e7eb;
-    border-radius: 4px;
-    font-family: &quot;Cascadia Code&quot;, &quot;Consolas&quot;, &quot;Courier New&quot;, monospace;
-    font-size: 11px;
-    color: #1f2937;
-    line-height: 1.4;
+#taskListContainer {
+    background: transparent;
 }
 
 #lineEditPrompt {
@@ -77,17 +71,63 @@
        </spacer>
       </item>
       <item>
-       <widget class="QLabel" name="label_2">
-        <property name="text">
-         <string>[Live]</string>
-        </property>
-       </widget>
+       <widget class="QLabel" name="labelLiveIndicator"/>
       </item>
      </layout>
     </widget>
    </item>
    <item>
-    <widget class="QPlainTextEdit" name="textBrowserLog"/>
+    <widget class="QScrollArea" name="scrollAreaTasks">
+     <property name="frameShape">
+      <enum>QFrame::Shape::NoFrame</enum>
+     </property>
+     <property name="horizontalScrollBarPolicy">
+      <enum>Qt::ScrollBarPolicy::ScrollBarAlwaysOff</enum>
+     </property>
+     <property name="widgetResizable">
+      <bool>true</bool>
+     </property>
+     <widget class="QWidget" name="taskListContainer">
+      <property name="geometry">
+       <rect>
+        <x>0</x>
+        <y>0</y>
+        <width>382</width>
+        <height>220</height>
+       </rect>
+      </property>
+      <layout class="QVBoxLayout" name="taskListLayout">
+       <property name="spacing">
+        <number>8</number>
+       </property>
+       <property name="leftMargin">
+        <number>0</number>
+       </property>
+       <property name="topMargin">
+        <number>0</number>
+       </property>
+       <property name="rightMargin">
+        <number>2</number>
+       </property>
+       <property name="bottomMargin">
+        <number>0</number>
+       </property>
+       <item>
+        <spacer name="taskListSpacer">
+         <property name="orientation">
+          <enum>Qt::Orientation::Vertical</enum>
+         </property>
+         <property name="sizeHint" stdset="0">
+          <size>
+           <width>20</width>
+           <height>0</height>
+          </size>
+         </property>
+        </spacer>
+       </item>
+      </layout>
+     </widget>
+    </widget>
    </item>
    <item>
     <widget class="QLineEdit" name="lineEditPrompt"/>

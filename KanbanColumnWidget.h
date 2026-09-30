@@ -12,6 +12,7 @@ class KanbanColumnWidget;
 class KanbanCardWidget;
 }
 
+class HoverInfoPopup;
 class KanbanCardWidget;
 class QVBoxLayout;
 class QDragEnterEvent;
@@ -28,6 +29,11 @@ public:
 
     void setStageName(const QString &name);
     QString stageName() const { return m_stageName; }
+
+    // Penjelasan stage (teks kaya) yang muncul saat ikon info di sebelah judul, atau judulnya
+    // sendiri, di-hover; kosong = ikon disembunyikan
+    void setStageInfo(const QString &info);
+    QString stageInfo() const;
 
     // Stage kolom ini punya agent? Diteruskan ke tombol run semua kartu di dalamnya
     void setRunnable(bool runnable);
@@ -53,6 +59,7 @@ private:
     Ui::KanbanColumnWidget *ui;
     QString m_stageName;
     QVBoxLayout *m_cardListLayout;
+    HoverInfoPopup *m_infoPopup;
     bool m_runnable = false;
 
     // Menghitung indeks baris kartu berdasarkan posisi vertikal mouse

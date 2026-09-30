@@ -71,11 +71,22 @@ ResponseDrawer::ResponseDrawer(MermaidRenderer *renderer, QWidget *parent)
     m_title->setWordWrap(true);
     m_status = new QLabel(this);
     m_status->setObjectName("drawerStatus");
-    m_branch = new QLabel(this);
+    m_branchRow = new QWidget(this);
+    m_branch = new QLabel(m_branchRow);
     m_branch->setObjectName("drawerBranch");
     m_branch->setWordWrap(true);
     m_branch->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    m_branch->hide();
+    m_branchHistory = new QPushButton(QStringLiteral("Lihat commit"), m_branchRow);
+    m_branchHistory->setObjectName("btnDrawerBranchHistory");
+    m_branchHistory->setCursor(Qt::PointingHandCursor);
+    m_branchHistory->setToolTip(QStringLiteral("Daftar commit branch task ini dan perubahannya dibanding branch dasarnya"));
+    connect(m_branchHistory, &QPushButton::clicked, this, [this]() { emit branchHistoryRequested(m_task.id); });
+    auto *branchLayout = new QHBoxLayout(m_branchRow);
+    branchLayout->setContentsMargins(0, 0, 0, 0);
+    branchLayout->setSpacing(6);
+    branchLayout->addWidget(m_branch, 1);
+    branchLayout->addWidget(m_branchHistory, 0, Qt::AlignTop);
+    m_branchRow->hide();
 
     m_expand = new QPushButton(this);
     m_expand->setObjectName("btnDrawerExpand");
@@ -99,7 +110,7 @@ ResponseDrawer::ResponseDrawer(MermaidRenderer *renderer, QWidget *parent)
     titleBox->setSpacing(2);
     titleBox->addWidget(m_title);
     titleBox->addWidget(m_status);
-    titleBox->addWidget(m_branch);
+    titleBox->addWidget(m_branchRow);
     auto *header = new QHBoxLayout();
     header->setSpacing(2);
     header->addLayout(titleBox, 1);
@@ -277,12 +288,15 @@ void ResponseDrawer::showTask(const TaskItem &task, RunState runState, const QSt
                          ? QStringLiteral("Branch %1 dari %2").arg(task.branch.name, task.branch.base)
                          : QStringLiteral("Di-merge ke %1 @ %2 (branch %3)")
                                .arg(task.branch.base, task.branch.mergedCommit, task.branch.name);
+    } else if (!task.branch.base.isEmpty()) {
+        branchText = QStringLiteral("Dari branch %1; branch task dibuat saat run agent pertama").arg(task.branch.base);
     }
     m_branch->setText(branchText);
+    m_branchHistory->setVisible(!task.branch.isEmpty());
     m_branch->setToolTip(task.branch.hasWorktree()
                              ? QStringLiteral("Worktree: %1").arg(QDir::toNativeSeparators(task.branch.worktree))
                              : QString());
-    m_branch->setVisible(!branchText.isEmpty());
+    m_branchRow->setVisible(!branchText.isEmpty());
 
     const bool running = runState != RunState::Idle;
     const int newest = int(task.runs.size()) - 1;

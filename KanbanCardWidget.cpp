@@ -1,5 +1,6 @@
 #include "KanbanCardWidget.h"
 #include "ui_KanbanCardWidget.h"
+#include "RunPulse.h"
 
 #include <QApplication>
 #include <QContextMenuEvent>
@@ -42,7 +43,8 @@ QString summaryOf(const QString &text, bool *truncated) {
 
 }
 
-KanbanCardWidget::KanbanCardWidget(QWidget *parent) : QWidget(parent), ui(new Ui::KanbanCardWidget){
+KanbanCardWidget::KanbanCardWidget(QWidget *parent)
+    : QWidget(parent), ui(new Ui::KanbanCardWidget), m_pulse(new RunPulse(this)) {
     ui->setupUi(this);
 
     // WA_StyledBackground wajib agar background/border-radius dari styles.qss
@@ -70,6 +72,7 @@ void KanbanCardWidget::setRunState(RunState state) {
         return;
     }
     m_runState = state;
+    m_pulse->setActive(state == RunState::Running);
     refreshStateProperty();
     refreshRunButton();
 }
@@ -235,6 +238,25 @@ void KanbanCardWidget::contextMenuEvent(QContextMenuEvent *event){
     edit->setObjectName("actionEditTask");
     connect(edit, &QAction::triggered, this, [this]() { emit editRequested(m_id); });
 
+    // Sama dengan drag: kartu yang agent-nya antre/berjalan, atau yang menunggu review, dikunci
+    QMenu *move = menu->addMenu(QStringLiteral("Pindah ke stage"));
+    move->setObjectName("cardMoveMenu");
+    move->menuAction()->setObjectName("actionMoveTask");
+    move->setEnabled(!m_moveTargets.isEmpty() && m_runState == RunState::Idle
+                     && m_taskState != TaskState::AwaitingReview);
+    for (const QString &stage : std::as_const(m_moveTargets)) {
+        QAction *target = move->addAction(stage);
+        target->setObjectName(QStringLiteral("actionMoveTo_") + stage);
+        // Stage sekarang tetap tampil (bertanda ✓) supaya posisi kartu di pipeline terlihat
+        if (stage == m_stage) {
+            target->setCheckable(true);
+            target->setChecked(true);
+            target->setEnabled(false);
+            continue;
+        }
+        connect(target, &QAction::triggered, this, [this, stage]() { emit moveRequested(m_id, stage); });
+    }
+
     menu->addSeparator();
     QAction *remove = menu->addAction(QIcon(":/icons/trash.svg"), QStringLiteral("Hapus task…"));
     remove->setObjectName("actionDeleteTask");
@@ -242,6 +264,15 @@ void KanbanCardWidget::contextMenuEvent(QContextMenuEvent *event){
 
     menu->popup(event->globalPos());
     event->accept();
+}
+
+void KanbanCardWidget::paintEvent(QPaintEvent *event){
+    QWidget::paintEvent(event);
+    if (m_pulse->isActive()) {
+        QPainter painter(this);
+        // Radius sama dengan border-radius kartu di styles.qss
+        m_pulse->paint(painter, rect(), 10.0);
+    }
 }
 
 void KanbanCardWidget::mouseMoveEvent(QMouseEvent *event){

@@ -32,8 +32,9 @@ public:
     // Menambahkan item tugas baru ke dalam database/memori
     void addTask(const TaskItem &item);
 
-    // Salin isi form edit (judul, kategori, subtext, pilihan model/effort per stage, lampiran)
-    // ke task details.id; stage, status, dan riwayat run tidak tersentuh
+    // Salin isi form edit (judul, kategori, subtext, pilihan model/effort per stage, lampiran,
+    // branch dasar selama branch task belum dibuat) ke task details.id; stage, status, dan
+    // riwayat run tidak tersentuh
     bool updateDetails(const TaskItem &details);
 
     // Pindah stage karena drag manual. Mundur selalu boleh; maju ditolak bila task sedang

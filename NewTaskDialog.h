@@ -12,6 +12,7 @@
 
 class PromptEditor;
 class StageCatalog;
+struct GitBranchList;
 class QLineEdit;
 class QComboBox;
 class QLabel;
@@ -43,6 +44,12 @@ public:
     // Foto dan dokumen di kotak prompt, termasuk yang baru ditambahkan dan belum tersimpan
     QList<TaskAttachments::Draft> attachments() const;
 
+    // Isi pilihan BRANCH dari repository folder kerja project. Git dibaca di thread pool; tombol
+    // simpan menunggu sampai selesai. Folder kosong/bukan repository: task dibuat tanpa branch
+    // dasar (branch-nya nanti mengikuti branch yang aktif di folder kerja). Task yang branch-nya
+    // sudah dibuat tidak bisa ganti branch dasar, jadi tidak dibaca apa-apa.
+    void loadBranches(const QString &workingDirectory);
+
 private slots:
     void updateCreateButtonEnabled();
 
@@ -52,6 +59,13 @@ private:
     // Task asal saat mode edit; kosong (id kosong) saat membuat task baru
     TaskItem m_original;
     bool m_editing = false;
+
+    // Branch dasar task (data item = nama branch lokal; branch yang baru ada di origin dibuat di
+    // lokal saat di-pull). Berisi pesan saja (disabled) selama tidak ada branch yang bisa dipilih.
+    QComboBox *m_branchInput;
+    QLabel *m_branchHint;
+    bool m_branchesLoading = false;
+    bool m_branchSelectable = false;
 
     QLineEdit *m_titleInput;
     PromptEditor *m_promptInput;   // subtext multi-baris + foto & dokumen lampiran
@@ -74,6 +88,15 @@ private:
     // Dua field MODEL & EFFORT untuk satu stage; item pertama menyebut bawaan stage
     QWidget *buildTuningRow(const QString &stageKey, const AgentDefinition &defaults);
     static void selectValue(QComboBox *combo, const QString &value);
+
+    // Tahap kedua loadBranches: fetch origin di latar belakang, lalu daftar dibaca ulang supaya
+    // branch yang baru di-push rekan kerja ikut muncul. Simpan tidak menunggu tahap ini.
+    void fetchBranches(const QString &workingDirectory);
+    // Branch lokal + branch origin yang belum ada di lokal; branch kerja task (lassomoir/...) tidak.
+    // Pilihan yang sedang aktif dipertahankan bila masih ada.
+    void showBranches(const GitBranchList &list);
+    // Combo berisi satu pesan (tidak bisa dipilih); hint menjelaskan akibatnya
+    void showBranchMessage(const QString &message, const QString &hint);
 };
 
 #endif // NEWTASKDIALOG_H

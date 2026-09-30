@@ -6,6 +6,7 @@
 
 #include <QWidget>
 #include <QPoint>
+#include <QStringList>
 
 #include "AgentTypes.h"
 #include "TaskItem.h"
@@ -13,6 +14,8 @@
 namespace Ui {
 class KanbanCardWidget;
 }
+
+class RunPulse;
 
 
 class KanbanCardWidget : public QWidget{
@@ -41,6 +44,7 @@ public:
     void setRunEnabled(bool enabled);
 
     // Idle: ▶ · Queued/Running: ■ (batalkan). Selain Idle, kartu tidak bisa di-drag.
+    // Selama Running kartu berkedip (RunPulse) supaya task yang sedang dikerjakan agent mudah dilihat.
     void setRunState(RunState state);
     RunState runState() const { return m_runState; }
 
@@ -48,6 +52,13 @@ public:
     // detail (alasan gagal) tampil di tooltip "Coba lagi"
     void setTaskState(TaskState state, const QString &detail = QString());
     TaskState taskState() const { return m_taskState; }
+
+    // Stage tempat kartu sekarang berada; diatur kolom saat kartu masuk ke dalamnya
+    void setStage(const QString &stage) { m_stage = stage; }
+    QString stage() const { return m_stage; }
+
+    // Semua stage pipeline (urut) untuk submenu "Pindah ke stage" di menu klik kanan
+    void setMoveTargets(const QStringList &stages) { m_moveTargets = stages; }
 
 signals:
     void cardClicked(const QString &cardId);
@@ -63,6 +74,8 @@ signals:
     void editRequested(const QString &cardId);
     // "Hapus task" di menu klik kanan; konfirmasinya urusan penerima sinyal
     void deleteRequested(const QString &cardId);
+    // Stage dipilih di submenu "Pindah ke stage"; boleh-tidaknya diputuskan penerima sinyal
+    void moveRequested(const QString &cardId, const QString &targetStage);
 
 protected:
     //Event penanganan drag and drop
@@ -70,11 +83,14 @@ protected:
     void mouseReleaseEvent(QMouseEvent *event) override;
     void mouseDoubleClickEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
-    // Klik kanan: menu Edit / Hapus task
+    // Klik kanan: menu Edit / Pindah ke stage / Hapus task
     void contextMenuEvent(QContextMenuEvent *event) override;
+    // Kedip run di atas latar styles.qss
+    void paintEvent(QPaintEvent *event) override;
 
 private :
     Ui::KanbanCardWidget *ui;
+    RunPulse *m_pulse;
 
     // Titik awal klik untuk mendeteksi ambang drag (drag threshold)
     QPoint m_dragStartPosition;
@@ -87,6 +103,8 @@ private :
     QString m_title;
     QString m_subtext;
     QString m_badge;
+    QString m_stage;
+    QStringList m_moveTargets;
 
     // Status tombol run
     bool m_runEnabled = false;

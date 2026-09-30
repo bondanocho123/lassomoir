@@ -13,18 +13,22 @@ win32: RC_ICONS = Resources/app.ico
 #DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
 
 SOURCES += \
+    BranchViewer.cpp \
     ClaudeCli.cpp \
     CSharpMetrics.cpp \
     ClassDiagram.cpp \
     ClaudeCodeRuntime.cpp \
     CodeMetrics.cpp \
     ConsolePanelWidget.cpp \
+    ConsoleTaskCard.cpp \
     DiagramViewer.cpp \
     DiffView.cpp \
     DocumentText.cpp \
     EdgeMermaidRenderer.cpp \
     FileManager.cpp \
+    GitHistory.cpp \
     GitProcess.cpp \
+    HoverInfoPopup.cpp \
     KanbanCardWidget.cpp \
     KanbanColumnWidget.cpp \
     MaintainabilityView.cpp \
@@ -35,9 +39,11 @@ SOURCES += \
     PromptEditor.cpp \
     ResponseDrawer.cpp \
     RunLogFormatter.cpp \
+    RunPulse.cpp \
     SourceTokens.cpp \
     SplitterPaneAnimator.cpp \
     StageCatalog.cpp \
+    StageInfo.cpp \
     StageProfile.cpp \
     StageSwarm.cpp \
     StreamJsonParser.cpp \
@@ -56,18 +62,22 @@ HEADERS += \
     AgentDefinition.h \
     AgentRuntime.h \
     AgentTypes.h \
+    BranchViewer.h \
     ClaudeCli.h \
     CSharpMetrics.h \
     ClassDiagram.h \
     ClaudeCodeRuntime.h \
     CodeMetrics.h \
     ConsolePanelWidget.h \
+    ConsoleTaskCard.h \
     DiagramViewer.h \
     DiffView.h \
     DocumentText.h \
     EdgeMermaidRenderer.h \
     FileManager.h \
+    GitHistory.h \
     GitProcess.h \
+    HoverInfoPopup.h \
     KanbanCardWidget.h \
     KanbanColumnWidget.h \
     MaintainabilityView.h \
@@ -78,9 +88,11 @@ HEADERS += \
     PromptEditor.h \
     ResponseDrawer.h \
     RunLogFormatter.h \
+    RunPulse.h \
     SourceTokens.h \
     SplitterPaneAnimator.h \
     StageCatalog.h \
+    StageInfo.h \
     StageProfile.h \
     StageSwarm.h \
     StreamJsonParser.h \

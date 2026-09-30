@@ -6,11 +6,13 @@
 #include "EdgeMermaidRenderer.h"
 #include "FakeAgentRuntime.h"
 #include "FileManager.h"
+#include "GitHistory.h"
 #include "GitSandbox.h"
 #include "MermaidRenderer.h"
 #include "PromptComposer.h"
 #include "RunLogFormatter.h"
 #include "StageCatalog.h"
+#include "StageInfo.h"
 #include "StreamJsonParser.h"
 #include "SwarmCoordinator.h"
 #include "TaskAttachments.h"
@@ -38,6 +40,7 @@
 #include <QScopeGuard>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+#include <QTextDocument>
 #include <QThread>
 #include <QtTest>
 
@@ -298,6 +301,14 @@ QStringList diffPaths(const WorkspaceDiff &diff) {
     return paths;
 }
 
+QStringList commitSubjects(const QList<GitCommit> &commits) {
+    QStringList subjects;
+    for (const GitCommit &commit : commits) {
+        subjects.append(commit.subject);
+    }
+    return subjects;
+}
+
 // Arsip ZIP berisi bagian Office yang dibaca DocumentText; bagian lain tidak perlu ada
 bool writeZip(const QString &path, const QList<QPair<QString, QByteArray>> &parts) {
     QZipWriter zip(path);
@@ -332,6 +343,9 @@ private slots:
     // Konfigurasi stage
     void catalogKeepsPipelineOrder();
     void catalogGivesAgentsOnlyToWorkingStages();
+    // Tooltip stage: tugas ditulis tangan, fitur dibaca dari konfigurasi stage
+    void stageInfoDescribesEveryStage();
+    void stageInfoReadsFeaturesFromConfiguration();
     void approvalGateNeedsApproval();
 
     // Parser, argumen CLI, prompt
@@ -396,6 +410,13 @@ private slots:
     void taskGitNamesBranches();
     void taskGitWorktreeAndHandoff();
     void taskGitSkipsOrRejectsUnusableFolders();
+    void taskGitPullsFromOrigin();
+    void taskGitPreparesRunWithPull();
+
+    // Riwayat git untuk jendela branch & commit: branch, daftar commit, perbandingan
+    void gitHistoryParsesGitOutput();
+    void gitHistoryReadsBranchesCommitsAndComparisons();
+    void gitHistoryScopesToSubfolderAndRejectsPlainFolders();
 
     // Diagram kelas UML (Mermaid) dari tipe C# yang berubah
     void csharpMetricsRecordsOutline();
@@ -452,6 +473,66 @@ void TestSwarm::catalogGivesAgentsOnlyToWorkingStages() {
     QVERIFY(!catalog.profile(QStringLiteral("ARCHITECT"))->agent()->writesWorkspace());
     QVERIFY(catalog.profile(QStringLiteral("CODER"))->agent()->writesWorkspace());
     QCOMPARE(catalog.profile(QStringLiteral("SPECIFIER"))->agent()->maxConcurrent, 3);
+}
+
+void TestSwarm::stageInfoDescribesEveryStage() {
+    const StageCatalog catalog = StageCatalog::standard();
+    for (const QString &key : catalog.keys()) {
+        const QString tip = StageInfo::html(catalog, key);
+        // Teks kaya, supaya Qt melipat barisnya alih-alih memanjangkan tooltip
+        QVERIFY2(Qt::mightBeRichText(tip), qPrintable(key));
+        QVERIFY2(tip.contains(QStringLiteral("<b>%1</b>").arg(key)), qPrintable(key));
+        QVERIFY2(tip.contains(QStringLiteral("TUGAS")), qPrintable(key));
+        QVERIFY2(tip.contains(QStringLiteral("FITUR")), qPrintable(key));
+    }
+    QVERIFY(StageInfo::html(catalog, QStringLiteral("TIDAK_ADA")).isEmpty());
+}
+
+void TestSwarm::stageInfoReadsFeaturesFromConfiguration() {
+    const StageCatalog catalog = StageCatalog::standard();
+    auto tip = [&catalog](const char *key) { return StageInfo::html(catalog, QString::fromLatin1(key)); };
+
+    // Read-only dan ber-gate; stage beragent pertama, jadi tidak ada tempat untuk "Kembalikan"
+    const QString specifier = tip("SPECIFIER");
+    QVERIFY(specifier.contains(QStringLiteral("Read-only (Read, Grep, Glob): tidak mengubah file.")));
+    QVERIFY(specifier.contains(QStringLiteral("Model bawaan sonnet · effort medium · hingga 3 agent bersamaan.")));
+    QVERIFY(specifier.contains(QStringLiteral("Run berhasil → menunggu review Anda: Setujui → CODER atau Revisi.")));
+
+    const QString coder = tip("CODER");
+    QVERIFY(coder.contains(QStringLiteral("Tool: Read, Grep, Glob, Edit, Write, Bash.")));
+    QVERIFY(coder.contains(QStringLiteral("Run berhasil → otomatis lanjut ke CLEANER.")));
+    QVERIFY(!coder.contains(QStringLiteral("menunggu review Anda")));
+
+    // Serah-terima git mengikuti TaskGit::isHandoffStage, bukan teks yang tertanam
+    const QString qa = tip("QA");
+    QVERIFY(qa.contains(QStringLiteral("Run berhasil → menunggu review Anda: Setujui → DONE, Revisi, atau Kembalikan.")));
+    QVERIFY(qa.contains(QStringLiteral("meng-commit dan mem-push")));
+    QVERIFY(!coder.contains(QStringLiteral("mem-push")));
+
+    for (const char *key : {"WAITING", "DONE"}) {
+        QVERIFY2(tip(key).contains(QStringLiteral("Tanpa agent")), key);
+    }
+
+    // Konfigurasi lain, penjelasan lain; key di luar katalog standar hanya punya bagian fitur
+    AgentDefinition light;
+    light.tools = {QStringLiteral("Read")};
+    AgentDefinition heavy;
+    heavy.tools = {QStringLiteral("Read"), QStringLiteral("Edit")};
+    heavy.model = QStringLiteral("opus <x>");
+    heavy.effort = QStringLiteral("high");
+    heavy.maxConcurrent = 5;
+    const StageCatalog custom({
+        StageProfile(QStringLiteral("ALFA"), light, std::make_shared<AutoAdvance>()),
+        StageProfile(QStringLiteral("BETA"), heavy, std::make_shared<ApprovalGate>()),
+    });
+    const QString alfa = StageInfo::html(custom, QStringLiteral("ALFA"));
+    QVERIFY(alfa.contains(QStringLiteral("Model bawaan Claude CLI · satu agent sekali jalan.")));
+    QVERIFY(alfa.contains(QStringLiteral("Run berhasil → otomatis lanjut ke BETA.")));
+    QVERIFY(!alfa.contains(QStringLiteral("TUGAS")));
+    const QString beta = StageInfo::html(custom, QStringLiteral("BETA"));
+    QVERIFY(beta.contains(QStringLiteral("Tool: Read, Edit.")));
+    QVERIFY(beta.contains(QStringLiteral("Model bawaan opus &lt;x&gt; · effort high · hingga 5 agent bersamaan.")));
+    QVERIFY(beta.contains(QStringLiteral("Run berhasil → menunggu review Anda: Setujui, Revisi, atau Kembalikan.")));
 }
 
 void TestSwarm::approvalGateNeedsApproval() {
@@ -2291,6 +2372,12 @@ void TestSwarm::taskGitNamesBranches() {
     TaskItem branched = makeTask(QStringLiteral("d"), QStringLiteral("CODER"));
     branched.branch.name = QStringLiteral("lassomoir/d");
     QVERIFY(!TaskGit::startsBranch(branched, catalog));
+    // Branch dasar dipilih saat task dibuat: stage baca pun sudah bercabang, stage tanpa agent tidak
+    TaskItem chosen = makeTask(QStringLiteral("e"), QStringLiteral("SPECIFIER"));
+    chosen.branch.base = QStringLiteral("development");
+    QVERIFY(TaskGit::startsBranch(chosen, catalog));
+    chosen.stage = QStringLiteral("WAITING");
+    QVERIFY(!TaskGit::startsBranch(chosen, catalog));
 }
 
 void TestSwarm::taskGitWorktreeAndHandoff() {
@@ -2462,6 +2549,512 @@ void TestSwarm::taskGitSkipsOrRejectsUnusableFolders() {
     QCOMPARE(result.branch.subdir, QStringLiteral("src/app"));
     QCOMPARE(result.branch.directory(), result.branch.worktree + QStringLiteral("/src/app"));
     QCOMPARE(readFile(result.branch.directory() + QStringLiteral("/x.txt")), QByteArray("x\n"));
+}
+
+void TestSwarm::taskGitPullsFromOrigin() {
+    if (QStandardPaths::findExecutable(QStringLiteral("git")).isEmpty()) {
+        QSKIP("git tidak ada di PATH");
+    }
+    const GitSandbox sandbox;
+    QTemporaryDir root;
+    const QString repo = root.filePath(QStringLiteral("repo"));
+    const QString origin = root.filePath(QStringLiteral("origin.git"));
+    const QString other = root.filePath(QStringLiteral("rekan"));   // clone rekan kerja yang ikut push
+    QVERIFY(initRepository(repo, QStringLiteral("development")));
+    QVERIFY(runGit(root.path(), {QStringLiteral("init"), QStringLiteral("-q"), QStringLiteral("--bare"), origin}));
+    QVERIFY(runGit(repo, {QStringLiteral("remote"), QStringLiteral("add"), QStringLiteral("origin"), origin}));
+    QVERIFY(runGit(repo, {QStringLiteral("push"), QStringLiteral("-q"), QStringLiteral("-u"), QStringLiteral("origin"),
+                          QStringLiteral("development")}));
+    QVERIFY(runGit(root.path(), {QStringLiteral("clone"), QStringLiteral("-q"), origin, other}));
+    QVERIFY(runGit(other, {QStringLiteral("switch"), QStringLiteral("-q"), QStringLiteral("development")}));
+    auto otherPushes = [&other](const QString &branch, const QString &file, const QByteArray &content) {
+        return writeFile(other + QLatin1Char('/') + file, content)
+               && runGit(other, {QStringLiteral("add"), QStringLiteral("-A")})
+               && runGit(other, {QStringLiteral("commit"), QStringLiteral("-q"), QStringLiteral("-m"), QStringLiteral("rekan: ") + file})
+               && runGit(other, {QStringLiteral("push"), QStringLiteral("-q"), QStringLiteral("origin"), branch});
+    };
+    auto head = [](const QString &directory, const QString &ref) {
+        return GitSandbox::output(directory, {QStringLiteral("rev-parse"), ref});
+    };
+
+    // Branch yang sedang di-checkout: isi folder kerja ikut maju
+    QVERIFY(otherPushes(QStringLiteral("development"), QStringLiteral("app.txt"), "satu\ndua\n"));
+    const QString before = head(repo, QStringLiteral("HEAD"));
+    TaskGit::Result pulled = TaskGit::pull(repo, QStringLiteral("development"));
+    QVERIFY2(pulled.error.isEmpty(), qPrintable(pulled.error));
+    const QString after = head(origin, QStringLiteral("development"));
+    QCOMPARE(head(repo, QStringLiteral("HEAD")), after);
+    QCOMPARE(readFile(repo + QStringLiteral("/app.txt")), QByteArray("satu\ndua\n"));
+    QCOMPARE(pulled.log, QStringList{QStringLiteral("pull development: 1 commit baru dari origin (%1 → %2)")
+                                         .arg(before.left(7), after.left(7))});
+    pulled = TaskGit::pull(repo, QStringLiteral("development"));
+    QVERIFY(pulled.error.isEmpty());
+    QCOMPARE(pulled.log, QStringList{QStringLiteral("pull development: sudah terbaru (%1)").arg(after.left(7))});
+
+    // Tidak sedang di-checkout: cukup ref-nya yang maju, folder kerja (branch lain) tidak tersentuh
+    QVERIFY(runGit(repo, {QStringLiteral("switch"), QStringLiteral("-q"), QStringLiteral("-c"), QStringLiteral("lokal")}));
+    QVERIFY(otherPushes(QStringLiteral("development"), QStringLiteral("app.txt"), "satu\ndua\ntiga\n"));
+    pulled = TaskGit::pull(repo, QStringLiteral("development"));
+    QVERIFY2(pulled.error.isEmpty(), qPrintable(pulled.error));
+    QCOMPARE(head(repo, QStringLiteral("development")), head(origin, QStringLiteral("development")));
+    QCOMPARE(readFile(repo + QStringLiteral("/app.txt")), QByteArray("satu\ndua\n"));
+
+    // Baru ada di origin: branch lokalnya dibuat dan mengikuti origin
+    QVERIFY(runGit(other, {QStringLiteral("switch"), QStringLiteral("-q"), QStringLiteral("-c"), QStringLiteral("rilis")}));
+    QVERIFY(otherPushes(QStringLiteral("rilis"), QStringLiteral("rilis.txt"), "v1\n"));
+    pulled = TaskGit::pull(repo, QStringLiteral("rilis"));
+    QVERIFY2(pulled.error.isEmpty(), qPrintable(pulled.error));
+    QCOMPARE(head(repo, QStringLiteral("rilis")), head(origin, QStringLiteral("rilis")));
+    QCOMPARE(GitSandbox::output(repo, {QStringLiteral("rev-parse"), QStringLiteral("--abbrev-ref"), QStringLiteral("rilis@{upstream}")}),
+             QStringLiteral("origin/rilis"));
+    QCOMPARE(pulled.log, QStringList{QStringLiteral("pull rilis: branch lokal dibuat dari origin/rilis (%1)")
+                                         .arg(head(origin, QStringLiteral("rilis")).left(7))});
+
+    // Belum ada di origin: tidak ada yang di-pull
+    pulled = TaskGit::pull(repo, QStringLiteral("lokal"));
+    QVERIFY(pulled.error.isEmpty());
+    QCOMPARE(pulled.log, QStringList{QStringLiteral("lokal belum ada di origin: tidak ada yang di-pull")});
+
+    // Lokal lebih maju (belum di-push): tidak ada yang di-pull
+    QVERIFY(runGit(repo, {QStringLiteral("switch"), QStringLiteral("-q"), QStringLiteral("development")}));
+    QVERIFY(writeFile(repo + QStringLiteral("/lokal.txt"), "l\n"));
+    QVERIFY(runGit(repo, {QStringLiteral("add"), QStringLiteral("-A")}));
+    QVERIFY(runGit(repo, {QStringLiteral("commit"), QStringLiteral("-q"), QStringLiteral("-m"), QStringLiteral("lokal")}));
+    pulled = TaskGit::pull(repo, QStringLiteral("development"));
+    QVERIFY(pulled.error.isEmpty());
+    QCOMPARE(pulled.log, QStringList{QStringLiteral("pull development: sudah terbaru; lokal 1 commit di depan origin (belum di-push)")});
+
+    // Bercabang (sama-sama punya commit baru): gagal, branch lokal tidak berubah
+    QVERIFY(runGit(other, {QStringLiteral("switch"), QStringLiteral("-q"), QStringLiteral("development")}));
+    QVERIFY(otherPushes(QStringLiteral("development"), QStringLiteral("rekan.txt"), "r\n"));
+    const QString diverged = head(repo, QStringLiteral("development"));
+    pulled = TaskGit::pull(repo, QStringLiteral("development"));
+    QVERIFY(pulled.error.startsWith(QStringLiteral("pull development gagal: branch lokal dan origin/development sudah bercabang")));
+    QCOMPARE(head(repo, QStringLiteral("development")), diverged);
+
+    // Perubahan lokal yang belum di-commit bentrok dengan commit baru dari origin: gagal, perubahannya utuh
+    QVERIFY(runGit(repo, {QStringLiteral("reset"), QStringLiteral("-q"), QStringLiteral("--hard"), QStringLiteral("origin/development")}));
+    QVERIFY(otherPushes(QStringLiteral("development"), QStringLiteral("app.txt"), "rekan\n"));
+    QVERIFY(writeFile(repo + QStringLiteral("/app.txt"), "lokal\n"));
+    pulled = TaskGit::pull(repo, QStringLiteral("development"));
+    QVERIFY2(pulled.error.contains(QStringLiteral("belum di-commit")) && pulled.error.contains(QStringLiteral("bentrok")),
+             qPrintable(pulled.error));
+    QCOMPARE(readFile(repo + QStringLiteral("/app.txt")), QByteArray("lokal\n"));
+
+    // Tanpa remote origin tidak ada yang perlu di-pull; origin yang tidak bisa dihubungi = gagal
+    const QString plain = root.filePath(QStringLiteral("tanpa-remote"));
+    QVERIFY(initRepository(plain, QStringLiteral("main")));
+    pulled = TaskGit::pull(plain, QStringLiteral("main"));
+    QVERIFY(pulled.error.isEmpty());
+    QCOMPARE(pulled.log, QStringList{QStringLiteral("tidak ada remote origin: main tidak di-pull")});
+    QVERIFY(runGit(plain, {QStringLiteral("remote"), QStringLiteral("add"), QStringLiteral("origin"),
+                           root.filePath(QStringLiteral("tidak-ada.git"))}));
+    pulled = TaskGit::pull(plain, QStringLiteral("main"));
+    QVERIFY2(pulled.error.startsWith(QStringLiteral("pull main gagal, fetch dari origin: ")), qPrintable(pulled.error));
+}
+
+void TestSwarm::taskGitPreparesRunWithPull() {
+    if (QStandardPaths::findExecutable(QStringLiteral("git")).isEmpty()) {
+        QSKIP("git tidak ada di PATH");
+    }
+    const GitSandbox sandbox;
+    QTemporaryDir root;
+    const QString repo = root.filePath(QStringLiteral("repo"));
+    const QString origin = root.filePath(QStringLiteral("origin.git"));
+    const QString other = root.filePath(QStringLiteral("rekan"));
+    QVERIFY(initRepository(repo, QStringLiteral("main")));
+    QVERIFY(runGit(root.path(), {QStringLiteral("init"), QStringLiteral("-q"), QStringLiteral("--bare"), origin}));
+    QVERIFY(runGit(repo, {QStringLiteral("remote"), QStringLiteral("add"), QStringLiteral("origin"), origin}));
+    QVERIFY(runGit(repo, {QStringLiteral("push"), QStringLiteral("-q"), QStringLiteral("-u"), QStringLiteral("origin"),
+                          QStringLiteral("main")}));
+    QVERIFY(runGit(root.path(), {QStringLiteral("clone"), QStringLiteral("-q"), origin, other}));
+    auto otherPushes = [&other](const QString &branch, const QString &file, const QByteArray &content) {
+        return runGit(other, {QStringLiteral("fetch"), QStringLiteral("-q"), QStringLiteral("origin")})
+               && runGit(other, {QStringLiteral("switch"), QStringLiteral("-q"), branch})
+               && runGit(other, {QStringLiteral("merge"), QStringLiteral("-q"), QStringLiteral("--ff-only"),
+                                 QStringLiteral("origin/") + branch})
+               && writeFile(other + QLatin1Char('/') + file, content)
+               && runGit(other, {QStringLiteral("add"), QStringLiteral("-A")})
+               && runGit(other, {QStringLiteral("commit"), QStringLiteral("-q"), QStringLiteral("-m"), QStringLiteral("rekan: ") + file})
+               && runGit(other, {QStringLiteral("push"), QStringLiteral("-q"), QStringLiteral("origin"), branch});
+    };
+    const StageCatalog catalog = StageCatalog::standard();
+
+    // Branch dasar dipilih saat task dibuat dan hanya ada di origin: di-pull (dibuat di lokal), lalu
+    // branch task bercabang dari situ, sudah di stage baca pertama
+    QVERIFY(runGit(other, {QStringLiteral("switch"), QStringLiteral("-q"), QStringLiteral("-c"), QStringLiteral("rilis"),
+                           QStringLiteral("origin/main")}));
+    QVERIFY(runGit(other, {QStringLiteral("push"), QStringLiteral("-q"), QStringLiteral("-u"), QStringLiteral("origin"),
+                           QStringLiteral("rilis")}));
+    QVERIFY(otherPushes(QStringLiteral("rilis"), QStringLiteral("rilis.txt"), "v1\n"));
+    TaskItem task = makeTask(QStringLiteral("t7"), QStringLiteral("SPECIFIER"));
+    task.title = QStringLiteral("Fitur rilis");
+    task.branch.base = QStringLiteral("rilis");
+    QVERIFY(TaskGit::startsBranch(task, catalog));
+    const QString path = root.filePath(QStringLiteral("worktrees/t7"));
+    const TaskGit::Result prepared = TaskGit::prepareRun(repo, path, task, true, false);
+    QVERIFY2(prepared.error.isEmpty(), qPrintable(prepared.error));
+    const TaskBranch branch = prepared.branch;
+    QCOMPARE(branch.name, QStringLiteral("lassomoir/t7-fitur-rilis"));
+    QCOMPARE(branch.base, QStringLiteral("rilis"));
+    QCOMPARE(branch.baseCommit, GitSandbox::output(origin, {QStringLiteral("rev-parse"), QStringLiteral("rilis")}));
+    QCOMPARE(readFile(branch.worktree + QStringLiteral("/rilis.txt")), QByteArray("v1\n"));
+    QCOMPARE(prepared.log.size(), 2);
+    QVERIFY(prepared.log[0].startsWith(QStringLiteral("pull rilis: branch lokal dibuat dari origin/rilis")));
+    QVERIFY(prepared.log[1].startsWith(QStringLiteral("branch lassomoir/t7-fitur-rilis dari rilis (")));
+    // Folder kerja project tetap di branch-nya sendiri
+    QCOMPARE(GitSandbox::output(repo, {QStringLiteral("branch"), QStringLiteral("--show-current")}), QStringLiteral("main"));
+
+    // Serah-terima ke QA: branch task belum ada di origin, jadi tidak ada yang di-pull; lalu commit + push
+    task.branch = branch;
+    task.stage = QStringLiteral("QA");
+    QVERIFY(writeFile(branch.worktree + QStringLiteral("/fitur.txt"), "a\n"));
+    const TaskGit::Result handed = TaskGit::prepareRun(repo, path, task, true, true);
+    QVERIFY2(handed.error.isEmpty(), qPrintable(handed.error));
+    QCOMPARE(handed.log.first(), QStringLiteral("lassomoir/t7-fitur-rilis belum ada di origin: tidak ada yang di-pull"));
+    QCOMPARE(handed.log.last(), QStringLiteral("push lassomoir/t7-fitur-rilis → origin"));
+
+    // Perbaikan yang di-push langsung ke branch task (mis. di MR) ikut di-pull sebelum run berikutnya
+    QVERIFY(otherPushes(branch.name, QStringLiteral("fitur.txt"), "a\nb\n"));
+    task.stage = QStringLiteral("CODER");
+    const TaskGit::Result again = TaskGit::prepareRun(repo, path, task, true, false);
+    QVERIFY2(again.error.isEmpty(), qPrintable(again.error));
+    QVERIFY(again.branch == branch);
+    QCOMPARE(readFile(branch.worktree + QStringLiteral("/fitur.txt")), QByteArray("a\nb\n"));
+    QCOMPARE(again.log.size(), 1);
+    QVERIFY(again.log[0].startsWith(QStringLiteral("pull lassomoir/t7-fitur-rilis: 1 commit baru dari origin")));
+
+    // Task tanpa branch (bekerja di folder kerja project): branch yang aktif di sana yang di-pull
+    QVERIFY(otherPushes(QStringLiteral("main"), QStringLiteral("app.txt"), "satu\nbaru\n"));
+    const TaskItem legacy = makeTask(QStringLiteral("t8"), QStringLiteral("CODER"));
+    const TaskGit::Result direct = TaskGit::prepareRun(repo, root.filePath(QStringLiteral("worktrees/t8")), legacy, false, false);
+    QVERIFY2(direct.error.isEmpty(), qPrintable(direct.error));
+    QVERIFY(direct.branch.isEmpty());
+    QCOMPARE(readFile(repo + QStringLiteral("/app.txt")), QByteArray("satu\nbaru\n"));
+    QVERIFY(!QFileInfo::exists(root.filePath(QStringLiteral("worktrees/t8"))));
+
+    // Pull gagal (branch dasar sudah bercabang dari origin): worktree tidak dibuat, run tidak jalan
+    QVERIFY(writeFile(repo + QStringLiteral("/lokal.txt"), "l\n"));
+    QVERIFY(runGit(repo, {QStringLiteral("add"), QStringLiteral("-A")}));
+    QVERIFY(runGit(repo, {QStringLiteral("commit"), QStringLiteral("-q"), QStringLiteral("-m"), QStringLiteral("lokal")}));
+    QVERIFY(otherPushes(QStringLiteral("main"), QStringLiteral("rekan.txt"), "r\n"));
+    TaskItem blocked = makeTask(QStringLiteral("t9"), QStringLiteral("CODER"));
+    blocked.branch.base = QStringLiteral("main");
+    const TaskGit::Result failed = TaskGit::prepareRun(repo, root.filePath(QStringLiteral("worktrees/t9")), blocked, true, false);
+    QVERIFY(failed.error.contains(QStringLiteral("sudah bercabang")));
+    QVERIFY(failed.branch.isEmpty());
+    QVERIFY(!QFileInfo::exists(root.filePath(QStringLiteral("worktrees/t9"))));
+}
+
+void TestSwarm::gitHistoryParsesGitOutput() {
+    QCOMPARE(GitHistory::parseRefs(QStringLiteral("HEAD -> main, origin/main, origin/HEAD, tag: v1")),
+             QStringList({"main", "origin/main", "tag: v1"}));
+    QCOMPARE(GitHistory::parseRefs(QStringLiteral("HEAD, fitur")), QStringList({"fitur"}));
+    QVERIFY(GitHistory::parseRefs(QString()).isEmpty());
+
+    // Keluaran log(): commit diakhiri NUL, field dipisah US, pesan lengkap paling akhir
+    auto commitRecord = [](const QStringList &fields) { return fields.join(QChar(0x1f)).toUtf8() + '\0'; };
+    const QString merge(40, QLatin1Char('b'));
+    const QString root(40, QLatin1Char('a'));
+    const QString side(40, QLatin1Char('c'));
+    const QByteArray log =
+        commitRecord({merge, root + QLatin1Char(' ') + side, QStringLiteral("Bondan"), QStringLiteral("b@x.id"),
+                      QStringLiteral("1790729137"), QStringLiteral("HEAD -> main, tag: v2"), QStringLiteral("Gabung fitur"),
+                      QStringLiteral("Baris satu\r\nBaris dua\n")})
+        + commitRecord({root, QString(), QStringLiteral("Bondan Ö"), QStringLiteral("b@x.id"), QStringLiteral("1790720000"),
+                        QString(), QStringLiteral("awal"), QString()});
+    const QList<GitCommit> commits = GitHistory::parseLog(log);
+    QCOMPARE(commits.size(), 2);
+    QCOMPARE(commits.at(0).hash, merge);
+    QCOMPARE(commits.at(0).shortHash(), QStringLiteral("bbbbbbb"));
+    QCOMPARE(commits.at(0).parents, QStringList({root, side}));
+    QCOMPARE(commits.at(0).refs, QStringList({"main", "tag: v2"}));
+    QCOMPARE(commits.at(0).date, QDateTime::fromSecsSinceEpoch(1790729137));
+    QCOMPARE(commits.at(0).subject, QStringLiteral("Gabung fitur"));
+    QCOMPARE(commits.at(0).body, QStringLiteral("Baris satu\nBaris dua"));
+    QVERIFY(commits.at(1).parents.isEmpty());
+    QCOMPARE(commits.at(1).author, QStringLiteral("Bondan Ö"));
+    QVERIFY(commits.at(1).refs.isEmpty());
+    QVERIFY(commits.at(1).body.isEmpty());
+
+    // Keluaran branches(): field dipisah NUL, record diakhiri RS + baris baru; origin/HEAD dibuang
+    auto refRecord = [](const QStringList &fields) { return fields.join(QChar(0)).toUtf8() + "\x1e\n"; };
+    const QByteArray refs =
+        refRecord({"refs/heads/main", "main", "c1", "1790729137", "*", "", "origin/main", "ahead 1", "C:/repo", "Ubah app"})
+        + refRecord({"refs/heads/lassomoir/t1-login", "lassomoir/t1-login", "c2", "1790729000", " ", "", "", "",
+                     "C:/wt/t1", "Judul\ndua baris"})
+        + refRecord({"refs/remotes/origin/HEAD", "origin/HEAD", "c1", "1790729137", " ", "refs/remotes/origin/main", "",
+                     "", "", "Ubah app"})
+        + refRecord({"refs/remotes/origin/main", "origin/main", "c0", "1790720000", " ", "", "", "", "", "awal"});
+    const QList<GitBranch> branches = GitHistory::parseBranches(refs);
+    QCOMPARE(branches.size(), 3);
+    QVERIFY(branches.at(0).current);
+    QVERIFY(!branches.at(0).remote);
+    QCOMPARE(branches.at(0).ref, QStringLiteral("refs/heads/main"));
+    QCOMPARE(branches.at(0).upstream, QStringLiteral("origin/main"));
+    QCOMPARE(branches.at(0).track, QStringLiteral("ahead 1"));
+    QCOMPARE(branches.at(0).worktree, QStringLiteral("C:/repo"));
+    QCOMPARE(branches.at(0).date, QDateTime::fromSecsSinceEpoch(1790729137));
+    QCOMPARE(branches.at(1).name, QStringLiteral("lassomoir/t1-login"));
+    QVERIFY(!branches.at(1).current);
+    QCOMPARE(branches.at(1).subject, QStringLiteral("Judul\ndua baris"));
+    QCOMPARE(branches.at(2).name, QStringLiteral("origin/main"));
+    QVERIFY(branches.at(2).remote);
+    QCOMPARE(branches.at(2).commit, QStringLiteral("c0"));
+
+    const QDateTime now(QDate(2026, 9, 30), QTime(14, 0));
+    QCOMPARE(GitHistory::relativeTime(now.addSecs(-20), now), QStringLiteral("baru saja"));
+    // Jam komputer penulis commit sedikit lebih cepat
+    QCOMPARE(GitHistory::relativeTime(now.addSecs(20), now), QStringLiteral("baru saja"));
+    QCOMPARE(GitHistory::relativeTime(now.addSecs(-5 * 60), now), QStringLiteral("5 menit lalu"));
+    QCOMPARE(GitHistory::relativeTime(now.addSecs(-3 * 60 * 60), now), QStringLiteral("3 jam lalu"));
+    QCOMPARE(GitHistory::relativeTime(QDateTime(QDate(2026, 9, 29), QTime(9, 0)), now), QStringLiteral("kemarin"));
+    QCOMPARE(GitHistory::relativeTime(QDateTime(QDate(2026, 9, 26), QTime(9, 0)), now), QStringLiteral("4 hari lalu"));
+    QCOMPARE(GitHistory::relativeTime(QDateTime(QDate(2026, 8, 1), QTime(9, 0)), now), QStringLiteral("01/08/2026"));
+    QVERIFY(GitHistory::relativeTime(QDateTime(), now).isEmpty());
+}
+
+void TestSwarm::gitHistoryReadsBranchesCommitsAndComparisons() {
+    if (QStandardPaths::findExecutable(QStringLiteral("git")).isEmpty()) {
+        QSKIP("git tidak ada di PATH");
+    }
+    const GitSandbox sandbox;
+    QTemporaryDir root;
+    const QString repo = root.filePath(QStringLiteral("repo"));
+    const QString origin = root.filePath(QStringLiteral("origin.git"));
+    auto commitAll = [](const QString &directory, const QStringList &message) {
+        return runGit(directory, {QStringLiteral("add"), QStringLiteral("-A")})
+               && runGit(directory, QStringList{QStringLiteral("commit"), QStringLiteral("-q")} + message);
+    };
+    auto headOf = [](const QString &directory) {
+        return GitSandbox::output(directory, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+    };
+
+    QVERIFY(QDir().mkpath(repo));
+    QVERIFY(runGit(repo, {QStringLiteral("init"), QStringLiteral("-q"), QStringLiteral("-b"), QStringLiteral("main")}));
+    // Konfigurasi pengguna yang mengubah format keluaran git tidak boleh merusak pembacaan
+    const QList<QStringList> settings = {{"color.ui", "always"}, {"log.decorate", "full"}, {"log.follow", "true"},
+                                         {"diff.noprefix", "true"}, {"log.showSignature", "true"}};
+    for (const QStringList &setting : settings) {
+        QVERIFY(runGit(repo, QStringList{QStringLiteral("config")} + setting));
+    }
+
+    // main: awal -> ubah app (tag v1, di-push) -> ubah app lagi
+    QVERIFY(writeFile(repo + QStringLiteral("/app.txt"), "satu\n"));
+    QVERIFY(writeFile(repo + QStringLiteral("/sub/dalam.txt"), "lama\n"));
+    QVERIFY(commitAll(repo, {QStringLiteral("-m"), QStringLiteral("awal")}));
+    const QString first = headOf(repo);
+    QVERIFY(writeFile(repo + QStringLiteral("/app.txt"), "satu\ndua\n"));
+    QVERIFY(commitAll(repo, {QStringLiteral("-m"), QStringLiteral("ubah app")}));
+    const QString second = headOf(repo);
+    QVERIFY(runGit(repo, {QStringLiteral("tag"), QStringLiteral("v1")}));
+    QVERIFY(runGit(root.path(), {QStringLiteral("init"), QStringLiteral("-q"), QStringLiteral("--bare"), origin}));
+    QVERIFY(runGit(repo, {QStringLiteral("remote"), QStringLiteral("add"), QStringLiteral("origin"), origin}));
+    QVERIFY(runGit(repo, {QStringLiteral("push"), QStringLiteral("-q"), QStringLiteral("-u"), QStringLiteral("origin"),
+                          QStringLiteral("main")}));
+    QVERIFY(runGit(repo, {QStringLiteral("remote"), QStringLiteral("set-head"), QStringLiteral("origin"), QStringLiteral("main")}));
+
+    // fitur bercabang dari "ubah app" dan dikerjakan di worktree sendiri, seperti branch task
+    const QString worktree = root.filePath(QStringLiteral("wt"));
+    QVERIFY(runGit(repo, {QStringLiteral("worktree"), QStringLiteral("add"), QStringLiteral("-q"), QStringLiteral("-b"),
+                          QStringLiteral("fitur"), worktree}));
+    QVERIFY(writeFile(worktree + QStringLiteral("/fitur.txt"), "fitur\n"));
+    QVERIFY(commitAll(worktree, {QStringLiteral("-m"), QStringLiteral("tambah fitur")}));
+    QVERIFY(writeFile(worktree + QStringLiteral("/sub/dalam.txt"), "baru\n"));
+    QVERIFY(commitAll(worktree, {QStringLiteral("-m"), QStringLiteral("ubah dalam"), QStringLiteral("-m"),
+                                 QStringLiteral("Alasan perubahan")}));
+    const QString featureTip = headOf(worktree);
+    QVERIFY(writeFile(repo + QStringLiteral("/app.txt"), "satu\ndua\ntiga\n"));
+    QVERIFY(commitAll(repo, {QStringLiteral("-m"), QStringLiteral("ubah app lagi")}));
+    const QString third = headOf(repo);
+
+    // Branch: yang aktif di folder kerja dulu, lalu lokal lain, lalu remote (tanpa origin/HEAD)
+    const GitBranchList list = GitHistory::branches(repo);
+    QVERIFY2(list.error.isEmpty(), qPrintable(list.error));
+    QVERIFY(list.subdir.isEmpty());
+    QVERIFY(list.head.repository);
+    QCOMPARE(list.head.branch, QStringLiteral("main"));
+    QCOMPARE(list.head.commit, third.left(7));
+    QStringList names;
+    for (const GitBranch &branch : list.branches) {
+        names.append(branch.name);
+    }
+    QCOMPARE(names, QStringList({"main", "fitur", "origin/main"}));
+    const GitBranch &main = list.branches.first();
+    QVERIFY(main.current);
+    QVERIFY(!main.remote);
+    QCOMPARE(main.ref, QStringLiteral("refs/heads/main"));
+    QCOMPARE(main.commit, third);
+    QCOMPARE(main.subject, QStringLiteral("ubah app lagi"));
+    QCOMPARE(main.upstream, QStringLiteral("origin/main"));
+    QCOMPARE(main.track, QStringLiteral("ahead 1"));
+    const GitBranch *feature = list.find(QStringLiteral("fitur"));
+    QVERIFY(feature);
+    QVERIFY(!feature->current);
+    QCOMPARE(feature->commit, featureTip);
+    QCOMPARE(QFileInfo(feature->worktree).canonicalFilePath(), QFileInfo(worktree).canonicalFilePath());
+    const GitBranch *remote = list.find(QStringLiteral("origin/main"));
+    QVERIFY(remote && remote->remote);
+    QCOMPARE(remote->ref, QStringLiteral("refs/remotes/origin/main"));
+    QCOMPARE(remote->commit, second);
+
+    // Riwayat branch: terbaru dulu, dengan branch & tag yang menunjuk tiap commit
+    const GitLog history = GitHistory::log(repo, main.ref);
+    QVERIFY2(history.error.isEmpty(), qPrintable(history.error));
+    QCOMPARE(commitSubjects(history.commits), QStringList({"ubah app lagi", "ubah app", "awal"}));
+    QCOMPARE(history.total, 3);
+    QVERIFY(!history.hasMore);
+    QCOMPARE(history.commits.at(0).refs, QStringList({"main"}));
+    QVERIFY(history.commits.at(1).refs.contains(QStringLiteral("origin/main")));
+    QVERIFY(history.commits.at(1).refs.contains(QStringLiteral("tag: v1")));
+    QCOMPARE(history.commits.at(1).parents, QStringList({first}));
+    QVERIFY(history.commits.at(2).parents.isEmpty());
+    QCOMPARE(history.commits.at(2).author, QStringLiteral("Lassomoir Test"));
+    QCOMPARE(history.commits.at(2).email, QStringLiteral("test@lassomoir.local"));
+
+    // Per halaman: jumlah seluruhnya hanya dihitung untuk halaman pertama
+    const GitLog page = GitHistory::log(repo, main.ref, 0, 2);
+    QCOMPARE(commitSubjects(page.commits), QStringList({"ubah app lagi", "ubah app"}));
+    QVERIFY(page.hasMore);
+    QCOMPARE(page.total, 3);
+    const GitLog rest = GitHistory::log(repo, main.ref, 2, 2);
+    QCOMPARE(commitSubjects(rest.commits), QStringList({"awal"}));
+    QVERIFY(!rest.hasMore);
+    QCOMPARE(rest.total, -1);
+
+    // Perbandingan seperti merge request fitur → main
+    const GitComparison comparison = GitHistory::compare(repo, main.ref, feature->ref);
+    QVERIFY2(comparison.error.isEmpty(), qPrintable(comparison.error));
+    QCOMPARE(comparison.mergeBase, second);
+    QCOMPARE(comparison.ahead, 2);
+    QCOMPARE(comparison.behind, 1);
+    QCOMPARE(commitSubjects(comparison.commits), QStringList({"ubah dalam", "tambah fitur"}));
+    QCOMPARE(comparison.commits.first().body, QStringLiteral("Alasan perubahan"));
+    QVERIFY(!comparison.hasMore);
+
+    // Satu commit terhadap induknya, dan commit pertama terhadap pohon kosong
+    WorkspaceDiff diff = GitDiff::between(repo, first, second);
+    QVERIFY2(diff.error.isEmpty(), qPrintable(diff.error));
+    QCOMPARE(diffPaths(diff), QStringList({"app.txt"}));
+    QCOMPARE(diff.baseCommit, first.left(7));
+    QCOMPARE(diff.targetCommit, second.left(7));
+    QCOMPARE(diff.added(), 1);
+    QCOMPARE(diff.removed(), 0);
+    diff = GitDiff::between(repo, QString(), first);
+    QVERIFY2(diff.error.isEmpty(), qPrintable(diff.error));
+    QCOMPARE(diffPaths(diff), QStringList({"app.txt", "sub/dalam.txt"}));
+    QVERIFY(diff.baseCommit.isEmpty());
+    QCOMPARE(diff.targetCommit, first.left(7));
+    QVERIFY(diff.files.first().status == FileDiff::Status::Added);
+
+    // Seluruh branch sejak titik cabang: perubahan main sesudah bercabang tidak ikut
+    diff = GitDiff::between(repo, main.ref, feature->ref, true);
+    QVERIFY2(diff.error.isEmpty(), qPrintable(diff.error));
+    QCOMPARE(diffPaths(diff), QStringList({"fitur.txt", "sub/dalam.txt"}));
+    QCOMPARE(diff.baseCommit, second.left(7));
+    QCOMPARE(diff.targetCommit, featureTip.left(7));
+    // Ujung ke ujung (tanpa titik cabang): app.txt dari main ikut terlihat berbeda
+    diff = GitDiff::between(repo, main.ref, feature->ref);
+    QCOMPARE(diffPaths(diff), QStringList({"app.txt", "fitur.txt", "sub/dalam.txt"}));
+
+    // Commit merge dibanding induk pertamanya = yang dibawa masuk dari fitur
+    QVERIFY(runGit(repo, {QStringLiteral("merge"), QStringLiteral("-q"), QStringLiteral("--no-ff"), QStringLiteral("-m"),
+                          QStringLiteral("gabung fitur"), QStringLiteral("fitur")}));
+    const GitLog merged = GitHistory::log(repo, main.ref, 0, 1);
+    QVERIFY2(merged.error.isEmpty(), qPrintable(merged.error));
+    QCOMPARE(merged.total, 6);
+    const GitCommit merge = merged.commits.first();
+    QCOMPARE(merge.subject, QStringLiteral("gabung fitur"));
+    QCOMPARE(merge.parents, QStringList({third, featureTip}));
+    diff = GitDiff::between(repo, merge.parents.first(), merge.hash);
+    QCOMPARE(diffPaths(diff), QStringList({"fitur.txt", "sub/dalam.txt"}));
+
+    // Revisi yang tidak ada: pesan, bukan diff kosong
+    diff = GitDiff::between(repo, QStringLiteral("refs/heads/tidak-ada"), main.ref);
+    QVERIFY(diff.error.contains(QStringLiteral("tidak ada di repository")));
+    QVERIFY(!GitHistory::log(repo, QStringLiteral("refs/heads/tidak-ada")).error.isEmpty());
+
+    // Detached HEAD: tanpa nama branch, tidak ada branch yang aktif
+    QVERIFY(runGit(repo, {QStringLiteral("switch"), QStringLiteral("-q"), QStringLiteral("--detach")}));
+    const GitHead detached = GitHistory::head(repo);
+    QVERIFY(detached.repository);
+    QVERIFY(detached.branch.isEmpty());
+    QCOMPARE(detached.commit, merge.shortHash());
+    for (const GitBranch &branch : GitHistory::branches(repo).branches) {
+        QVERIFY(!branch.current);
+    }
+}
+
+void TestSwarm::gitHistoryScopesToSubfolderAndRejectsPlainFolders() {
+    if (QStandardPaths::findExecutable(QStringLiteral("git")).isEmpty()) {
+        QSKIP("git tidak ada di PATH");
+    }
+    const GitSandbox sandbox;
+    QTemporaryDir root;
+    if (TaskGit::looksLikeRepository(root.path())) {
+        QSKIP("folder sementara berada di dalam repository git");
+    }
+    // Git tidak boleh naik ke folder induk yang kebetulan repository
+    qputenv("GIT_CEILING_DIRECTORIES", QFileInfo(root.path()).absolutePath().toUtf8());
+    auto restoreEnv = qScopeGuard([]() { qunsetenv("GIT_CEILING_DIRECTORIES"); });
+    auto commitAll = [](const QString &directory, const QString &message) {
+        return runGit(directory, {QStringLiteral("add"), QStringLiteral("-A")})
+               && runGit(directory, {QStringLiteral("commit"), QStringLiteral("-q"), QStringLiteral("-m"), message});
+    };
+
+    // Folder kerja = subfolder "sub": hanya commit yang mengubah isinya
+    const QString repo = root.filePath(QStringLiteral("repo"));
+    QVERIFY(initRepository(repo, QStringLiteral("main")));
+    QVERIFY(writeFile(repo + QStringLiteral("/sub/dalam.txt"), "lama\n"));
+    QVERIFY(commitAll(repo, QStringLiteral("tambah sub")));
+    QVERIFY(runGit(repo, {QStringLiteral("switch"), QStringLiteral("-q"), QStringLiteral("-c"), QStringLiteral("fitur")}));
+    QVERIFY(writeFile(repo + QStringLiteral("/sub/dalam.txt"), "baru\n"));
+    QVERIFY(writeFile(repo + QStringLiteral("/luar.txt"), "luar\n"));
+    QVERIFY(commitAll(repo, QStringLiteral("ubah dalam dan luar")));
+    QVERIFY(writeFile(repo + QStringLiteral("/luar.txt"), "luar lagi\n"));
+    QVERIFY(commitAll(repo, QStringLiteral("ubah luar saja")));
+    QVERIFY(runGit(repo, {QStringLiteral("switch"), QStringLiteral("-q"), QStringLiteral("main")}));
+    QVERIFY(writeFile(repo + QStringLiteral("/app.txt"), "dua\n"));
+    QVERIFY(commitAll(repo, QStringLiteral("ubah app")));
+
+    const QString sub = repo + QStringLiteral("/sub");
+    const GitBranchList list = GitHistory::branches(sub);
+    QVERIFY2(list.error.isEmpty(), qPrintable(list.error));
+    QCOMPARE(list.subdir, QStringLiteral("sub"));
+    QCOMPARE(list.head.branch, QStringLiteral("main"));
+    const GitLog mainHistory = GitHistory::log(sub, QStringLiteral("refs/heads/main"));
+    QCOMPARE(commitSubjects(mainHistory.commits), QStringList({"tambah sub"}));
+    QCOMPARE(mainHistory.total, 1);
+    QCOMPARE(commitSubjects(GitHistory::log(sub, QStringLiteral("refs/heads/fitur")).commits),
+             QStringList({"ubah dalam dan luar", "tambah sub"}));
+    const GitComparison comparison = GitHistory::compare(sub, QStringLiteral("refs/heads/main"),
+                                                         QStringLiteral("refs/heads/fitur"));
+    QVERIFY2(comparison.error.isEmpty(), qPrintable(comparison.error));
+    QCOMPARE(comparison.ahead, 1);
+    QCOMPARE(comparison.behind, 0);
+    QCOMPARE(commitSubjects(comparison.commits), QStringList({"ubah dalam dan luar"}));
+    // Path relatif terhadap folder kerja; file di luarnya tidak ikut
+    const WorkspaceDiff diff = GitDiff::between(sub, QStringLiteral("refs/heads/main"), QStringLiteral("refs/heads/fitur"), true);
+    QVERIFY2(diff.error.isEmpty(), qPrintable(diff.error));
+    QCOMPARE(diffPaths(diff), QStringList({"dalam.txt"}));
+
+    // Folder biasa: bukan repository, tombol branch tidak tampil
+    const QString plain = root.filePath(QStringLiteral("plain"));
+    QVERIFY(QDir().mkpath(plain));
+    QVERIFY(GitHistory::branches(plain).error.startsWith(QStringLiteral("Folder kerja bukan repository git")));
+    QVERIFY(!GitHistory::head(plain).repository);
+    QVERIFY(!GitHistory::log(plain, QStringLiteral("HEAD")).error.isEmpty());
+
+    // Repository tanpa commit: belum ada branch, tapi HEAD sudah bernama
+    const QString fresh = root.filePath(QStringLiteral("fresh"));
+    QVERIFY(QDir().mkpath(fresh));
+    QVERIFY(runGit(fresh, {QStringLiteral("init"), QStringLiteral("-q"), QStringLiteral("-b"), QStringLiteral("main")}));
+    const GitBranchList empty = GitHistory::branches(fresh);
+    QVERIFY2(empty.error.isEmpty(), qPrintable(empty.error));
+    QVERIFY(empty.branches.isEmpty());
+    QVERIFY(empty.head.repository);
+    QCOMPARE(empty.head.branch, QStringLiteral("main"));
+    QVERIFY(empty.head.commit.isEmpty());
 }
 
 namespace {

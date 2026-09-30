@@ -21,6 +21,37 @@ constexpr int kMaxScannedSourceFiles = 5000;
 // Pohon kosong git: pembanding saat repository belum punya commit (semua file tampil sebagai baru)
 constexpr char kEmptyTree[] = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
+// `git diff` untuk GitDiff::parse. --relative: hanya isi folder kerja (bisa subfolder repository)
+// dengan path relatif terhadapnya. Prefix, warna, dan diff eksternal dipaksa agar konfigurasi git
+// pengguna tidak mengubah format.
+QStringList diffArguments(const QStringList &revisions) {
+    return QStringList{
+        QStringLiteral("-c"), QStringLiteral("core.quotepath=off"),
+        QStringLiteral("diff"), QStringLiteral("--relative"), QStringLiteral("--find-renames"),
+        QStringLiteral("--no-color"), QStringLiteral("--no-ext-diff"),
+        QStringLiteral("--src-prefix=a/"), QStringLiteral("--dst-prefix=b/"),
+    } + revisions + QStringList{QStringLiteral("--")};
+}
+
+void sortByPath(QList<FileDiff> *files) {
+    std::sort(files->begin(), files->end(), [](const FileDiff &a, const FileDiff &b) {
+        return QString::compare(a.path, b.path, Qt::CaseInsensitive) < 0;
+    });
+}
+
+// Hash lengkap commit yang ditunjuk revisi; kosong + *error bila tidak ada atau git gagal
+QString resolveCommit(const QString &git, const QString &directory, const QString &revision, QString *error) {
+    const GitOutput commit = GitProcess::run(git, directory, {QStringLiteral("rev-parse"), QStringLiteral("-q"),
+                                                              QStringLiteral("--verify"), revision + QStringLiteral("^{commit}")});
+    if (commit.ok()) {
+        return commit.text();
+    }
+    *error = commit.finished && commit.exitCode == 1
+                 ? QStringLiteral("Commit %1 tidak ada di repository.").arg(revision)
+                 : GitProcess::describeFailure(commit);
+    return QString();
+}
+
 // "a/<path> b/<path>" dari baris "diff --git". Kedua nama sama kecuali rename (namanya diambil
 // dari "rename from/to"), jadi path dibelah di tengah dan spasi di dalam path tetap aman.
 QString pathFromGitHeader(const QString &names) {
@@ -373,15 +404,7 @@ WorkspaceDiff GitDiff::collect(const QString &workingDirectory, bool withMetrics
         return WorkspaceDiff::failure(GitProcess::describeFailure(head));
     }
 
-    // --relative: hanya isi folder kerja (bisa subfolder repository) dengan path relatif terhadapnya.
-    // Prefix, warna, dan diff eksternal dipaksa agar konfigurasi git pengguna tidak mengubah format.
-    const GitOutput patch = GitProcess::run(git, workingDirectory, {
-        QStringLiteral("-c"), QStringLiteral("core.quotepath=off"),
-        QStringLiteral("diff"), QStringLiteral("--relative"), QStringLiteral("--find-renames"),
-        QStringLiteral("--no-color"), QStringLiteral("--no-ext-diff"),
-        QStringLiteral("--src-prefix=a/"), QStringLiteral("--dst-prefix=b/"),
-        base, QStringLiteral("--"),
-    });
+    const GitOutput patch = GitProcess::run(git, workingDirectory, diffArguments({base}));
     if (!patch.finished || patch.exitCode != 0) {
         return WorkspaceDiff::failure(GitProcess::describeFailure(patch));
     }
@@ -415,8 +438,49 @@ WorkspaceDiff GitDiff::collect(const QString &workingDirectory, bool withMetrics
         result.csharpTypes = resolveCSharpInheritance(git, workingDirectory, &result.files);
     }
 
-    std::sort(result.files.begin(), result.files.end(), [](const FileDiff &a, const FileDiff &b) {
-        return QString::compare(a.path, b.path, Qt::CaseInsensitive) < 0;
-    });
+    sortByPath(&result.files);
+    return result;
+}
+
+WorkspaceDiff GitDiff::between(const QString &workingDirectory, const QString &from, const QString &to,
+                               bool fromMergeBase) {
+    const QString git = GitProcess::executable();
+    if (git.isEmpty()) {
+        return WorkspaceDiff::failure(QStringLiteral("git tidak ditemukan di PATH, jadi perubahan kode tidak bisa dibaca."));
+    }
+
+    QString error;
+    const QString target = resolveCommit(git, workingDirectory, to, &error);
+    if (target.isEmpty()) {
+        return WorkspaceDiff::failure(error);
+    }
+    QString base;
+    if (fromMergeBase) {
+        const GitOutput mergeBase = GitProcess::run(git, workingDirectory, {QStringLiteral("merge-base"), from, to});
+        if (!mergeBase.ok()) {
+            return WorkspaceDiff::failure(
+                mergeBase.finished && mergeBase.exitCode == 1
+                    ? QStringLiteral("%1 dan %2 tidak punya titik cabang bersama, jadi perubahannya tidak bisa "
+                                     "dibandingkan.").arg(from, to)
+                    : GitProcess::describeFailure(mergeBase));
+        }
+        base = mergeBase.text();
+    } else if (!from.isEmpty()) {
+        base = resolveCommit(git, workingDirectory, from, &error);
+        if (base.isEmpty()) {
+            return WorkspaceDiff::failure(error);
+        }
+    }
+
+    const GitOutput patch = GitProcess::run(
+        git, workingDirectory, diffArguments({base.isEmpty() ? QString::fromLatin1(kEmptyTree) : base, target}));
+    if (!patch.ok()) {
+        return WorkspaceDiff::failure(GitProcess::describeFailure(patch));
+    }
+    WorkspaceDiff result;
+    result.baseCommit = base.left(7);
+    result.targetCommit = target.left(7);
+    result.files = parse(QString::fromUtf8(patch.out));
+    sortByPath(&result.files);
     return result;
 }

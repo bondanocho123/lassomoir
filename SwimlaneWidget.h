@@ -17,6 +17,7 @@ class KanbanColumnWidget;
 class KanbanCardWidget;
 class QFrame;
 class StageCatalog;
+struct GitHead;
 
 class SwimlaneWidget : public QWidget
 {
@@ -32,6 +33,10 @@ public:
 
     // Tampilkan folder kerja project di tombol header (kosong = belum dipilih)
     void setWorkingDirectory(const QString &path);
+
+    // Branch aktif folder kerja di tombol branch header; tombolnya hanya tampil bila folder kerja
+    // berada di repository git. Klik = jendela riwayat branch & commit.
+    void setGitHead(const GitHead &head);
 
     // Folder referensi project (hanya dibaca agent): jumlahnya di tombol "Referensi", daftarnya
     // di popup tombol itu. Popup yang sedang terbuka ikut diperbarui.
@@ -56,6 +61,8 @@ signals:
     void closeProjectRequested(const QString &projectId);
     // Tombol folder kerja di header diklik
     void workingDirectoryChangeRequested(const QString &projectId);
+    // Tombol branch di header diklik
+    void branchViewRequested(const QString &projectId);
     // Dari popup folder referensi: "Tambah folder…" dan tombol × per folder
     void referenceDirectoryAddRequested(const QString &projectId);
     void referenceDirectoryRemoveRequested(const QString &projectId, const QString &dir);

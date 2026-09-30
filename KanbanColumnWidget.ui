@@ -18,11 +18,34 @@
   </property>
   <layout class="QVBoxLayout" name="verticalLayout">
    <item>
-    <widget class="QLabel" name="labelStageTitle">
-     <property name="text">
-      <string>TextLabel</string>
+    <layout class="QHBoxLayout" name="headerLayout">
+     <property name="spacing">
+      <number>4</number>
      </property>
-    </widget>
+     <item>
+      <widget class="QLabel" name="labelStageTitle">
+       <property name="text">
+        <string>TextLabel</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QLabel" name="labelStageInfo"/>
+     </item>
+     <item>
+      <spacer name="headerSpacer">
+       <property name="orientation">
+        <enum>Qt::Orientation::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>40</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+    </layout>
    </item>
    <item>
     <widget class="QScrollArea" name="scrollArea">

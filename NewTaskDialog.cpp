@@ -1,10 +1,15 @@
 #include "NewTaskDialog.h"
+#include "GitHistory.h"
 #include "PromptEditor.h"
 #include "StageCatalog.h"
+#include "TaskGit.h"
 
 #include <QComboBox>
 #include <QDateTime>
 #include <QFrame>
+#include <QFutureWatcher>
+#include <QSet>
+#include <QtConcurrent/QtConcurrentRun>
 #include <QHBoxLayout>
 #include <QKeySequence>
 #include <QLabel>
@@ -30,6 +35,17 @@ const QList<Choice> kModelChoices = {
 };
 const QList<Choice> kEffortChoices = {
     {"low", "Low"}, {"medium", "Medium"}, {"high", "High"}, {"xhigh", "XHigh"}, {"max", "Max"},
+};
+
+const QString kBranchHint = QStringLiteral("Task bercabang dari branch ini. Branch ini di-pull dari origin "
+                                           "saat task dibuat dan sebelum setiap run.");
+const QString kOriginPrefix = QStringLiteral("origin/");
+const QString kTaskBranchPrefix = QStringLiteral("lassomoir/");
+
+// Hasil fetch origin + daftar branch sesudahnya
+struct FetchedBranches {
+    QString error;        // kosong = daftar dari origin sudah diperbarui
+    GitBranchList list;
 };
 
 // Teks item pertama: "Bawaan (Sonnet)". Nilai yang bukan alias dikenal ditampilkan apa adanya.
@@ -69,6 +85,18 @@ NewTaskDialog::NewTaskDialog(const QString &projectId, const StageCatalog &catal
     subtitle->setObjectName("taskFormSubtitle");
     root->addWidget(subtitle);
     root->addWidget(buildDivider());
+
+    // Branch dipilih paling dulu: seluruh pekerjaan task berangkat dari branch ini
+    m_branchInput = new QComboBox(this);
+    m_branchInput->setObjectName("taskFormBranch");
+    m_branchHint = new QLabel(this);
+    m_branchHint->setObjectName("taskFormHint");
+    m_branchHint->setWordWrap(true);
+    QWidget *branchField = buildField("BRANCH", m_branchInput);
+    branchField->layout()->addWidget(m_branchHint);
+    root->addWidget(branchField);
+    showBranchMessage("Folder kerja belum dipilih",
+                      "Branch task mengikuti branch yang aktif di folder kerja saat run pertama.");
 
     m_titleInput = new QLineEdit(this);
     m_titleInput->setObjectName("taskFormInput");
@@ -167,6 +195,139 @@ NewTaskDialog::NewTaskDialog(const TaskItem &task, const QString &attachmentDire
         selectValue(it->model, tuning.model);
         selectValue(it->effort, tuning.effort);
     }
+
+    // Branch task sudah dibuat dari branch dasarnya: tidak bisa dipindah lagi
+    if (!task.branch.isEmpty()) {
+        showBranchMessage(task.branch.base.isEmpty() ? task.branch.name : task.branch.base,
+                          QString("Branch task %1 sudah dibuat dari branch ini.").arg(task.branch.name));
+    }
+}
+
+void NewTaskDialog::loadBranches(const QString &workingDirectory) {
+    if (!m_original.branch.isEmpty()) {
+        return;
+    }
+    if (workingDirectory.isEmpty()) {
+        showBranchMessage("Folder kerja belum dipilih",
+                          "Branch task mengikuti branch yang aktif di folder kerja saat run pertama.");
+        return;
+    }
+    // Folder biasa dikenali tanpa menjalankan git
+    if (!TaskGit::looksLikeRepository(workingDirectory)) {
+        showBranchMessage("Folder kerja bukan repository git", "Task berjalan tanpa branch.");
+        return;
+    }
+
+    m_branchesLoading = true;
+    showBranchMessage("Memuat branch…", kBranchHint);
+    updateCreateButtonEnabled();
+    // Dialog ditutup sebelum git selesai: watcher ikut terhapus, hasilnya dibuang
+    auto *watcher = new QFutureWatcher<GitBranchList>(this);
+    connect(watcher, &QFutureWatcher<GitBranchList>::finished, this, [this, watcher, workingDirectory]() {
+        watcher->deleteLater();
+        m_branchesLoading = false;
+        showBranches(watcher->result());
+        updateCreateButtonEnabled();
+        if (m_branchSelectable) {
+            fetchBranches(workingDirectory);
+        }
+    });
+    watcher->setFuture(QtConcurrent::run(&GitHistory::branches, workingDirectory));
+}
+
+void NewTaskDialog::fetchBranches(const QString &workingDirectory) {
+    m_branchHint->setText("Memperbarui daftar branch dari origin…");
+    auto *watcher = new QFutureWatcher<FetchedBranches>(this);
+    connect(watcher, &QFutureWatcher<FetchedBranches>::finished, this, [this, watcher]() {
+        watcher->deleteLater();
+        const FetchedBranches fetched = watcher->result();
+        if (!fetched.error.isEmpty()) {
+            m_branchHint->setText(QString("Daftar branch dari origin belum diperbarui (%1). %2").arg(fetched.error, kBranchHint));
+            return;
+        }
+        showBranches(fetched.list);
+    });
+    watcher->setFuture(QtConcurrent::run([workingDirectory]() {
+        FetchedBranches fetched;
+        fetched.error = TaskGit::fetchOrigin(workingDirectory).error;
+        if (fetched.error.isEmpty()) {
+            fetched.list = GitHistory::branches(workingDirectory);
+        }
+        return fetched;
+    }));
+}
+
+void NewTaskDialog::showBranches(const GitBranchList &list) {
+    if (!list.error.isEmpty()) {
+        showBranchMessage("Branch tidak bisa dibaca", list.error);
+        return;
+    }
+    const QString selected = m_branchSelectable ? m_branchInput->currentData().toString() : QString();
+
+    QSet<QString> locals;
+    for (const GitBranch &branch : list.branches) {
+        if (!branch.remote) {
+            locals.insert(branch.name);
+        }
+    }
+
+    // Urutan GitHistory dipertahankan: yang aktif, lokal lain, lalu yang hanya ada di origin
+    m_branchInput->clear();
+    int current = -1;
+    for (const GitBranch &branch : list.branches) {
+        QString base = branch.name;
+        if (branch.remote) {
+            if (!branch.name.startsWith(kOriginPrefix)) {
+                continue;
+            }
+            base = branch.name.mid(kOriginPrefix.size());
+            if (locals.contains(base)) {
+                continue;
+            }
+        }
+        if (base.startsWith(kTaskBranchPrefix)) {
+            continue;
+        }
+
+        QStringList tip = {QString("%1 · %2").arg(branch.subject, GitHistory::relativeTime(branch.date))};
+        if (branch.remote) {
+            tip.append("Baru ada di origin: branch lokalnya dibuat saat di-pull");
+        } else if (!branch.track.isEmpty()) {
+            tip.append(QString("%1 dibanding %2").arg(branch.track, branch.upstream));
+        }
+        m_branchInput->addItem(branch.current ? QString("%1 (aktif)").arg(base) : branch.name, base);
+        m_branchInput->setItemData(m_branchInput->count() - 1, tip.join('\n'), Qt::ToolTipRole);
+        if (branch.current) {
+            current = m_branchInput->count() - 1;
+        }
+    }
+    if (m_branchInput->count() == 0) {
+        showBranchMessage("Repository belum punya commit", "Task berjalan tanpa branch sampai ada commit pertama.");
+        return;
+    }
+
+    // Pilihan pengguna dipertahankan saat daftar diperbarui; task yang diedit tetap di branch dasar
+    // pilihannya; task baru mulai dari branch yang aktif
+    const QString chosen = !selected.isEmpty() ? selected : m_original.branch.base;
+    int index = chosen.isEmpty() ? current : m_branchInput->findData(chosen);
+    if (!chosen.isEmpty() && index < 0) {
+        m_branchInput->addItem(chosen, chosen);
+        index = m_branchInput->count() - 1;
+        m_branchInput->setItemData(index, QString("Tidak ditemukan di repository"), Qt::ToolTipRole);
+    }
+    m_branchInput->setCurrentIndex(qMax(0, index));
+    m_branchInput->setEnabled(true);
+    m_branchSelectable = true;
+    m_branchHint->setText(kBranchHint);
+}
+
+void NewTaskDialog::showBranchMessage(const QString &message, const QString &hint) {
+    m_branchSelectable = false;
+    m_branchInput->clear();
+    m_branchInput->addItem(message, QString());
+    m_branchInput->setEnabled(false);
+    m_branchHint->setText(hint);
+    m_branchHint->setVisible(!hint.isEmpty());
 }
 
 QWidget *NewTaskDialog::buildTuningRow(const QString &stageKey, const AgentDefinition &defaults) {
@@ -223,7 +384,7 @@ QList<TaskAttachments::Draft> NewTaskDialog::attachments() const {
 }
 
 void NewTaskDialog::updateCreateButtonEnabled() {
-    m_btnCreate->setEnabled(!m_titleInput->text().trimmed().isEmpty());
+    m_btnCreate->setEnabled(!m_titleInput->text().trimmed().isEmpty() && !m_branchesLoading);
 }
 
 TaskItem NewTaskDialog::resultTask() const {
@@ -236,6 +397,9 @@ TaskItem NewTaskDialog::resultTask() const {
     item.category = m_categoryInput->currentText().trimmed();
     item.title = m_titleInput->text().trimmed();
     item.subtext = m_promptInput->text().trimmed();
+    if (m_branchSelectable) {
+        item.branch.base = m_branchInput->currentData().toString();
+    }
     for (auto it = m_tuningInputs.cbegin(); it != m_tuningInputs.cend(); ++it) {
         const AgentTuning tuning{it->model->currentData().toString(), it->effort->currentData().toString()};
         if (tuning.isEmpty()) {

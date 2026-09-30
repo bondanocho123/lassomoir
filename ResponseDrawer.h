@@ -69,6 +69,8 @@ signals:
     void sendBackRequested(const QString &taskId, const QString &stage, const QString &note);
     // Perubahan kode folder kerja task ini perlu dibaca (lagi); jawabannya lewat showDiff()
     void diffRequested(const QString &taskId);
+    // Tombol "Lihat commit" di baris branch: riwayat branch task dibanding branch dasarnya
+    void branchHistoryRequested(const QString &taskId);
 
 private:
     void requestDiff();
@@ -94,7 +96,9 @@ private:
 
     QLabel *m_title;
     QLabel *m_status;
-    QLabel *m_branch;          // branch git task; tersembunyi bila task tanpa branch
+    QWidget *m_branchRow;      // branch git task + tombol riwayatnya; tersembunyi bila task tanpa branch
+    QLabel *m_branch;
+    QPushButton *m_branchHistory;
     QPushButton *m_expand;
     QTabBar *m_tabs;           // hanya tampil di stage yang menampilkan perubahan kode
     QStackedWidget *m_pages;   // [hasil agent | perubahan kode | maintainability | UML], mengikuti m_tabs

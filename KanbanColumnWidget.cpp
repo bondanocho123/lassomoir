@@ -1,4 +1,5 @@
 #include "KanbanColumnWidget.h"
+#include "HoverInfoPopup.h"
 #include "KanbanCardWidget.h"
 #include "ui_KanbanColumnWidget.h"
 
@@ -7,14 +8,29 @@
 #include <QDragMoveEvent>
 #include <QDragLeaveEvent>
 #include <QDropEvent>
+#include <QIcon>
 #include <QMimeData>
+#include <QTextDocumentFragment>
 #include <QVBoxLayout>
 
+namespace {
+// Sisi ikon info (px logis), kira-kira setinggi baris judul stage
+constexpr int kInfoIconSide = 14;
+}
 
 KanbanColumnWidget::KanbanColumnWidget(QWidget *parent) : QWidget(parent), ui(new Ui::KanbanColumnWidget) {
     ui->setupUi(this);
 
     setAttribute(Qt::WA_StyledBackground, true);
+
+    ui->labelStageInfo->setPixmap(QIcon(":/icons/info.svg").pixmap(QSize(kInfoIconSide, kInfoIconSide)));
+    ui->labelStageInfo->setAccessibleName(QStringLiteral("Info stage"));   // ikon tanpa teks
+    ui->labelStageInfo->hide();   // tampil begitu stage punya penjelasan (setStageInfo)
+
+    // Penjelasan stage muncul seketika saat judul atau ikon info di-hover
+    m_infoPopup = new HoverInfoPopup(this);
+    m_infoPopup->addAnchor(ui->labelStageTitle);
+    m_infoPopup->addAnchor(ui->labelStageInfo);
 
     //aktifkan penerimaan drop
     setAcceptDrops(true);
@@ -40,6 +56,18 @@ void KanbanColumnWidget::setStageName(const QString &name){
     }
 }
 
+void KanbanColumnWidget::setStageInfo(const QString &info) {
+    // Sengaja bukan setToolTip: tooltip Qt muncul setelah jeda dan berkedip saat kursor pindah
+    // dari judul ke ikon. Pembaca layar tetap mendapat penjelasannya sebagai teks biasa.
+    m_infoPopup->setInfo(info);
+    ui->labelStageInfo->setAccessibleDescription(QTextDocumentFragment::fromHtml(info).toPlainText());
+    ui->labelStageInfo->setVisible(!info.isEmpty());
+}
+
+QString KanbanColumnWidget::stageInfo() const {
+    return m_infoPopup->info();
+}
+
 void KanbanColumnWidget::setRunnable(bool runnable) {
     m_runnable = runnable;
     for (KanbanCardWidget *card : cards()) {
@@ -52,6 +80,7 @@ void KanbanColumnWidget::addCard(KanbanCardWidget *card) {
     //Sisipkan sebelum spacer terbawah (Jika ada spacer di index terakhir)
     int targetIndex = qMax(0, m_cardListLayout->count()-1);
     m_cardListLayout->insertWidget(targetIndex, card);
+    card->setStage(m_stageName);
     card->setRunEnabled(m_runnable);
     card->show();
 }
@@ -59,7 +88,8 @@ void KanbanColumnWidget::addCard(KanbanCardWidget *card) {
 void KanbanColumnWidget::insertCard(int index, KanbanCardWidget *card){
     if (!card || !m_cardListLayout) return;
     m_cardListLayout->insertWidget(index, card);
-    // Kartu yang di-drop ke kolom lain ikut menyesuaikan tombol run-nya
+    // Kartu yang di-drop ke kolom lain ikut menyesuaikan stage dan tombol run-nya
+    card->setStage(m_stageName);
     card->setRunEnabled(m_runnable);
     card->show();
 }
