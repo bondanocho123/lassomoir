@@ -20,12 +20,14 @@ SOURCES += \
     ../DocumentText.cpp \
     ../EdgeMermaidRenderer.cpp \
     ../FileManager.cpp \
+    ../GitHistory.cpp \
     ../GitProcess.cpp \
     ../MermaidRenderer.cpp \
     ../PromptComposer.cpp \
     ../RunLogFormatter.cpp \
     ../SourceTokens.cpp \
     ../StageCatalog.cpp \
+    ../StageInfo.cpp \
     ../StageProfile.cpp \
     ../StageSwarm.cpp \
     ../StreamJsonParser.cpp \
@@ -51,12 +53,14 @@ HEADERS += \
     ../DocumentText.h \
     ../EdgeMermaidRenderer.h \
     ../FileManager.h \
+    ../GitHistory.h \
     ../GitProcess.h \
     ../MermaidRenderer.h \
     ../PromptComposer.h \
     ../RunLogFormatter.h \
     ../SourceTokens.h \
     ../StageCatalog.h \
+    ../StageInfo.h \
     ../StageProfile.h \
     ../StageSwarm.h \
     ../StreamJsonParser.h \

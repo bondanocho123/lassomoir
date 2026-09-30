@@ -20,6 +20,11 @@
         <file>icons/paperclip.svg</file>
         <file>icons/close.svg</file>
         <file>icons/close-white.svg</file>
+        <file>icons/chevron-right.svg</file>
+        <file>icons/chevron-down.svg</file>
+        <file>icons/branch.svg</file>
+        <file>icons/info.svg</file>
+        <file>icons/signal.svg</file>
         <file>prompts/SPECIFIER.md</file>
         <file>prompts/CODER.md</file>
         <file>prompts/CLEANER.md</file>

@@ -41,10 +41,13 @@ struct FileDiff {
 };
 
 // Perubahan folder kerja (tracked + file baru) dibanding commit dasar: HEAD, atau titik cabang
-// branch task sehingga putaran yang sudah di-commit ikut terlihat
+// branch task sehingga putaran yang sudah di-commit ikut terlihat. Juga dipakai untuk perubahan
+// antara dua commit (GitDiff::between), yang sisi "sesudah"-nya commit, bukan folder kerja.
 struct WorkspaceDiff {
     QString error;             // kosong = berhasil dibaca
     QString baseCommit;        // hash pendek commit dasar; kosong bila repository belum punya commit
+                               // (between: kosong = dibanding pohon kosong, yaitu commit pertama)
+    QString targetCommit;      // hash pendek commit sisi sesudah; kosong = folder kerja
     QList<FileDiff> files;     // urut path
     int omittedUntracked = 0;  // file baru di luar batas daftar
     // C#: nama tipe yang dideklarasikan di project → kelas dasarnya (DIT, tipe konteks diagram kelas)
@@ -70,6 +73,13 @@ QList<FileDiff> parse(const QString &patch);
 // bila yang ditampilkan hanya diff-nya. baseRevision kosong = dibanding HEAD.
 WorkspaceDiff collect(const QString &workingDirectory, bool withMetrics = true,
                       const QString &baseRevision = QString());
+
+// Perubahan dari revisi from ke revisi to (tanpa folder kerja dan tanpa metrik), dibatasi ke isi
+// folder kerja seperti collect(). from kosong = dibanding pohon kosong (commit pertama repository).
+// fromMergeBase = true membandingkan to dengan titik cabang from & to, seperti `git diff from...to`:
+// hanya yang dikerjakan di to, bukan yang sudah berubah di from sesudah bercabang.
+WorkspaceDiff between(const QString &workingDirectory, const QString &from, const QString &to,
+                      bool fromMergeBase = false);
 
 }
 

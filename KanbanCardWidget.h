@@ -14,6 +14,8 @@ namespace Ui {
 class KanbanCardWidget;
 }
 
+class RunPulse;
+
 
 class KanbanCardWidget : public QWidget{
     Q_OBJECT;
@@ -41,6 +43,7 @@ public:
     void setRunEnabled(bool enabled);
 
     // Idle: ▶ · Queued/Running: ■ (batalkan). Selain Idle, kartu tidak bisa di-drag.
+    // Selama Running kartu berkedip (RunPulse) supaya task yang sedang dikerjakan agent mudah dilihat.
     void setRunState(RunState state);
     RunState runState() const { return m_runState; }
 
@@ -72,9 +75,12 @@ protected:
     void mouseMoveEvent(QMouseEvent *event) override;
     // Klik kanan: menu Edit / Hapus task
     void contextMenuEvent(QContextMenuEvent *event) override;
+    // Kedip run di atas latar styles.qss
+    void paintEvent(QPaintEvent *event) override;
 
 private :
     Ui::KanbanCardWidget *ui;
+    RunPulse *m_pulse;
 
     // Titik awal klik untuk mendeteksi ambang drag (drag threshold)
     QPoint m_dragStartPosition;

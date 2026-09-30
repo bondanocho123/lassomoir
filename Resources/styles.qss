@@ -8,8 +8,8 @@
    ============================================================ */
 
 /* Font Dasar Aplikasi: seluruh widget memakai gaya Garamond (serif).
-   #textBrowserLog (ConsolePanelWidget) sengaja dikecualikan lewat
-   selector ID-nya sendiri karena tetap butuh font monospace. */
+   Log kartu konsol (#consoleCardLog), diff, dan branch sengaja dikecualikan
+   lewat selector ID-nya sendiri karena tetap butuh font monospace. */
 * {
     font-family: "Garamond", "EB Garamond", "Times New Roman", serif;
 }
@@ -38,7 +38,8 @@ KanbanCardWidget:hover {
 }
 
 /* Status run agent (property "state", lihat KanbanCardWidget::setRunState).
-   Ditulis setelah :hover supaya garis status tetap terlihat saat kursor di atas kartu. */
+   Ditulis setelah :hover supaya garis status tetap terlihat saat kursor di atas kartu.
+   Selama "running" kartu juga berkedip navy (RunPulse, digambar di atas garis ini). */
 KanbanCardWidget[state="queued"] {
     border: 1px dashed #33517a;
 }
@@ -105,9 +106,30 @@ QLabel#labelStageTitle {
     letter-spacing: 0.5px;
 }
 
-/* Tombol Header Swimlane - "Close", folder kerja agent, dan folder referensi (outline navy) */
+/* Penjelasan stage saat judul/ikon info di-hover (HoverInfoPopup): kartu putih seperti popup
+   folder referensi. Warna nama stage dan subjudulnya ada di StageInfo.cpp (teks kaya). */
+QLabel#hoverInfoContent {
+    background-color: #ffffff;
+    color: #3d3730;
+    border: 1px solid #e2d5c1;
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 12px;
+}
+
+/* Tooltip biasa ikut skin, bukan kuning bawaan sistem */
+QToolTip {
+    background-color: #ffffff;
+    color: #3d3730;
+    border: 1px solid #e2d5c1;
+    padding: 3px 6px;
+}
+
+/* Tombol Header Swimlane - "Close", folder kerja agent, branch aktif folder kerja, dan folder
+   referensi (outline navy) */
 QPushButton#btnClose,
 QPushButton#btnWorkingDir,
+QPushButton#btnBranch,
 QPushButton#btnReferenceDirs {
     background-color: #ffffff;
     color: #33517a;
@@ -120,6 +142,7 @@ QPushButton#btnReferenceDirs {
 
 QPushButton#btnClose:hover,
 QPushButton#btnWorkingDir:hover,
+QPushButton#btnBranch:hover,
 QPushButton#btnReferenceDirs:hover {
     background-color: #eef2f8;
     border: 1px solid #33517a;
@@ -127,6 +150,7 @@ QPushButton#btnReferenceDirs:hover {
 
 QPushButton#btnClose:pressed,
 QPushButton#btnWorkingDir:pressed,
+QPushButton#btnBranch:pressed,
 QPushButton#btnReferenceDirs:pressed {
     background-color: #dfe7f2;
 }
@@ -789,6 +813,22 @@ QLabel#drawerBranch {
     color: #33517a;
 }
 
+/* "Lihat commit" di samping nama branch task: jendela branch & commit */
+QPushButton#btnDrawerBranchHistory {
+    background-color: #ffffff;
+    color: #33517a;
+    border: 1px solid #b9c6da;
+    border-radius: 4px;
+    padding: 1px 8px;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+QPushButton#btnDrawerBranchHistory:hover {
+    background-color: #eef2f8;
+    border: 1px solid #33517a;
+}
+
 QPushButton#btnDrawerClose,
 QPushButton#btnDrawerExpand {
     background: transparent;
@@ -927,6 +967,40 @@ QPushButton#btnDiffRefresh:disabled {
     color: #b9c6da;
 }
 
+/* Satu kolom | Dua kolom: sepasang tombol menempel, yang aktif terisi navy */
+QPushButton#btnDiffUnified,
+QPushButton#btnDiffSplit {
+    background-color: #ffffff;
+    color: #33517a;
+    border: 1px solid #b9c6da;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+QPushButton#btnDiffUnified {
+    border-top-left-radius: 4px;
+    border-bottom-left-radius: 4px;
+    border-right: none;
+}
+
+QPushButton#btnDiffSplit {
+    border-top-right-radius: 4px;
+    border-bottom-right-radius: 4px;
+}
+
+QPushButton#btnDiffUnified:hover,
+QPushButton#btnDiffSplit:hover {
+    background-color: #eef2f8;
+}
+
+QPushButton#btnDiffUnified:checked,
+QPushButton#btnDiffSplit:checked {
+    background-color: #33517a;
+    color: #ffffff;
+    border-color: #33517a;
+}
+
 QTreeWidget#diffFileList {
     background-color: #ffffff;
     border: 1px solid #e7ddcd;
@@ -950,12 +1024,180 @@ QTreeWidget#diffFileList::item:selected {
     color: #3d3730;
 }
 
-/* Diff: font monospace agar kolom nomor baris dan indentasi kode lurus */
-QPlainTextEdit#diffText {
+/* Diff: font monospace agar kolom nomor baris dan indentasi kode lurus. Dua kolom (sebelum | sesudah)
+   wajib berfont sama persis supaya baris kiri dan kanan tetap sejajar. */
+QPlainTextEdit#diffText,
+QPlainTextEdit#diffOldText,
+QPlainTextEdit#diffNewText {
     background-color: #ffffff;
     border: 1px solid #e7ddcd;
     border-radius: 6px;
     font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
+    font-size: 12px;
+    color: #3d3730;
+}
+
+/* ============ Jendela branch & commit (BranchViewer) ============ */
+QDialog#branchViewer {
+    background-color: #fbf8f3;
+}
+
+QWidget#branchToolbar {
+    background-color: #fbf8f3;
+    border-bottom: 1px solid #e2d5c1;
+}
+
+QLabel#branchSectionLabel,
+QLabel#branchListTitle {
+    font-size: 10px;
+    font-weight: bold;
+    color: #a9743f;
+    letter-spacing: 0.5px;
+}
+
+/* Nama branch: monospace seperti nama branch di drawer */
+QComboBox#branchSelector,
+QComboBox#branchCompareSelector {
+    background-color: #ffffff;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    padding: 3px 6px;
+    font-family: "Cascadia Mono", Consolas, monospace;
+    font-size: 12px;
+    color: #111827;
+    selection-background-color: #f2e3d1;
+    selection-color: #3d3730;
+}
+
+QComboBox#branchSelector:focus,
+QComboBox#branchCompareSelector:focus {
+    border: 1px solid #a9743f;
+}
+
+/* Kotak ketik pencarian di dalam combo: tanpa aturan ini ia ikut font Garamond dari selector * */
+QComboBox#branchSelector QLineEdit,
+QComboBox#branchCompareSelector QLineEdit {
+    background: transparent;
+    border: none;
+    padding: 0;
+    font-family: "Cascadia Mono", Consolas, monospace;
+    font-size: 12px;
+    color: #111827;
+    selection-background-color: #f2e3d1;
+    selection-color: #3d3730;
+}
+
+QComboBox#branchSelector:disabled,
+QComboBox#branchCompareSelector:disabled {
+    color: #b3aa9c;
+}
+
+QComboBox#branchSelector::drop-down,
+QComboBox#branchCompareSelector::drop-down {
+    border: none;
+    width: 20px;
+}
+
+QComboBox#branchSelector::down-arrow,
+QComboBox#branchCompareSelector::down-arrow {
+    image: url(:/icons/chevron-down.svg);
+    width: 10px;
+    height: 10px;
+    margin-right: 6px;
+}
+
+QComboBox#branchSelector QAbstractItemView,
+QComboBox#branchCompareSelector QAbstractItemView {
+    background-color: #ffffff;
+    border: 1px solid #d1d5db;
+    outline: none;
+    font-family: "Cascadia Mono", Consolas, monospace;
+    font-size: 12px;
+    selection-background-color: #f2e3d1;
+    selection-color: #3d3730;
+}
+
+QToolButton#btnBranchSwap {
+    background-color: #ffffff;
+    color: #33517a;
+    border: 1px solid #b9c6da;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 13px;
+    font-weight: bold;
+}
+
+QToolButton#btnBranchSwap:hover {
+    background-color: #eef2f8;
+    border: 1px solid #33517a;
+}
+
+QToolButton#btnBranchSwap:disabled {
+    color: #c9d3e2;
+    border: 1px solid #dfe5ee;
+}
+
+QPushButton#btnBranchReload,
+QPushButton#btnBranchMore {
+    background-color: #ffffff;
+    color: #33517a;
+    border: 1px solid #b9c6da;
+    border-radius: 4px;
+    padding: 4px 12px;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+QPushButton#btnBranchReload:hover,
+QPushButton#btnBranchMore:hover {
+    background-color: #eef2f8;
+    border: 1px solid #33517a;
+}
+
+QPushButton#btnBranchReload:disabled,
+QPushButton#btnBranchMore:disabled {
+    color: #b9c6da;
+}
+
+QLabel#branchLocation,
+QLabel#branchListMessage {
+    font-size: 11px;
+    color: #6f6557;
+}
+
+QLabel#branchListMessage[error="true"] {
+    color: #9b2c1f;
+}
+
+/* Baris commit digambar sendiri (BranchViewer.cpp: CommitDelegate) dengan warna palet yang sama */
+QTreeWidget#branchCommitList {
+    background-color: #ffffff;
+    border: 1px solid #e7ddcd;
+    border-radius: 6px;
+    font-family: "Segoe UI", sans-serif;
+    font-size: 12px;
+    color: #3d3730;
+    outline: none;
+}
+
+QLabel#branchDetailTitle {
+    font-size: 14px;
+    font-weight: bold;
+    color: #33517a;
+}
+
+QLabel#branchDetailMeta {
+    font-family: "Cascadia Mono", Consolas, monospace;
+    font-size: 11px;
+    color: #6f6557;
+}
+
+QLabel#branchDetailBody {
+    background-color: #ffffff;
+    border: 1px solid #efe6d8;
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-family: "Segoe UI", sans-serif;
     font-size: 12px;
     color: #3d3730;
 }
@@ -1116,4 +1358,150 @@ QLabel#diagramHint {
 QGraphicsView#diagramCanvas {
     background-color: #ece5da;
     border: none;
+}
+
+/* ============ Daftar task di panel konsol (ConsoleTaskCard) ============ */
+
+/* Garis mengikuti kartu kanban (property "state", lihat ConsoleTaskCard::refreshState);
+   selama "running" kartu ikut berkedip navy (RunPulse) */
+ConsoleTaskCard {
+    background-color: #ffffff;
+    border: 1px solid #e7ddcd;
+    border-radius: 8px;
+}
+
+ConsoleTaskCard:hover {
+    border: 1px solid #a9743f;
+}
+
+ConsoleTaskCard[state="queued"] {
+    border: 1px dashed #33517a;
+}
+
+ConsoleTaskCard[state="running"] {
+    border: 1px solid #33517a;
+}
+
+ConsoleTaskCard[state="review"] {
+    border: 1px solid #b7791f;
+}
+
+ConsoleTaskCard[state="failed"] {
+    border: 1px solid #b4442f;
+}
+
+/* Task yang sudah dihapus: tinggal riwayat, dibuat kalem */
+ConsoleTaskCard[state="removed"] {
+    background-color: #fbf8f3;
+    border: 1px dashed #d9cdbb;
+}
+
+/* Nama project (coklat muda, seperti tag kategori kartu kanban); kartu Sistem pakai navy muda */
+QLabel#consoleCardProject {
+    background-color: #f2e3d1;
+    color: #8a5a2f;
+    font-size: 10px;
+    font-weight: bold;
+    border-radius: 3px;
+    padding: 1px 6px;
+}
+
+ConsoleTaskCard[kind="system"] QLabel#consoleCardProject {
+    background-color: #e3ebf6;
+    color: #2f4b73;
+    letter-spacing: 0.5px;
+}
+
+QLabel#consoleCardStage {
+    font-size: 10px;
+    font-weight: bold;
+    color: #a9743f;
+    letter-spacing: 0.5px;
+}
+
+/* Pil status di pojok kanan atas kartu (radius maksimal setengah tinggi label, kalau lebih
+   sudutnya malah digambar kotak) */
+QLabel#consoleCardStatus {
+    font-size: 10px;
+    font-weight: bold;
+    border-radius: 6px;
+    padding: 1px 8px;
+}
+
+QLabel#consoleCardStatus[state="running"] {
+    background-color: #33517a;
+    color: #ffffff;
+}
+
+QLabel#consoleCardStatus[state="queued"] {
+    background-color: #e3ebf6;
+    color: #2f4b73;
+}
+
+QLabel#consoleCardStatus[state="review"] {
+    background-color: #fbeccf;
+    color: #7a4a12;
+}
+
+QLabel#consoleCardStatus[state="failed"] {
+    background-color: #f6e0db;
+    color: #9b2c1f;
+}
+
+QLabel#consoleCardStatus[state="done"] {
+    background-color: #e3f0e5;
+    color: #2f7d32;
+}
+
+QLabel#consoleCardStatus[state="removed"] {
+    background-color: #efe9e1;
+    color: #8a7f70;
+}
+
+QLabel#consoleCardTitle {
+    font-size: 12px;
+    font-weight: bold;
+    color: #33517a;
+}
+
+/* Sumber notifikasi terakhir (GIT, GATE, CODER, ...) di depan ringkasannya */
+QLabel#consoleCardTag {
+    font-family: "Cascadia Mono", Consolas, monospace;
+    font-size: 9px;
+    font-weight: bold;
+    color: #a9743f;
+}
+
+QLabel#consoleCardSummary {
+    font-size: 11px;
+    color: #3d3730;
+}
+
+QLabel#consoleCardMeta {
+    font-size: 10px;
+    color: #8a7f70;
+}
+
+QToolButton#btnConsoleCardLog {
+    background: transparent;
+    color: #33517a;
+    border: none;
+    border-radius: 4px;
+    padding: 1px 4px;
+    font-size: 10px;
+    font-weight: bold;
+}
+
+QToolButton#btnConsoleCardLog:hover {
+    background-color: #eef2f8;
+}
+
+/* Log lengkap task: monospace supaya baris tool & path lurus */
+QPlainTextEdit#consoleCardLog {
+    background-color: #fafbfb;
+    border: 1px solid #e5e7eb;
+    border-radius: 4px;
+    font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+    font-size: 10px;
+    color: #1f2937;
 }

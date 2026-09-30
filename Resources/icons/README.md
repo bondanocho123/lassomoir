@@ -42,3 +42,8 @@ Kalau tetap pakai akun gratis, catat sumber tiap ikon di sini supaya nggak lupa 
 | `paperclip.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
 | `close.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
 | `close-white.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
+| `chevron-right.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
+| `chevron-down.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
+| `branch.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
+| `info.svg` | dilampirkan pemilik proyek (PNG 16x16), digambar ulang sebagai SVG; sumber aslinya belum dicatat | - |
+| `signal.svg` | dilampirkan pemilik proyek (PNG 16x16), digambar ulang sebagai SVG; sumber aslinya belum dicatat | - |

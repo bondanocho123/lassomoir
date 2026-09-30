@@ -113,6 +113,11 @@ private slots:
     // Tombol × di popup folder referensi swimlane
     void removeReferenceDirectory(const QString &projectId, const QString &dir);
 
+    // Jendela branch & commit project: dari tombol branch di header swimlane (branch aktif folder
+    // kerja), atau dari "Lihat commit" di drawer task (branch task dibanding branch dasarnya)
+    void showBranchViewer(const QString &projectId, const QString &branch = QString(),
+                          const QString &compareWith = QString());
+
 private:
     Ui::MainWindow *ui;
     const StageCatalog &m_catalog;
@@ -132,7 +137,7 @@ private:
     QSet<QString> m_gitCancelled;
     // Saat memuat dari disk tidak perlu menulis ulang session.json per task
     bool m_loading = false;
-    // Perpindahan yang dipicu pengguna (drag / keputusan review) sudah dicatat pemanggilnya
+    // Perpindahan karena keputusan review sudah dicatat pemanggilnya ([GATE] ...)
     bool m_userMoveInProgress = false;
     // Daftar swimlane yang aktif (Key: projectId, misal "TTT", "spacewar")
     QMap<QString, SwimlaneWidget*> m_swimlanes;
@@ -192,6 +197,10 @@ private:
     QString taskDirectory(const TaskItem &task) const;
     // Baris [GIT] untuk yang sudah dikerjakan dan peringatannya
     void logGitResult(const TaskItem &task, const TaskGit::Result &result);
+    // Notifikasi milik task ke kartu task-nya di panel konsol
+    void logTask(const TaskItem &task, const QString &line);
+    // Status run (antre / berjalan = berkedip / selesai) di kartu kanban dan kartu konsol task
+    void showRunState(const TaskItem &task, RunState state);
     // Buang worktree task (dihapus) di thread pool; branch-nya dibiarkan
     void removeWorktreeLater(const TaskItem &task);
     // Folder kerja tersimpan yang masih ada; kalau tidak ada, tanya pengguna
@@ -204,11 +213,16 @@ private:
     bool addReferenceDirectory(const QString &projectId, const QString &dir);
     // Simpan foto & dokumen dari form task ke folder lampiran task; kembalikan nama yang tersimpan
     QStringList saveAttachments(const TaskItem &task, const QList<TaskAttachments::Draft> &drafts);
+    // Baca branch aktif folder kerja project (git di thread pool) untuk tombol branch di header
+    // swimlane; folder yang jelas bukan repository langsung menyembunyikan tombolnya
+    void refreshGitHead(const QString &projectId);
 
 protected:
     // Tukar icon tombol baris sidebar jadi putih selama kursor berada di atasnya,
     // supaya tetap terbaca di atas background hover yang gelap
     bool eventFilter(QObject *watched, QEvent *event) override;
+    // Jendela kembali aktif: branch folder kerja project yang tampil bisa sudah diganti di luar aplikasi
+    void changeEvent(QEvent *event) override;
 };
 
 #endif // MAINWINDOW_H

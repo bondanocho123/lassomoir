@@ -1,5 +1,6 @@
 #include "KanbanCardWidget.h"
 #include "ui_KanbanCardWidget.h"
+#include "RunPulse.h"
 
 #include <QApplication>
 #include <QContextMenuEvent>
@@ -42,7 +43,8 @@ QString summaryOf(const QString &text, bool *truncated) {
 
 }
 
-KanbanCardWidget::KanbanCardWidget(QWidget *parent) : QWidget(parent), ui(new Ui::KanbanCardWidget){
+KanbanCardWidget::KanbanCardWidget(QWidget *parent)
+    : QWidget(parent), ui(new Ui::KanbanCardWidget), m_pulse(new RunPulse(this)) {
     ui->setupUi(this);
 
     // WA_StyledBackground wajib agar background/border-radius dari styles.qss
@@ -70,6 +72,7 @@ void KanbanCardWidget::setRunState(RunState state) {
         return;
     }
     m_runState = state;
+    m_pulse->setActive(state == RunState::Running);
     refreshStateProperty();
     refreshRunButton();
 }
@@ -242,6 +245,15 @@ void KanbanCardWidget::contextMenuEvent(QContextMenuEvent *event){
 
     menu->popup(event->globalPos());
     event->accept();
+}
+
+void KanbanCardWidget::paintEvent(QPaintEvent *event){
+    QWidget::paintEvent(event);
+    if (m_pulse->isActive()) {
+        QPainter painter(this);
+        // Radius sama dengan border-radius kartu di styles.qss
+        m_pulse->paint(painter, rect(), 10.0);
+    }
 }
 
 void KanbanCardWidget::mouseMoveEvent(QMouseEvent *event){
