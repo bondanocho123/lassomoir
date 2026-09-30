@@ -20,9 +20,6 @@ ConsolePanelWidget::ConsolePanelWidget(QWidget *parent)
     ui->labelLiveIndicator->setPixmap(QIcon(":/icons/signal.svg").pixmap(QSize(kLiveIconSide, kLiveIconSide)));
     ui->labelLiveIndicator->setToolTip(QStringLiteral("Live: notifikasi dan keluaran agent tampil di sini secara langsung"));
     ui->labelLiveIndicator->setAccessibleName(QStringLiteral("Live"));
-
-    connect(ui->lineEditPrompt, &QLineEdit::returnPressed,
-            this, &ConsolePanelWidget::onInputSubmitted);
 }
 
 ConsolePanelWidget::~ConsolePanelWidget()
@@ -109,13 +106,4 @@ void ConsolePanelWidget::promote(ConsoleTaskCard *card) {
     }
     ui->taskListLayout->removeWidget(card);
     ui->taskListLayout->insertWidget(0, card);
-}
-
-void ConsolePanelWidget::onInputSubmitted() {
-    QString cmd = ui->lineEditPrompt->text().trimmed();
-    if (!cmd.isEmpty()) {
-        appendLog("> " + cmd);
-        emit commandSubmitted(cmd);
-        ui->lineEditPrompt->clear();
-    }
 }

@@ -569,13 +569,12 @@ void TestGui::consoleListsTasksAsCards() {
     QCOMPARE(panel->taskId(), QStringLiteral("t3"));
 
     // Pesan di luar task tetap di kartu Sistem, yang ikut naik ke paling atas
-    auto *prompt = m_window->findChild<QLineEdit *>(QStringLiteral("lineEditPrompt"));
-    QVERIFY(prompt);
-    QTest::keyClicks(prompt, QStringLiteral("halo"));
-    QTest::keyClick(prompt, Qt::Key_Return);
+    // Kolom input di bawah panel sudah dihapus: konsol hanya menampilkan notifikasi
+    QVERIFY(!m_window->findChild<QLineEdit *>(QStringLiteral("lineEditPrompt")));
+    console->appendLog(QStringLiteral("[SYSTEM] halo"));
     QCOMPARE(console->cards().first(), system);
-    QVERIFY(system->logText().contains(QStringLiteral("[AGENT ECHO] Command diterima: halo")));
-    QVERIFY(!coder->logText().contains(QStringLiteral("AGENT ECHO")));
+    QVERIFY(system->logText().contains(QStringLiteral("[SYSTEM] halo")));
+    QVERIFY(!coder->logText().contains(QStringLiteral("[SYSTEM] halo")));
 
     // Task dihapus: kartunya tinggal sebagai riwayat, dan kliknya hanya membuka log
     QVERIFY(m_tasks->removeTask(QStringLiteral("t1")));
@@ -1803,28 +1802,37 @@ void TestGui::newTaskChoosesBranchAndPulls() {
     };
     QVERIFY(otherCommitsRilis("v1\n"));
 
-    // "+": branch dipilih paling dulu. Daftarnya dibaca git di latar belakang dan tombol simpan
-    // menunggu; yang aktif terpilih lebih dulu, branch kerja task tidak ikut ditawarkan
+    // "+": branch dipilih paling dulu, lewat label + caret yang membuka menu (bukan combobox).
+    // Daftarnya dibaca git di latar belakang dan tombol simpan menunggu; yang aktif terpilih lebih
+    // dulu, branch kerja task tidak ikut ditawarkan
     driveModalDialog([](QDialog *dialog) {
-        auto *branch = dialog->findChild<QComboBox *>(QStringLiteral("taskFormBranch"));
+        QVERIFY(!dialog->findChild<QComboBox *>(QStringLiteral("taskFormBranch")));
+        auto *branch = dialog->findChild<QPushButton *>(QStringLiteral("taskFormBranch"));
         QVERIFY(branch);
         auto *create = dialog->findChild<QPushButton *>(QStringLiteral("btnTaskFormCreate"));
         dialog->findChild<QLineEdit *>(QStringLiteral("taskFormInput"))->setText(QStringLiteral("Rilis v2"));
         QTRY_VERIFY(branch->isEnabled());
         QVERIFY(create->isEnabled());
+        QMenu *menu = branch->menu();
+        QVERIFY(menu);
         // Branch lokal tampil dulu; rilis menyusul sesudah origin di-fetch di latar belakang
-        QTRY_COMPARE(branch->count(), 3);
+        QTRY_COMPARE(menu->actions().size(), 3);
         QCOMPARE(dialog->findChild<QLabel *>(QStringLiteral("taskFormHint"))->text(),
                  QStringLiteral("Task bercabang dari branch ini. Branch ini di-pull dari origin saat task dibuat "
                                 "dan sebelum setiap run."));
+        const QList<QAction *> actions = menu->actions();
         QStringList items;
-        for (int i = 0; i < branch->count(); ++i) {
-            items.append(branch->itemText(i));
+        for (QAction *action : actions) {
+            items.append(action->text());
         }
         QCOMPARE(items, QStringList({"main (aktif)", "fitur", "origin/rilis"}));
-        QCOMPARE(branch->currentText(), QStringLiteral("main (aktif)"));
-        QVERIFY(branch->itemData(2, Qt::ToolTipRole).toString().contains(QStringLiteral("Baru ada di origin")));
-        branch->setCurrentIndex(branch->findData(QStringLiteral("rilis")));
+        QCOMPARE(branch->text(), QStringLiteral("main (aktif)"));
+        QVERIFY(actions[0]->font().bold());
+        QVERIFY(actions[2]->toolTip().contains(QStringLiteral("Baru ada di origin")));
+        actions[2]->trigger();
+        QCOMPARE(branch->text(), QStringLiteral("origin/rilis"));
+        QVERIFY(actions[2]->font().bold());
+        QVERIFY(!actions[0]->font().bold());
         dialog->findChildren<QComboBox *>(QStringLiteral("taskFormCombo")).at(1)->setCurrentText(QStringLiteral("SPECIFIER"));
         create->click();
     });
@@ -1865,10 +1873,11 @@ void TestGui::newTaskChoosesBranchAndPulls() {
 
     // Branch task sudah dibuat: branch dasarnya tidak bisa diganti lagi lewat form edit
     driveModalDialog([](QDialog *dialog) {
-        auto *branchInput = dialog->findChild<QComboBox *>(QStringLiteral("taskFormBranch"));
+        auto *branchInput = dialog->findChild<QPushButton *>(QStringLiteral("taskFormBranch"));
         QVERIFY(branchInput);
-        QCOMPARE(branchInput->currentText(), QStringLiteral("rilis"));
+        QCOMPARE(branchInput->text(), QStringLiteral("rilis"));
         QVERIFY(!branchInput->isEnabled());
+        QVERIFY(!branchInput->menu());
         dialog->reject();
     });
     QTest::mouseDClick(card(created->id), Qt::LeftButton);

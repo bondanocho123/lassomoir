@@ -28,19 +28,6 @@
 
 #taskListContainer {
     background: transparent;
-}
-
-#lineEditPrompt {
-    background-color: #ffffff;
-    border: 1px solid #d1d5db;
-    border-radius: 4px;
-    padding: 6px 8px;
-    font-size: 11px;
-    color: #111827;
-}
-
-#lineEditPrompt:focus {
-    border: 1px solid #059669;
 }</string>
   </property>
   <layout class="QVBoxLayout" name="verticalLayout">
@@ -128,9 +115,6 @@
       </layout>
      </widget>
     </widget>
-   </item>
-   <item>
-    <widget class="QLineEdit" name="lineEditPrompt"/>
    </item>
   </layout>
  </widget>

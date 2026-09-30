@@ -91,7 +91,6 @@ KanbanCardWidget ──QDrag──► KanbanColumnWidget::dropEvent
 
 SwimlaneWidget::newTaskRequested      ─► MainWindow::handleNewTaskRequested    kartu baru di WAITING
 SwimlaneWidget::closeProjectRequested ─► MainWindow (lambda)                   deleteLater() swimlane
-ConsolePanelWidget::commandSubmitted  ─► MainWindow::handleCommandSubmitted    "[AGENT ECHO] …"
 ```
 
 Konvensi nama sinyal di kode sudah tepat dan dipertahankan: **peristiwa** dalam bentuk lampau (`cardDropped`, `taskAdded`), **permintaan** berakhiran `Requested` (`newTaskRequested`).

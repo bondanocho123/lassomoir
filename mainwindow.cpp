@@ -154,9 +154,6 @@ MainWindow::MainWindow(const StageCatalog &catalog, TaskManager &tasks, SwarmCoo
         ui->mainSplitter->setSizes({180, 820, 350});
     });
 
-    // Sambungkan input teks dari panel konsol kanan
-    connect(ui->consolePanel, &ConsolePanelWidget::commandSubmitted,
-            this, &MainWindow::handleCommandSubmitted);
     // Kartu task di konsol diklik: tampilkan project-nya dan buka hasil agent task itu,
     // sama seperti klik kartunya di board
     connect(ui->consolePanel, &ConsolePanelWidget::taskActivated, this, [this](const QString &taskId) {
@@ -738,14 +735,6 @@ void MainWindow::handleDeleteTaskRequested(const QString &taskId) {
 
     // Kartu, file sesi, dan folder lampiran dibuang oleh handleTaskRemoved()
     m_tasks.removeTask(taskId);
-}
-
-void MainWindow::handleCommandSubmitted(const QString &command) {
-    if (command.toLower() == "clear") {
-        // Handle clear jika diinginkan
-    } else {
-        ui->consolePanel->appendLog("[AGENT ECHO] Command diterima: " + command);
-    }
 }
 
 void MainWindow::loadInitialMockData() {
