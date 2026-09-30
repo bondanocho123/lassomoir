@@ -50,12 +50,8 @@ public:
     QString logText() const;
 
 signals:
-    void commandSubmitted(const QString &command);
     // Kartu task diklik: pengguna ingin melihat task itu
     void taskActivated(const QString &taskId);
-
-private slots:
-    void onInputSubmitted();
 
 private:
     // Kartu task; bila belum ada, dibuat di paling atas daftar

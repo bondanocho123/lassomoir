@@ -569,13 +569,12 @@ void TestGui::consoleListsTasksAsCards() {
     QCOMPARE(panel->taskId(), QStringLiteral("t3"));
 
     // Pesan di luar task tetap di kartu Sistem, yang ikut naik ke paling atas
-    auto *prompt = m_window->findChild<QLineEdit *>(QStringLiteral("lineEditPrompt"));
-    QVERIFY(prompt);
-    QTest::keyClicks(prompt, QStringLiteral("halo"));
-    QTest::keyClick(prompt, Qt::Key_Return);
+    // Kolom input di bawah panel sudah dihapus: konsol hanya menampilkan notifikasi
+    QVERIFY(!m_window->findChild<QLineEdit *>(QStringLiteral("lineEditPrompt")));
+    console->appendLog(QStringLiteral("[SYSTEM] halo"));
     QCOMPARE(console->cards().first(), system);
-    QVERIFY(system->logText().contains(QStringLiteral("[AGENT ECHO] Command diterima: halo")));
-    QVERIFY(!coder->logText().contains(QStringLiteral("AGENT ECHO")));
+    QVERIFY(system->logText().contains(QStringLiteral("[SYSTEM] halo")));
+    QVERIFY(!coder->logText().contains(QStringLiteral("[SYSTEM] halo")));
 
     // Task dihapus: kartunya tinggal sebagai riwayat, dan kliknya hanya membuka log
     QVERIFY(m_tasks->removeTask(QStringLiteral("t1")));

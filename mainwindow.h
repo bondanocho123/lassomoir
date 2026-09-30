@@ -83,9 +83,6 @@ private slots:
     // Slot saat baris project di sidebar dipilih
     void handleProjectSelected(QListWidgetItem *current, QListWidgetItem *previous);
 
-    // Slot saat ada perintah atau pesan dikirim dari ConsolePanel
-    void handleCommandSubmitted(const QString &command);
-
     // Ciutkan / lebarkan panel sidebar
     void toggleSidebar();
 
