@@ -43,6 +43,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QMenuBar>
 #include <QMimeData>
 #include <QPlainTextEdit>
 #include <QPointer>
@@ -177,6 +178,8 @@ private slots:
     void consoleListsTasksAsCards();
     // Penanda Live di kepala konsol berupa ikon sinyal, bukan teks
     void consoleShowsLiveAsSignalIcon();
+    // Menu File / View / Help di baris paling atas jendela, mepet pojok kiri atas
+    void menuBarSitsTopLeft();
 
     // Hover judul atau ikon info di tiap kolom stage memunculkan penjelasan tugas dan fitur stage itu
     // seketika, tanpa berkedip saat kursor berpindah antara keduanya
@@ -602,6 +605,60 @@ void TestGui::consoleShowsLiveAsSignalIcon() {
     const QList<QLabel *> labels = console->findChildren<QLabel *>();
     for (const QLabel *label : labels) {
         QVERIFY2(!label->text().contains(QStringLiteral("Live")), qPrintable(label->text()));
+    }
+}
+
+void TestGui::menuBarSitsTopLeft() {
+    // Tampilan menu bergantung pada styles.qss, yang biasanya tidak dimuat test
+    QFile qss(QStringLiteral(":/styles.qss"));
+    QVERIFY(qss.open(QIODevice::ReadOnly));
+    qApp->setStyleSheet(QString::fromUtf8(qss.readAll()));
+    const auto resetStyle = qScopeGuard([]() { qApp->setStyleSheet(QString()); });
+
+    auto *bar = m_window->findChild<QMenuBar *>(QStringLiteral("topMenuBar"));
+    QVERIFY(bar);
+    // Baris menu jendela itu sendiri: di atas top bar, "File" mepet pojok kiri atas
+    QCOMPARE(m_window->menuWidget(), bar);
+    auto *topBar = m_window->findChild<QWidget *>(QStringLiteral("topNavBar"));
+    QVERIFY(topBar);
+    // Tata letak disusun ulang setelah stylesheet berganti
+    QTRY_VERIFY(bar->isVisible() && topBar->mapTo(m_window.get(), QPoint(0, 0)).y() > bar->geometry().bottom());
+    QCOMPARE(bar->geometry().topLeft(), QPoint(0, 0));
+
+    auto entries = [](const QMenu *menu) {
+        QStringList texts;
+        const QList<QAction *> actions = menu->actions();
+        for (const QAction *action : actions) {
+            texts.append(action->isSeparator() ? QStringLiteral("---") : action->text());
+        }
+        return texts;
+    };
+    const QList<QAction *> menus = bar->actions();
+    QCOMPARE(menus.size(), 3);
+    QCOMPARE(menus.at(0)->text(), QStringLiteral("&File"));
+    QCOMPARE(entries(menus.at(0)->menu()),
+             (QStringList{QStringLiteral("New Project"), QStringLiteral("Close Project"),
+                          QStringLiteral("Remove Project"), QStringLiteral("---"),
+                          QStringLiteral("Agent Access"), QStringLiteral("Exit")}));
+    QCOMPARE(menus.at(1)->text(), QStringLiteral("&View"));
+    QCOMPARE(entries(menus.at(1)->menu()), QStringList{QStringLiteral("Source Control")});
+    QCOMPARE(menus.at(2)->text(), QStringLiteral("&Help"));
+    QCOMPARE(entries(menus.at(2)->menu()),
+             (QStringList{QStringLiteral("Report Issue"), QStringLiteral("Tutorial (Tips && Tricks)"),
+                          QStringLiteral("---"), QStringLiteral("About")}));
+    QCOMPARE(bar->actionGeometry(menus.at(0)).left(), 0);
+
+    // Sorotan hover selebar menunya, juga di menu satu item (View)
+    for (QAction *entry : menus) {
+        QMenu *menu = entry->menu();
+        const QList<QAction *> actions = menu->actions();
+        for (QAction *action : actions) {
+            if (action->isSeparator()) continue;
+            const QRect item = menu->actionGeometry(action);
+            QVERIFY2(menu->sizeHint().width() - 1 - item.right() <= item.left(),
+                     qPrintable(QStringLiteral("%1: item %2..%3, menu %4").arg(action->text())
+                                    .arg(item.left()).arg(item.right()).arg(menu->sizeHint().width())));
+        }
     }
 }
 

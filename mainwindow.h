@@ -151,6 +151,8 @@ private:
     // lebar selama animasi sehingga nilainya harus disimpan dulu
     int m_sidebarMaxWidth = 240;
 
+    // Menu File / View / Help di baris paling atas jendela (tampilan saja, belum ada aksinya)
+    void setupMenuBar();
     // Helper untuk memuat data awal saat aplikasi baru dibuka
     void loadInitialMockData();
     // Muat semua project dari <AppData>/projects; return jumlah project yang dimuat
