@@ -53,6 +53,10 @@ bool TaskManager::updateDetails(const TaskItem &details) {
     it->subtext = details.subtext;
     it->tuning = details.tuning;
     it->attachments = details.attachments;
+    // Branch dasar hanya bisa diganti selama branch task belum dibuat
+    if (it->branch.isEmpty()) {
+        it->branch.base = details.branch.base;
+    }
     emit taskChanged(*it);
     return true;
 }

@@ -578,6 +578,7 @@ void MainWindow::handleCardMoved(const QString &projectId, KanbanCardWidget *car
 
 void MainWindow::handleNewTaskRequested(const QString &projectId) {
     NewTaskDialog dialog(projectId, m_catalog, this);
+    dialog.loadBranches(m_fileManager->workingDirectory(projectId));
     if (dialog.exec() != QDialog::Accepted) {
         return;
     }
@@ -596,6 +597,7 @@ void MainWindow::handleNewTaskRequested(const QString &projectId) {
     m_tasks.addTask(item);
 
     logTask(item, QString("[TASK CREATED] %1 -> %2: '%3'").arg(projectId, item.stage, item.title));
+    pullBaseLater(item);
 }
 
 void MainWindow::handleEditTaskRequested(const QString &projectId, const QString &taskId) {
@@ -603,6 +605,7 @@ void MainWindow::handleEditTaskRequested(const QString &projectId, const QString
     if (!task) return;
 
     NewTaskDialog dialog(*task, m_fileManager->attachmentDirectory(projectId, taskId), m_catalog, this);
+    dialog.loadBranches(m_fileManager->workingDirectory(projectId));
     if (dialog.exec() != QDialog::Accepted) {
         return;
     }
@@ -615,6 +618,34 @@ void MainWindow::handleEditTaskRequested(const QString &projectId, const QString
     }
 
     logTask(item, QString("[TASK EDITED] %1 -> %2: '%3'").arg(projectId, item.stage, item.title));
+    const std::optional<TaskItem> edited = m_tasks.task(taskId);
+    if (edited && edited->branch.base != task->branch.base) {
+        pullBaseLater(*edited);
+    }
+}
+
+void MainWindow::pullBaseLater(const TaskItem &task) {
+    const QString projectDir = m_fileManager->workingDirectory(task.projectId);
+    if (task.branch.base.isEmpty() || !task.branch.isEmpty() || !TaskGit::looksLikeRepository(projectDir)) {
+        return;
+    }
+
+    // Run task ini ditolak selama pull berjalan: run-nya sendiri pull ke ref yang sama
+    m_gitBusy.insert(task.id);
+    logTask(task, RunLogFormatter::gitLine(task, QString("pull %1 dari origin…").arg(task.branch.base)));
+    auto *watcher = new QFutureWatcher<TaskGit::Result>(this);
+    connect(watcher, &QFutureWatcher<TaskGit::Result>::finished, this, [this, watcher, task]() {
+        watcher->deleteLater();
+        m_gitBusy.remove(task.id);
+        const TaskGit::Result result = watcher->result();
+        logGitResult(task, result);
+        if (!result.error.isEmpty()) {
+            logTask(task, RunLogFormatter::gitLine(task, QStringLiteral("gagal: ") + result.error));
+        }
+        // Branch dasar yang sedang aktif di folder kerja ikut maju: commit di tombol header berubah
+        refreshGitHead(task.projectId);
+    });
+    watcher->setFuture(QtConcurrent::run(&TaskGit::pull, projectDir, task.branch.base));
 }
 
 QStringList MainWindow::saveAttachments(const TaskItem &task, const QList<TaskAttachments::Draft> &drafts) {
@@ -983,23 +1014,27 @@ void MainWindow::handleRunRequested(const QString &projectId, const QString &tas
     // Folder tanpa .git dicek tanpa proses, jadi run di folder biasa tetap langsung jalan.
     const StageProfile *profile = m_catalog.profile(task.stage);
     const bool runnable = profile && profile->agent() && m_swarm.state(taskId) == RunState::Idle;
-    const bool usesBranch = !task.branch.isEmpty()
-                            || (TaskGit::startsBranch(task, m_catalog) && TaskGit::looksLikeRepository(workingDirectory));
-    const bool handoff = TaskGit::isHandoffStage(task.stage);
-    const bool attached = task.branch.hasWorktree() && QFileInfo::exists(task.branch.worktree);
-    if (!runnable || !usesBranch || (attached && !handoff)) {
+    if (!runnable || (task.branch.isEmpty() && !TaskGit::looksLikeRepository(workingDirectory))) {
         startAgentRun(task, taskDirectory(task));
         return;
     }
 
-    // Branch/worktree dibuat atau dipasang lagi, dan di QA kodenya di-commit + push dulu. Checkout
-    // dan push bisa lambat, jadi git jalan di thread pool; selama itu kartu tampil antre.
+    // Selalu pull dulu supaya agent bekerja di kode terbaru; branch/worktree dibuat atau dipasang
+    // lagi, dan di QA kodenya di-commit + push. Fetch, checkout, dan push bisa lambat, jadi git
+    // jalan di thread pool; selama itu kartu tampil antre.
+    const bool branched = !task.branch.isEmpty() || TaskGit::startsBranch(task, m_catalog);
+    const bool handoff = TaskGit::isHandoffStage(task.stage);
+    const bool attached = task.branch.hasWorktree() && QFileInfo::exists(task.branch.worktree);
     m_gitBusy.insert(taskId);
     m_gitCancelled.remove(taskId);
     showRunState(task, RunState::Queued);
-    logTask(task, RunLogFormatter::gitLine(
-        task, handoff ? QStringLiteral("menyerahkan kode ke QA: commit + push…")
-                      : QStringLiteral("menyiapkan branch & worktree…")));
+    QString step = QStringLiteral("pull dari origin sebelum run…");
+    if (handoff) {
+        step = QStringLiteral("pull, lalu serahkan kode ke QA: commit + push…");
+    } else if (branched && !attached) {
+        step = QStringLiteral("pull, lalu siapkan branch & worktree…");
+    }
+    logTask(task, RunLogFormatter::gitLine(task, step));
 
     const QString worktreePath = m_fileManager->worktreeDirectory(projectId, taskId);
     auto *watcher = new QFutureWatcher<TaskGit::Result>(this);
@@ -1007,18 +1042,7 @@ void MainWindow::handleRunRequested(const QString &projectId, const QString &tas
         watcher->deleteLater();
         finishRunPreparation(task, watcher->result());
     });
-    watcher->setFuture(QtConcurrent::run([workingDirectory, worktreePath, task, handoff]() {
-        TaskGit::Result result = TaskGit::ensureWorktree(workingDirectory, worktreePath, task);
-        if (!result.error.isEmpty() || result.skipped || !handoff) {
-            return result;
-        }
-        TaskItem prepared = task;
-        prepared.branch = result.branch;
-        TaskGit::Result handed = TaskGit::handoff(prepared);
-        handed.log = result.log + handed.log;
-        handed.warnings = result.warnings + handed.warnings;
-        return handed;
-    }));
+    watcher->setFuture(QtConcurrent::run(&TaskGit::prepareRun, workingDirectory, worktreePath, task, branched, handoff));
 }
 
 void MainWindow::finishRunPreparation(const TaskItem &requested, const TaskGit::Result &result) {
@@ -1036,6 +1060,8 @@ void MainWindow::finishRunPreparation(const TaskItem &requested, const TaskGit::
         return;
     }
     logGitResult(*current, result);
+    // Pull bisa memajukan branch yang aktif di folder kerja project
+    refreshGitHead(current->projectId);
     if (result.branch != current->branch) {
         m_tasks.setBranch(requested.id, result.branch);
     }

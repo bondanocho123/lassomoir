@@ -499,6 +499,12 @@ QLabel#taskFormFieldLabel {
     letter-spacing: 0.5px;
 }
 
+/* Keterangan kecil di bawah input, mis. akibat pilihan branch */
+QLabel#taskFormHint {
+    color: #8a7f70;
+    font-size: 10px;
+}
+
 QLineEdit#taskFormInput {
     background-color: #ffffff;
     border: 1px solid #d1d5db;
@@ -512,7 +518,7 @@ QLineEdit#taskFormInput:focus {
     border: 1px solid #a9743f;
 }
 
-QComboBox#taskFormCombo {
+QComboBox#taskFormCombo, QComboBox#taskFormBranch {
     background-color: #ffffff;
     border: 1px solid #d1d5db;
     border-radius: 4px;
@@ -521,16 +527,22 @@ QComboBox#taskFormCombo {
     color: #111827;
 }
 
-QComboBox#taskFormCombo:focus {
+QComboBox#taskFormCombo:focus, QComboBox#taskFormBranch:focus {
     border: 1px solid #a9743f;
 }
 
-QComboBox#taskFormCombo::drop-down {
+/* Pesan pengganti daftar branch (memuat, bukan repository, ...) */
+QComboBox#taskFormBranch:disabled {
+    background-color: #faf6f0;
+    color: #8a7f70;
+}
+
+QComboBox#taskFormCombo::drop-down, QComboBox#taskFormBranch::drop-down {
     border: none;
     width: 20px;
 }
 
-QComboBox#taskFormCombo::down-arrow {
+QComboBox#taskFormCombo::down-arrow, QComboBox#taskFormBranch::down-arrow {
     image: none;
     width: 0;
     height: 0;
@@ -540,7 +552,7 @@ QComboBox#taskFormCombo::down-arrow {
     border-top: 5px solid #8a7f70;
 }
 
-QComboBox#taskFormCombo QAbstractItemView {
+QComboBox#taskFormCombo QAbstractItemView, QComboBox#taskFormBranch QAbstractItemView {
     background-color: #ffffff;
     border: 1px solid #d1d5db;
     outline: none;

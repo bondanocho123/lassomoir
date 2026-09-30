@@ -288,8 +288,11 @@ void ResponseDrawer::showTask(const TaskItem &task, RunState runState, const QSt
                          ? QStringLiteral("Branch %1 dari %2").arg(task.branch.name, task.branch.base)
                          : QStringLiteral("Di-merge ke %1 @ %2 (branch %3)")
                                .arg(task.branch.base, task.branch.mergedCommit, task.branch.name);
+    } else if (!task.branch.base.isEmpty()) {
+        branchText = QStringLiteral("Dari branch %1; branch task dibuat saat run agent pertama").arg(task.branch.base);
     }
     m_branch->setText(branchText);
+    m_branchHistory->setVisible(!task.branch.isEmpty());
     m_branch->setToolTip(task.branch.hasWorktree()
                              ? QStringLiteral("Worktree: %1").arg(QDir::toNativeSeparators(task.branch.worktree))
                              : QString());

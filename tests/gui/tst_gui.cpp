@@ -206,6 +206,8 @@ private slots:
     // Alur git: CODER di worktree -> QA (commit + push) -> dikembalikan -> QA lagi -> disetujui
     // tanpa merge (branch dibiarkan untuk di-PR manual)
     void qaFlowCommitsPushesWithoutMerging();
+    // Form New Task: pilih branch dasar (termasuk yang baru ada di origin) -> di-pull; run pull lagi
+    void newTaskChoosesBranchAndPulls();
     void maintainabilityViewShowsCSharpMembers();
     void umlTabShowsClassAndAgentDiagrams();
     // Perubahan dua kolom (sebelum | sesudah) yang sejajar dan digulir bersamaan
@@ -330,7 +332,8 @@ ResponseDrawer *TestGui::drawer() const {
 void TestGui::finishSpecifierRun(const QString &document) {
     const int before = int(m_runtime.sessions.size());
     runButton(QStringLiteral("t3"))->click();
-    QCOMPARE(int(m_runtime.sessions.size()), before + 1);
+    // Folder kerja yang repository git di-pull dulu (thread pool); folder biasa langsung jalan
+    QTRY_COMPARE(int(m_runtime.sessions.size()), before + 1);
     AgentResult result = successResult(document);
     result.durationMs = 84000;
     result.totalTokens = 302000;
@@ -1592,10 +1595,10 @@ void TestGui::coderDrawerShowsCodeChanges() {
                 ->toPlainText().contains(QStringLiteral("Run gagal (error_max_turns)")));
     QTRY_COMPARE(files->topLevelItemCount(), 2);
 
-    // Dicoba lagi dan sukses: worktree sudah terpasang, jadi run langsung jalan di sana; kartu maju
-    // ke CLEANER, dan drawer yang mengikutinya tidak punya tab diff
+    // Dicoba lagi dan sukses: worktree sudah terpasang, jadi run jalan di sana (sesudah pull); kartu
+    // maju ke CLEANER, dan drawer yang mengikutinya tidak punya tab diff
     runButton(QStringLiteral("t1"))->click();
-    QCOMPARE(int(m_runtime.sessions.size()), 2);
+    QTRY_COMPARE(int(m_runtime.sessions.size()), 2);
     QCOMPARE(m_runtime.sessions.last()->launch().workingDirectory, workPath);
     m_runtime.sessions.last()->finishWith(successResult(QStringLiteral("Selesai")));
     QCOMPARE(m_tasks->task(QStringLiteral("t1"))->stage, QStringLiteral("CLEANER"));
@@ -1641,6 +1644,7 @@ void TestGui::qaFlowCommitsPushesWithoutMerging() {
     // ▶ CODER: branch + worktree dibuat dulu dari main, lalu agent jalan di worktree itu
     runButton(QStringLiteral("t5"))->click();
     QTRY_COMPARE_WITH_TIMEOUT(int(m_runtime.sessions.size()), 1, kGitTimeoutMs);
+    QVERIFY(consoleText().contains(QStringLiteral("[GIT] Demo/Tambah login pull main: sudah terbaru")));
     const TaskBranch branch = m_tasks->task(QStringLiteral("t5"))->branch;
     QCOMPARE(branch.name, QStringLiteral("lassomoir/t5-tambah-login"));
     QCOMPARE(branch.base, QStringLiteral("main"));
@@ -1680,9 +1684,11 @@ void TestGui::qaFlowCommitsPushesWithoutMerging() {
     QCOMPARE(m_tasks->task(QStringLiteral("t5"))->stage, QStringLiteral("CODER"));
     QCOMPARE(card(QStringLiteral("t5"))->badge(), QStringLiteral("✓ 1 · ↺ 1"));
 
-    // Kartu yang sama dikerjakan lagi di worktree yang sama; sukses langsung kembali ke QA
+    // Kartu yang sama dikerjakan lagi di worktree yang sama (branch task di-pull dulu); sukses
+    // langsung kembali ke QA
     runButton(QStringLiteral("t5"))->click();
-    QCOMPARE(int(m_runtime.sessions.size()), 3);   // worktree sudah terpasang: tanpa menunggu git
+    QTRY_COMPARE_WITH_TIMEOUT(int(m_runtime.sessions.size()), 3, kGitTimeoutMs);
+    QVERIFY(consoleText().contains(QStringLiteral("[GIT] Demo/Tambah login pull lassomoir/t5-tambah-login: sudah terbaru")));
     QCOMPARE(m_runtime.sessions.last()->launch().workingDirectory, worktree);
     QVERIFY(m_runtime.sessions.last()->launch().prompt.contains(QStringLiteral("# Hasil stage sebelumnya (QA)")));
     QVERIFY(writeFile(worktree + QStringLiteral("/login.txt"), "form\nvalidasi\n"));
@@ -1757,6 +1763,120 @@ void TestGui::qaFlowCommitsPushesWithoutMerging() {
     QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo::exists(otherWorktree), kGitTimeoutMs);
     QVERIFY(runGit(dir.path(), {QStringLiteral("show-ref"), QStringLiteral("--verify"), QStringLiteral("--quiet"),
                                 QStringLiteral("refs/heads/lassomoir/t6-hapus-saya")}));
+}
+
+void TestGui::newTaskChoosesBranchAndPulls() {
+    if (QStandardPaths::findExecutable(QStringLiteral("git")).isEmpty()) {
+        QSKIP("git tidak ada di PATH");
+    }
+    const GitSandbox sandbox;
+    constexpr int kGitTimeoutMs = 20000;
+
+    // Folder kerja project Demo: repository di main dengan branch lokal fitur (dan branch kerja task
+    // lama); rekan kerja sudah push branch rilis yang belum ada di lokal
+    const QDir dir(m_workDir.path());
+    auto removeRepository = qScopeGuard([dir]() {
+        QDir(dir.filePath(QStringLiteral(".git"))).removeRecursively();
+        QFile::remove(dir.filePath(QStringLiteral("hello.txt")));
+    });
+    QTemporaryDir remote;
+    const QString origin = QDir(remote.path()).filePath(QStringLiteral("origin.git"));
+    const QString other = QDir(remote.path()).filePath(QStringLiteral("rekan"));
+    QVERIFY(runGit(remote.path(), {QStringLiteral("init"), QStringLiteral("-q"), QStringLiteral("--bare"), origin}));
+    QVERIFY(runGit(dir.path(), {QStringLiteral("init"), QStringLiteral("-q"), QStringLiteral("-b"), QStringLiteral("main")}));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("hello.txt")), "halo\n"));
+    QVERIFY(runGit(dir.path(), {QStringLiteral("add"), QStringLiteral("-A")}));
+    QVERIFY(runGit(dir.path(), {QStringLiteral("commit"), QStringLiteral("-q"), QStringLiteral("-m"), QStringLiteral("awal")}));
+    QVERIFY(runGit(dir.path(), {QStringLiteral("remote"), QStringLiteral("add"), QStringLiteral("origin"), origin}));
+    QVERIFY(runGit(dir.path(), {QStringLiteral("push"), QStringLiteral("-q"), QStringLiteral("-u"), QStringLiteral("origin"),
+                                QStringLiteral("main")}));
+    QVERIFY(runGit(dir.path(), {QStringLiteral("branch"), QStringLiteral("fitur")}));
+    QVERIFY(runGit(dir.path(), {QStringLiteral("branch"), QStringLiteral("lassomoir/1-task-lama")}));
+    QVERIFY(runGit(remote.path(), {QStringLiteral("clone"), QStringLiteral("-q"), origin, other}));
+    QVERIFY(runGit(other, {QStringLiteral("switch"), QStringLiteral("-q"), QStringLiteral("-c"), QStringLiteral("rilis"),
+                           QStringLiteral("origin/main")}));
+    auto otherCommitsRilis = [other](const QByteArray &content) {
+        return writeFile(other + QStringLiteral("/rilis.txt"), content)
+               && runGit(other, {QStringLiteral("add"), QStringLiteral("-A")})
+               && runGit(other, {QStringLiteral("commit"), QStringLiteral("-q"), QStringLiteral("-m"), QStringLiteral("rilis")})
+               && runGit(other, {QStringLiteral("push"), QStringLiteral("-q"), QStringLiteral("origin"), QStringLiteral("rilis")});
+    };
+    QVERIFY(otherCommitsRilis("v1\n"));
+
+    // "+": branch dipilih paling dulu. Daftarnya dibaca git di latar belakang dan tombol simpan
+    // menunggu; yang aktif terpilih lebih dulu, branch kerja task tidak ikut ditawarkan
+    driveModalDialog([](QDialog *dialog) {
+        auto *branch = dialog->findChild<QComboBox *>(QStringLiteral("taskFormBranch"));
+        QVERIFY(branch);
+        auto *create = dialog->findChild<QPushButton *>(QStringLiteral("btnTaskFormCreate"));
+        dialog->findChild<QLineEdit *>(QStringLiteral("taskFormInput"))->setText(QStringLiteral("Rilis v2"));
+        QTRY_VERIFY(branch->isEnabled());
+        QVERIFY(create->isEnabled());
+        // Branch lokal tampil dulu; rilis menyusul sesudah origin di-fetch di latar belakang
+        QTRY_COMPARE(branch->count(), 3);
+        QCOMPARE(dialog->findChild<QLabel *>(QStringLiteral("taskFormHint"))->text(),
+                 QStringLiteral("Task bercabang dari branch ini. Branch ini di-pull dari origin saat task dibuat "
+                                "dan sebelum setiap run."));
+        QStringList items;
+        for (int i = 0; i < branch->count(); ++i) {
+            items.append(branch->itemText(i));
+        }
+        QCOMPARE(items, QStringList({"main (aktif)", "fitur", "origin/rilis"}));
+        QCOMPARE(branch->currentText(), QStringLiteral("main (aktif)"));
+        QVERIFY(branch->itemData(2, Qt::ToolTipRole).toString().contains(QStringLiteral("Baru ada di origin")));
+        branch->setCurrentIndex(branch->findData(QStringLiteral("rilis")));
+        dialog->findChildren<QComboBox *>(QStringLiteral("taskFormCombo")).at(1)->setCurrentText(QStringLiteral("SPECIFIER"));
+        create->click();
+    });
+    m_window->findChild<QPushButton *>(QStringLiteral("btnProjectNewTask"))->click();
+    QVERIFY(m_dialogSeen);
+
+    std::optional<TaskItem> created;
+    for (const TaskItem &task : m_tasks->tasksForProject(QStringLiteral("Demo"))) {
+        if (task.title == QLatin1String("Rilis v2")) {
+            created = task;
+        }
+    }
+    QVERIFY(created);
+    QCOMPARE(created->branch.base, QStringLiteral("rilis"));
+    QVERIFY(created->branch.isEmpty());   // branch task baru dibuat saat run pertama
+
+    // Branch yang dipilih langsung di-pull: branch lokalnya dibuat dari origin
+    QVERIFY(consoleText().contains(QStringLiteral("[GIT] Demo/Rilis v2 pull rilis dari origin…")));
+    QTRY_VERIFY_WITH_TIMEOUT(consoleText().contains(QStringLiteral("[GIT] Demo/Rilis v2 pull rilis: branch lokal dibuat dari origin/rilis")),
+                             kGitTimeoutMs);
+    QCOMPARE(GitSandbox::output(dir.path(), {QStringLiteral("rev-parse"), QStringLiteral("rilis")}),
+             GitSandbox::output(origin, {QStringLiteral("rev-parse"), QStringLiteral("rilis")}));
+
+    // Rekan kerja push lagi. ▶ SPECIFIER: pull dulu, lalu agent membaca rilis terbaru di worktree
+    // task sendiri, bukan main yang aktif di folder kerja project
+    QVERIFY(otherCommitsRilis("v2\n"));
+    const int before = int(m_runtime.sessions.size());
+    runButton(created->id)->click();
+    QTRY_COMPARE_WITH_TIMEOUT(int(m_runtime.sessions.size()), before + 1, kGitTimeoutMs);
+    const TaskBranch branch = m_tasks->task(created->id)->branch;
+    QCOMPARE(branch.base, QStringLiteral("rilis"));
+    QVERIFY(branch.name.startsWith(QStringLiteral("lassomoir/")));
+    QCOMPARE(m_runtime.sessions.last()->launch().workingDirectory, branch.worktree);
+    QCOMPARE(readFile(branch.worktree + QStringLiteral("/rilis.txt")), QByteArray("v2\n"));
+    QVERIFY(consoleText().contains(QStringLiteral("[GIT] Demo/Rilis v2 pull rilis: 1 commit baru dari origin")));
+    QCOMPARE(GitSandbox::output(dir.path(), {QStringLiteral("branch"), QStringLiteral("--show-current")}), QStringLiteral("main"));
+    m_runtime.sessions.last()->finishWith(successResult(QStringLiteral("# Spek rilis v2")));
+
+    // Branch task sudah dibuat: branch dasarnya tidak bisa diganti lagi lewat form edit
+    driveModalDialog([](QDialog *dialog) {
+        auto *branchInput = dialog->findChild<QComboBox *>(QStringLiteral("taskFormBranch"));
+        QVERIFY(branchInput);
+        QCOMPARE(branchInput->currentText(), QStringLiteral("rilis"));
+        QVERIFY(!branchInput->isEnabled());
+        dialog->reject();
+    });
+    QTest::mouseDClick(card(created->id), Qt::LeftButton);
+    QVERIFY(m_dialogSeen);
+
+    // Worktree task dibuang sebelum folder sementara dihapus
+    QVERIFY(m_tasks->removeTask(created->id));
+    QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo::exists(branch.worktree), kGitTimeoutMs);
 }
 
 void TestGui::maintainabilityViewShowsCSharpMembers() {

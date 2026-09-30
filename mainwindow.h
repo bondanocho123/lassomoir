@@ -130,8 +130,8 @@ private:
     SplitterPaneAnimator *m_drawerAnimator = nullptr;
     // Nomor permintaan diff terbaru; hanya jawabannya yang ditampilkan di drawer
     int m_diffRequest = 0;
-    // Task yang sedang menunggu git (worktree, commit + push ke QA, merge); run dan keputusan
-    // berikutnya ditolak sampai selesai
+    // Task yang sedang menunggu git (pull, worktree, commit + push ke QA); run berikutnya ditolak
+    // sampai selesai
     QSet<QString> m_gitBusy;
     // Tombol stop ditekan selagi git menyiapkan run: agent tidak dijalankan sesudahnya
     QSet<QString> m_gitCancelled;
@@ -186,9 +186,12 @@ private:
     void openDrawer(const QString &taskId);
     // Segarkan drawer bila sedang menampilkan task ini
     void refreshDrawer(const TaskItem &task);
-    // Tombol ▶ diklik: pastikan folder kerja ada, siapkan branch/worktree task (dan di QA: commit +
-    // push) bila perlu, lalu serahkan ke SwarmCoordinator
+    // Tombol ▶ diklik: pastikan folder kerja ada, pull dulu (folder kerja di repository git), siapkan
+    // branch/worktree task (dan di QA: commit + push) bila perlu, lalu serahkan ke SwarmCoordinator
     void handleRunRequested(const QString &projectId, const QString &taskId);
+    // Task baru (atau yang branch dasarnya diganti) langsung pull branch dasarnya di thread pool;
+    // hasilnya dicatat di kartu konsol task. Gagal tidak menghalangi apa pun: run tetap pull lagi.
+    void pullBaseLater(const TaskItem &task);
     // Baca lampiran & folder referensi lalu jalankan agent di folder itu; false bila ditolak
     bool startAgentRun(const TaskItem &task, const QString &workingDirectory);
     // Git selesai menyiapkan run task (requested = data saat ▶ diklik)
