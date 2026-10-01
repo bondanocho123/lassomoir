@@ -40,6 +40,7 @@
 #include <QFontDatabase>
 #include <QGraphicsView>
 #include <QImage>
+#include <QInputDialog>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -48,6 +49,7 @@
 #include <QListWidget>
 #include <QMenu>
 #include <QMenuBar>
+#include <QMessageBox>
 #include <QMimeData>
 #include <QPlainTextEdit>
 #include <QPointer>
@@ -59,11 +61,13 @@
 #include <QScrollBar>
 #include <QSet>
 #include <QSplitter>
+#include <QStackedWidget>
 #include <QStandardPaths>
 #include <QTabBar>
 #include <QTemporaryDir>
 #include <QTextBlock>
 #include <QTextBrowser>
+#include <QThreadPool>
 #include <QTimer>
 #include <QToolButton>
 #include <QTreeWidget>
@@ -185,6 +189,14 @@ private slots:
     void consoleShowsLiveAsSignalIcon();
     // Menu File / View / Help di baris paling atas jendela, mepet pojok kiri atas
     void menuBarSitsTopLeft();
+    // File > New Project: tanya nama, buat project + session.json, tampilkan di board
+    void fileMenuCreatesProject();
+    // File > Close Project: project yang tampil ditutup, datanya tetap di disk
+    void fileMenuClosesProject();
+    // File > Remove Project: setelah konfirmasi, project hilang dari UI sekaligus dari disk
+    void fileMenuRemovesProject();
+    // View > Source Control: jendela branch & commit project yang tampil (folder kerja repository git)
+    void viewMenuOpensSourceControl();
 
     // Hover judul atau ikon info di tiap kolom stage memunculkan penjelasan tugas dan fitur stage itu
     // seketika, tanpa berkedip saat kursor berpindah antara keduanya
@@ -257,6 +269,12 @@ private slots:
     void preferencesChangesFont();
 
 private:
+    // Item menu File berdasarkan objectName-nya (actionNewProject / actionCloseProject / actionRemoveProject)
+    QAction *fileAction(const QString &name) const;
+    // Sidebar dan project yang tampil di board
+    QListWidget *projectList() const;
+    QString shownProject() const;
+    QString projectFile(const QString &projectId) const;
     // Dialog notice runtime yang sedang tampil; nullptr bila tidak ada
     QDialog *runtimeNotice() const;
     // Dialog modal membuka event loop sendiri di dalam handler klik; timer ini jalan di loop itu
@@ -703,6 +721,227 @@ void TestGui::menuBarSitsTopLeft() {
                                     .arg(item.left()).arg(item.right()).arg(menu->sizeHint().width())));
         }
     }
+}
+
+QAction *TestGui::fileAction(const QString &name) const {
+    return m_window->findChild<QAction *>(name);
+}
+
+QListWidget *TestGui::projectList() const {
+    return m_window->findChild<QListWidget *>(QStringLiteral("projectList"));
+}
+
+QString TestGui::shownProject() const {
+    auto *stack = m_window->findChild<QStackedWidget *>(QStringLiteral("boardStack"));
+    auto *swimlane = stack ? qobject_cast<SwimlaneWidget *>(stack->currentWidget()) : nullptr;
+    return swimlane ? swimlane->projectId() : QString();
+}
+
+QString TestGui::projectFile(const QString &projectId) const {
+    return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+        + QStringLiteral("/projects/%1/session.json").arg(projectId);
+}
+
+void TestGui::fileMenuCreatesProject() {
+    QAction *create = fileAction(QStringLiteral("actionNewProject"));
+    QVERIFY(create);
+    QListWidget *list = projectList();
+    QVERIFY(list);
+    QCOMPARE(list->count(), 1);
+
+    const auto enterName = [this, create](const QString &name) {
+        driveModalDialog([name](QDialog *dialog) {
+            qobject_cast<QInputDialog *>(dialog)->setTextValue(name);
+            dialog->accept();
+        });
+        create->trigger();
+        QVERIFY(m_dialogSeen);
+    };
+
+    // Dibatalkan, atau nama kosong: tidak ada yang dibuat
+    driveModalDialog([](QDialog *dialog) { dialog->reject(); });
+    create->trigger();
+    QVERIFY(m_dialogSeen);
+    QCOMPARE(list->count(), 1);
+    enterName(QStringLiteral("   "));
+    QCOMPARE(list->count(), 1);
+
+    enterName(QStringLiteral("  Baru  "));
+    QCOMPARE(list->count(), 2);
+    // Nama dipangkas, project baru langsung tampil di board dan terpilih di sidebar
+    QCOMPARE(shownProject(), QStringLiteral("Baru"));
+    QCOMPARE(list->currentItem()->data(Qt::UserRole).toString(), QStringLiteral("Baru"));
+    QVERIFY(consoleText().contains(QStringLiteral("[SYSTEM] Project swimlane baru dibuat: Baru")));
+    QTRY_VERIFY(QFileInfo::exists(projectFile(QStringLiteral("Baru"))));
+
+    // Nama yang sudah dipakai tidak menggandakan project, hanya menampilkannya
+    enterName(QStringLiteral("Demo"));
+    QCOMPARE(list->count(), 2);
+    QCOMPARE(shownProject(), QStringLiteral("Demo"));
+    QVERIFY(consoleText().contains(QStringLiteral("Project 'Demo' sudah ada.")));
+
+    // Dibuka lagi: project baru ikut termuat dari disk
+    m_window.reset();
+    m_tasks.reset();
+    createWindow();
+    QCOMPARE(projectList()->count(), 2);
+}
+
+void TestGui::fileMenuClosesProject() {
+    QAction *close = fileAction(QStringLiteral("actionCloseProject"));
+    QMenu *menu = qobject_cast<QMenu *>(close ? close->parent() : nullptr);
+    QVERIFY(menu);
+    QCOMPARE(shownProject(), QStringLiteral("Demo"));
+
+    // Menu dibuka saat ada project yang tampil: item aktif
+    menu->aboutToShow();
+    QVERIFY(close->isEnabled());
+
+    close->trigger();
+    QCOMPARE(projectList()->count(), 0);
+    QVERIFY(shownProject().isEmpty());
+    QTRY_VERIFY(m_window->findChildren<KanbanCardWidget *>().isEmpty());
+    QVERIFY2(consoleText().contains(QStringLiteral("[SYSTEM] Swimlane 'Demo' ditutup.")), qPrintable(consoleText()));
+    // Beda dengan Remove: datanya tetap ada, project muncul lagi saat aplikasi dibuka
+    QVERIFY(QFileInfo::exists(projectFile(QStringLiteral("Demo"))));
+
+    // Board kosong: tidak ada yang bisa ditutup atau dihapus
+    menu->aboutToShow();
+    QVERIFY(!close->isEnabled());
+    QVERIFY(!fileAction(QStringLiteral("actionRemoveProject"))->isEnabled());
+
+    m_window.reset();
+    m_tasks.reset();
+    createWindow();
+    QVERIFY(card(QStringLiteral("t1")));
+}
+
+void TestGui::fileMenuRemovesProject() {
+    QAction *remove = fileAction(QStringLiteral("actionRemoveProject"));
+    QMenu *menu = qobject_cast<QMenu *>(remove ? remove->parent() : nullptr);
+    QVERIFY(menu);
+    // Project kedua di disk: Remove hanya boleh menyentuh project yang tampil
+    driveModalDialog([](QDialog *dialog) {
+        qobject_cast<QInputDialog *>(dialog)->setTextValue(QStringLiteral("Lain"));
+        dialog->accept();
+    });
+    fileAction(QStringLiteral("actionNewProject"))->trigger();
+    QVERIFY(m_dialogSeen);
+    QTRY_VERIFY(QFileInfo::exists(projectFile(QStringLiteral("Lain"))));
+    m_window->setActiveProject(QStringLiteral("Demo"));
+    QCOMPARE(shownProject(), QStringLiteral("Demo"));
+
+    menu->aboutToShow();
+    QVERIFY(remove->isEnabled());
+
+    // Project yang tampil masih punya agent berjalan: ikut dihentikan
+    runButton(QStringLiteral("t1"))->click();
+    QVERIFY(m_runtime.sessions.first()->isRunning());
+
+    // Batal (atau tutup dialog): tidak ada yang berubah
+    const auto answer = [this, remove](const QString &button) {
+        driveModalDialog([button](QDialog *dialog) {
+            auto *box = qobject_cast<QMessageBox *>(dialog);
+            QVERIFY(box);
+            QVERIFY(box->text().contains(QStringLiteral("Hapus project \"Demo\"?")));
+            const QList<QAbstractButton *> buttons = box->buttons();
+            for (QAbstractButton *candidate : buttons) {
+                if (candidate->text() == button) {
+                    candidate->click();
+                }
+            }
+        });
+        remove->trigger();
+        QVERIFY(m_dialogSeen);
+    };
+    answer(QStringLiteral("Batal"));
+    QCOMPARE(projectList()->count(), 2);
+    QVERIFY(QFileInfo::exists(projectFile(QStringLiteral("Demo"))));
+    QVERIFY(m_runtime.sessions.first()->isRunning());
+
+    // Enter di dialog = "Batal": default-nya bukan tombol penghapus
+    driveModalDialog([](QDialog *dialog) {
+        auto *box = qobject_cast<QMessageBox *>(dialog);
+        QVERIFY(box);
+        QVERIFY(box->defaultButton());
+        QCOMPARE(box->defaultButton()->text(), QStringLiteral("Batal"));
+        QVERIFY(box->escapeButton() == box->defaultButton());
+        box->defaultButton()->click();
+    });
+    remove->trigger();
+    QVERIFY(m_dialogSeen);
+    QCOMPARE(projectList()->count(), 2);
+
+    answer(QStringLiteral("Ya"));
+    QCOMPARE(projectList()->count(), 1);
+    QVERIFY(!m_runtime.sessions.first()->isRunning());
+    QTRY_VERIFY(!card(QStringLiteral("t1")));
+    QVERIFY2(consoleText().contains(QStringLiteral("[SYSTEM] Project 'Demo' dihapus permanen.")),
+             qPrintable(consoleText()));
+    QVERIFY(!QFileInfo::exists(projectFile(QStringLiteral("Demo"))));
+    // Project lain tidak tersentuh dan gantian tampil di board
+    QCOMPARE(shownProject(), QStringLiteral("Lain"));
+    QVERIFY(QFileInfo::exists(projectFile(QStringLiteral("Lain"))));
+
+    // Dibuka lagi: Demo tidak kembali
+    m_window.reset();
+    m_tasks.reset();
+    createWindow();
+    QCOMPARE(projectList()->count(), 1);
+    QCOMPARE(shownProject(), QStringLiteral("Lain"));
+    QVERIFY(!card(QStringLiteral("t1")));
+}
+
+void TestGui::viewMenuOpensSourceControl() {
+    if (QStandardPaths::findExecutable(QStringLiteral("git")).isEmpty()) {
+        QSKIP("git tidak ada di PATH");
+    }
+    const GitSandbox sandbox;
+    constexpr int kGitTimeoutMs = 20000;
+
+    QAction *sourceControl = fileAction(QStringLiteral("actionSourceControl"));
+    QMenu *menu = qobject_cast<QMenu *>(sourceControl ? sourceControl->parent() : nullptr);
+    QVERIFY(menu);
+
+    // Folder kerja belum repository git: tidak ada riwayat untuk dilihat
+    menu->aboutToShow();
+    QVERIFY(!sourceControl->isEnabled());
+
+    const QDir dir(m_workDir.path());
+    auto removeRepository = qScopeGuard([dir]() {
+        // Git yang masih membaca repository (thread pool) ditunggu dulu supaya foldernya bisa dihapus
+        QThreadPool::globalInstance()->waitForDone(kGitTimeoutMs);
+        QDir(dir.filePath(QStringLiteral(".git"))).removeRecursively();
+        QFile::remove(dir.filePath(QStringLiteral("hello.txt")));
+    });
+    QVERIFY(runGit(dir.path(), {QStringLiteral("init"), QStringLiteral("-q"), QStringLiteral("-b"), QStringLiteral("main")}));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("hello.txt")), "a\n"));
+    QVERIFY(runGit(dir.path(), {QStringLiteral("add"), QStringLiteral("-A")}));
+    QVERIFY(runGit(dir.path(), {QStringLiteral("commit"), QStringLiteral("-q"), QStringLiteral("-m"), QStringLiteral("awal")}));
+
+    menu->aboutToShow();
+    QVERIFY(sourceControl->isEnabled());
+
+    // Jendela yang sama dengan tombol branch di header swimlane, dimulai dari branch yang aktif
+    sourceControl->trigger();
+    QPointer<BranchViewer> viewer = BranchViewer::find(QStringLiteral("Demo"), m_window.get());
+    QVERIFY(viewer && viewer->isVisible());
+    QCOMPARE(viewer->windowTitle(), QStringLiteral("Branch & commit — Demo"));
+    QTRY_COMPARE_WITH_TIMEOUT(viewer->branch(), QStringLiteral("main"), kGitTimeoutMs);
+    auto *list = viewer->findChild<QTreeWidget *>(QStringLiteral("branchCommitList"));
+    QVERIFY(list);
+    QTRY_COMPARE_WITH_TIMEOUT(list->topLevelItemCount(), 1, kGitTimeoutMs);
+    QCOMPARE(list->topLevelItem(0)->text(0), QStringLiteral("awal"));
+
+    // Dipilih lagi: jendela yang sudah terbuka dimunculkan, bukan jendela kedua
+    sourceControl->trigger();
+    QCOMPARE(m_window->findChildren<BranchViewer *>().size(), 1);
+
+    // Project ditutup: jendelanya ikut tertutup dan item menunya mati
+    fileAction(QStringLiteral("actionCloseProject"))->trigger();
+    QTRY_VERIFY(!viewer || !viewer->isVisible());
+    menu->aboutToShow();
+    QVERIFY(!sourceControl->isEnabled());
 }
 
 void TestGui::stageColumnsExplainThemselves() {
