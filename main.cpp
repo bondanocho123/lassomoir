@@ -3,6 +3,7 @@
 #include <QThreadPool>
 
 #include "mainwindow.h" // Gunakan "mainwindow.h" jika tanpa subfolder
+#include "AppFonts.h"
 #include "ClaudeCodeRuntime.h"
 #include "EdgeMermaidRenderer.h"
 #include "PromptComposer.h"
@@ -17,7 +18,10 @@ int main(int argc, char *argv[])
     QCoreApplication::setApplicationName("Lassomoir");
     a.setWindowIcon(QIcon(":/app.ico"));
 
-    // 1. Muat stylesheet global; mode terang/gelap mengikuti Windows, juga saat aplikasi berjalan
+    // 1. Font tertanam + font pilihan pengguna (bawaan: Garamond dari styles.qss), lalu stylesheet
+    //    global; mode terang/gelap mengikuti Windows, juga saat aplikasi berjalan
+    AppFonts::registerBundled();
+    Theme::setUiFontFamily(AppFonts::saved());
     Theme::install(a);
 
     // 2. Rakit dependensi. Urutan deklarasi penting: objek dihancurkan terbalik, jadi jendela

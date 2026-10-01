@@ -47,6 +47,11 @@ QPalette palette();
 // Stylesheet terang -> stylesheet untuk scheme
 QString styleSheetFor(const QString &lightStyleSheet, Scheme scheme);
 
+// Font antarmuka pilihan pengguna (lihat AppFonts); kosong = font bawaan styles.qss.
+// Berlaku pada apply() berikutnya. Font monospace (log, diff) dan wordmark tidak ikut berganti.
+void setUiFontFamily(const QString &family);
+QString uiFontFamily();
+
 // Muat :/styles.qss (+ :/styles-dark.qss di mode gelap) ke aplikasi, dan pasang ulang setiap
 // kali mode sistem berubah. Kembalikan false bila stylesheet tidak terbaca.
 bool install(QApplication &app);
