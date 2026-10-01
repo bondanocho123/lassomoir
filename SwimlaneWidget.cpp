@@ -19,6 +19,11 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 
+namespace {
+// Lebar tetap tiap kolom stage (px logis)
+constexpr int kColumnWidth = 300;
+}
+
 SwimlaneWidget::SwimlaneWidget(const QString &projectId, const StageCatalog &catalog, QWidget *parent)
     : QWidget(parent),
     ui(new Ui::SwimlaneWidget),
@@ -291,7 +296,7 @@ void SwimlaneWidget::initializeColumns(const StageCatalog &catalog) {
     const QStringList stages = catalog.keys();
     for (const QString &stage : stages) {
         auto *colWidget = new KanbanColumnWidget(this);
-        colWidget->setFixedWidth(400);
+        colWidget->setFixedWidth(kColumnWidth);
         colWidget->setStageName(stage);
         colWidget->setStageInfo(StageInfo::html(catalog, stage));
 

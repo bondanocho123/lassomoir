@@ -192,6 +192,9 @@ private slots:
     void consoleShowsLiveAsSignalIcon();
     // Menu File / View / Help di baris paling atas jendela, mepet pojok kiri atas
     void menuBarSitsTopLeft();
+    // Menu atas mengilap dengan garis bawah 1px; sidebar dan panel konsol berlatar sama (krem latar
+    // yang lebih tua, mengilap) dan bergaris tepi 1px
+    void chromeIsGlossyWithHairlines();
     // File > New Project: tanya nama, buat project + session.json, tampilkan di board
     void fileMenuCreatesProject();
     // File > Close Project: project yang tampil ditutup, datanya tetap di disk
@@ -204,6 +207,8 @@ private slots:
     // Hover judul atau ikon info di tiap kolom stage memunculkan penjelasan tugas dan fitur stage itu
     // seketika, tanpa berkedip saat kursor berpindah antara keduanya
     void stageColumnsExplainThemselves();
+    // Kolom stage selebar 300px (3/4 dari 400px semula)
+    void stageColumnsAreThreeQuartersWide();
 
     void cardShowsHandCursor();
     void workingDirButtonShowsIconAndCaption();
@@ -743,6 +748,54 @@ void TestGui::menuBarSitsTopLeft() {
     }
 }
 
+void TestGui::chromeIsGlossyWithHairlines() {
+    QFile qss(QStringLiteral(":/styles.qss"));
+    QVERIFY(qss.open(QIODevice::ReadOnly));
+    qApp->setStyleSheet(QString::fromUtf8(qss.readAll()));
+    const auto resetStyle = qScopeGuard([]() { qApp->setStyleSheet(QString()); });
+
+    auto *bar = m_window->findChild<QMenuBar *>(QStringLiteral("topMenuBar"));
+    auto *sidebar = m_window->findChild<QWidget *>(QStringLiteral("sidebarPanel"));
+    ConsolePanelWidget *console = consolePanel();
+    QVERIFY(bar && sidebar && console);
+    QTest::qWait(50);   // ukuran splitter awal sudah diterapkan
+    QTRY_VERIFY(sidebar->isVisible() && console->isVisible() && sidebar->height() == console->height());
+
+    const QImage image = m_window->grab().toImage();
+    auto lightness = [this, &image](const QWidget *widget, const QPoint &local) {
+        return image.pixelColor(widget->mapTo(m_window.get(), local)).lightness();
+    };
+    auto color = [this, &image](const QWidget *widget, const QPoint &local) {
+        return image.pixelColor(widget->mapTo(m_window.get(), local));
+    };
+    const int page = QColor(QStringLiteral("#f8f4ee")).lightness();
+
+    // Menu atas: di kanan item menu, separuh atas lebih terang dari separuh bawah, dan baris
+    // terbawahnya garis pembatas yang lebih tua dari keduanya
+    const int barX = bar->width() - 10;
+    const int barTop = lightness(bar, QPoint(barX, 1));
+    const int barLow = lightness(bar, QPoint(barX, bar->height() - 4));
+    const int barRule = lightness(bar, QPoint(barX, bar->height() - 1));
+    QVERIFY2(barTop > barLow, qPrintable(QStringLiteral("%1 vs %2").arg(barTop).arg(barLow)));
+    QVERIFY2(barRule < barLow, qPrintable(QStringLiteral("%1 vs %2").arg(barRule).arg(barLow)));
+
+    // Sidebar dan panel konsol: latar sama persis, lebih tua dari latar halaman, dengan kilau di atas
+    const int middle = sidebar->height() / 2;
+    QCOMPARE(color(sidebar, QPoint(4, middle)), color(console, QPoint(4, middle)));
+    QCOMPARE(color(sidebar, QPoint(4, sidebar->height() - 12)), color(console, QPoint(4, console->height() - 12)));
+    QVERIFY2(lightness(sidebar, QPoint(4, middle)) < page, qPrintable(color(sidebar, QPoint(4, middle)).name()));
+    QVERIFY(lightness(sidebar, QPoint(12, 2)) > lightness(sidebar, QPoint(4, middle)));
+    QVERIFY(lightness(console, QPoint(12, 2)) > lightness(console, QPoint(4, middle)));
+
+    // Garis tepi 1px: piksel terluar lebih tua dari isi panel, piksel berikutnya sudah isi panel
+    for (const QWidget *panel : {sidebar, static_cast<QWidget *>(console)}) {
+        const int inside = lightness(panel, QPoint(4, middle));
+        QVERIFY2(lightness(panel, QPoint(0, middle)) < inside, qPrintable(panel->objectName()));
+        QVERIFY2(lightness(panel, QPoint(panel->width() - 1, middle)) < inside, qPrintable(panel->objectName()));
+        QCOMPARE(color(panel, QPoint(1, middle)), color(panel, QPoint(4, middle)));
+    }
+}
+
 QAction *TestGui::fileAction(const QString &name) const {
     return m_window->findChild<QAction *>(name);
 }
@@ -1093,6 +1146,17 @@ void TestGui::driveNextModalDialog(std::function<void(QDialog *)> action) {
         }
     });
     safety->start(5000);
+}
+
+void TestGui::stageColumnsAreThreeQuartersWide() {
+    auto *swimlane = m_window->findChild<SwimlaneWidget *>();
+    QVERIFY(swimlane);
+    for (const QString &key : m_catalog.keys()) {
+        KanbanColumnWidget *column = swimlane->column(key);
+        QVERIFY2(column, qPrintable(key));
+        QCOMPARE(column->minimumWidth(), 300);
+        QCOMPARE(column->maximumWidth(), 300);
+    }
 }
 
 void TestGui::cardShowsHandCursor() {

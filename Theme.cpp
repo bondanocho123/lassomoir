@@ -56,12 +56,16 @@ const QHash<QRgb, QRgb> &fillMap() {
         {0xfbf8f3, 0x1b2433}, {0xfafbfb, 0x1b2433}, {0xf8f4ee, 0x1b2433},
         // Bilah samping & atas
         {0xf7f9f8, 0x1e2839},
+        // Panel samping (sidebar, konsol): gradasi kilau -> badan -> dasar, sedikit lebih tua dari latar
+        {0xf9f5ee, 0x222d41}, {0xf1eadf, 0x19212f}, {0xeae2d4, 0x161d2a},
+        // Menu atas mengilap: kilau, separuh atas, separuh bawah, dasar
+        {0xfdfbf8, 0x2c3a54}, {0xf3ede4, 0x222d41}, {0xece5d9, 0x1c2637}, {0xf0e9de, 0x1f2a3c},
         // Kolom stage & kanvas diagram
         {0xf1e8da, 0x263247}, {0xece5da, 0x263247},
         // Hover lembut
         {0xf8f1e6, 0x2a3650}, {0xf6f1e9, 0x2a3650},
         // Coklat muda (tag, hover, terpilih) -> amber redup
-        {0xf2e3d1, 0x3d3529},
+        {0xf2e3d1, 0x3d3529}, {0xe6d3ba, 0x473c2c},
         // Navy muda
         {0xe3ebf6, 0x2a3954}, {0xeef2f8, 0x2a3954}, {0xdfe7f2, 0x2a3954},
         // Garis tepi
