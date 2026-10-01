@@ -244,7 +244,7 @@ void MainWindow::setupMenuBar() {
         m_actionRemoveProject->setEnabled(hasProject);
     });
     file->addSeparator();
-    file->addAction("Agent Access");
+    file->addAction("Integrations");
     // Pengaturan aplikasi (sementara: ganti font antarmuka)
     QAction *preferences = file->addAction("Preferences…");
     preferences->setObjectName("actionPreferences");
