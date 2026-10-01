@@ -39,6 +39,8 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QListWidgetItem>
+#include <QMenu>
+#include <QMenuBar>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSize>
@@ -140,17 +142,19 @@ MainWindow::MainWindow(const StageCatalog &catalog, TaskManager &tasks, SwarmCoo
     m_sidebarMinWidth = ui->sidebarPanel->minimumWidth();
     m_sidebarMaxWidth = ui->sidebarPanel->maximumWidth();
 
-    // Wordmark aplikasi di header: teks bergaya Latin/serif menggantikan logo gambar
+    // Wordmark aplikasi di header: teks bergaya Latin/serif menggantikan logo gambar.
+    // Ukurannya mengikuti ikon sidebar di sebelahnya: huruf kapitalnya setinggi kotak ikon itu.
     ui->labelAppName->setText("L'Assommoir");
     QFont brandFont("Garamond");
     brandFont.setStyleHint(QFont::Serif);
     brandFont.setItalic(true);
-    brandFont.setPointSize(19);
+    brandFont.setPixelSize(20);
     brandFont.setWeight(QFont::DemiBold);
     brandFont.setLetterSpacing(QFont::AbsoluteSpacing, 0.5);
     ui->labelAppName->setFont(brandFont);
     ui->labelAppName->setStyleSheet("color: #a9743f;");
     ui->labelAppName->setToolTip("L'Assommoir");
+    setupMenuBar();
     ui->rootVerticalLayout->setStretch(1,1);
     QTimer::singleShot(0, this, [this]() {
         // sidebar : board : console, boleh disesuaikan
@@ -214,6 +218,37 @@ MainWindow::MainWindow(const StageCatalog &catalog, TaskManager &tasks, SwarmCoo
     } else {
         ui->boardStack->setCurrentIndex(0);
     }
+}
+
+void MainWindow::setupMenuBar() {
+    // Menu utama di baris paling atas jendela, mepet pojok kiri atas (di atas top bar).
+    // Baru tampilannya: aksi-aksinya belum disambungkan ke apa pun.
+    auto *menuBar = new QMenuBar(this);
+    menuBar->setObjectName("topMenuBar");
+    setMenuBar(menuBar);
+
+    auto addMenu = [menuBar](const QString &title) {
+        QMenu *menu = menuBar->addMenu(title);
+        menu->setObjectName("topMenu");
+        return menu;
+    };
+
+    QMenu *file = addMenu("&File");
+    file->addAction("New Project");
+    file->addAction("Close Project");
+    file->addAction("Remove Project");
+    file->addSeparator();
+    file->addAction("Agent Access");
+    file->addAction("Exit");
+
+    QMenu *view = addMenu("&View");
+    view->addAction("Source Control");
+
+    QMenu *help = addMenu("&Help");
+    help->addAction("Report Issue");
+    help->addAction("Tutorial (Tips && Tricks)");
+    help->addSeparator();
+    help->addAction("About");
 }
 
 int MainWindow::loadProjectsFromDisk() {

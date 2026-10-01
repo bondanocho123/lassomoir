@@ -40,8 +40,14 @@
       </property>
       <property name="styleSheet">
        <string notr="true">
+#topNavBar {
 background-color: #f7f9f8;
 border-bottom: 1px solid #d3d8d5;
+}
+#btnGlobalNewProject {
+background-color: #f7f9f8;
+border-bottom: 1px solid #d3d8d5;
+}
        </string>
       </property>
       <layout class="QHBoxLayout" name="navLayout">
