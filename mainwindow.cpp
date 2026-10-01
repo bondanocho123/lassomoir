@@ -11,6 +11,7 @@
 #include "AppFonts.h"
 #include "ElidedLabel.h"
 #include "FileManager.h"
+#include "FolderLauncher.h"
 #include "FontPickerDialog.h"
 #include "IntegrationsDialog.h"
 #include "NewTaskDialog.h"
@@ -34,6 +35,7 @@
 #include <QInputDialog>
 #include <QAbstractAnimation>
 #include <QAction>
+#include <QCursor>
 #include <QEasingCurve>
 #include <QEvent>
 #include <QFont>
@@ -89,6 +91,11 @@ QString failureDetail(const TaskItem &task) {
     }
     return detail;
 }
+
+// Lebar rel yang tersisa saat sidebar disembunyikan: tombol sidebar (22px) + 8px kiri-kanan
+constexpr int kSidebarRailWidth = 38;
+// Selang pemeriksaan kursor selama sidebar tampil sementara
+constexpr int kSidebarPeekPollMs = 120;
 
 }
 
@@ -148,21 +155,9 @@ MainWindow::MainWindow(const StageCatalog &catalog, TaskManager &tasks, SwarmCoo
     // Simpan lebar minimum asli sidebar (dari .ui) sebelum animasi bisa mengubahnya
     m_sidebarMinWidth = ui->sidebarPanel->minimumWidth();
     m_sidebarMaxWidth = ui->sidebarPanel->maximumWidth();
+    setupSidebarRail();
 
-    // Wordmark aplikasi di header: teks bergaya Latin/serif menggantikan logo gambar.
-    // Ukurannya mengikuti ikon sidebar di sebelahnya: huruf kapitalnya setinggi kotak ikon itu.
-    ui->labelAppName->setText("L'Assommoir");
-    QFont brandFont("Garamond");
-    brandFont.setStyleHint(QFont::Serif);
-    brandFont.setItalic(true);
-    brandFont.setPixelSize(20);
-    brandFont.setWeight(QFont::DemiBold);
-    brandFont.setLetterSpacing(QFont::AbsoluteSpacing, 0.5);
-    ui->labelAppName->setFont(brandFont);
-    ui->labelAppName->setStyleSheet("color: #a9743f;");
-    ui->labelAppName->setToolTip("L'Assommoir");
     setupMenuBar();
-    ui->rootVerticalLayout->setStretch(1,1);
     QTimer::singleShot(0, this, [this]() {
         // sidebar : board : console, boleh disesuaikan
         ui->mainSplitter->setSizes({180, 820, 350});
@@ -189,13 +184,11 @@ MainWindow::MainWindow(const StageCatalog &catalog, TaskManager &tasks, SwarmCoo
     connect(ui->projectList, &QListWidget::currentItemChanged,
             this, &MainWindow::handleProjectSelected);
 
-    // Tombol hamburger untuk menciutkan / melebarkan sidebar; ikon dari .ui diganti versi yang ikut tema
+    // Tombol sidebar di pojok kanan atas panel, sejajar judul PROJECTS; ikon dari .ui diganti versi
+    // yang ikut tema
     ui->btnToggleSidebar->setIcon(Theme::icon(":/icons/sidebar.svg"));
     connect(ui->btnToggleSidebar, &QPushButton::clicked,
             this, &MainWindow::toggleSidebar);
-
-    // Tombol global New Project di top bar
-    connect(ui->btnGlobalNewProject, &QPushButton::clicked, this, &MainWindow::handleNewProjectRequested);
 
     // Prioritaskan data tersimpan; mock hanya dipakai bila belum ada project di disk
     if (loadProjectsFromDisk() == 0) {
@@ -211,9 +204,9 @@ MainWindow::MainWindow(const StageCatalog &catalog, TaskManager &tasks, SwarmCoo
 }
 
 void MainWindow::setupMenuBar() {
-    // Menu utama di baris paling atas jendela, mepet pojok kiri atas (di atas top bar).
-    // Yang tersambung: File > New / Close / Remove Project / Integrations / Preferences dan
-    // View > Source Control; item lainnya belum ada aksinya.
+    // Menu utama di baris paling atas jendela, mepet pojok kiri atas.
+    // Yang tersambung: File > New / Close / Remove Project / Integrations / Preferences dan semua
+    // item View; item lainnya belum ada aksinya.
     auto *menuBar = new QMenuBar(this);
     menuBar->setObjectName("topMenuBar");
     setMenuBar(menuBar);
@@ -253,6 +246,7 @@ void MainWindow::setupMenuBar() {
     QAction *preferences = file->addAction("Preferences…");
     preferences->setObjectName("actionPreferences");
     connect(preferences, &QAction::triggered, this, &MainWindow::showFontPicker);
+    file->addSeparator();
     file->addAction("Exit");
 
     // Jendela branch & commit project yang tampil, sama dengan tombol branch di header swimlane.
@@ -262,10 +256,29 @@ void MainWindow::setupMenuBar() {
         showBranchViewer(m_activeProjectId);
     });
     m_actionSourceControl->setObjectName("actionSourceControl");
+    // Folder kerja project yang tampil: buka di File Explorer atau di terminal, dan ganti foldernya
+    // (sama dengan tombol folder di header swimlane). Id dioper sebagai salinan, lihat File di atas.
+    m_actionShowInExplorer = view->addAction("Show in Explorer", this, [this]() {
+        revealWorkingDirectory(QString(m_activeProjectId), FolderTarget::Explorer);
+    });
+    m_actionShowInExplorer->setObjectName("actionShowInExplorer");
+    m_actionShowInTerminal = view->addAction("Show in Terminal", this, [this]() {
+        revealWorkingDirectory(QString(m_activeProjectId), FolderTarget::Terminal);
+    });
+    m_actionShowInTerminal->setObjectName("actionShowInTerminal");
+    view->addSeparator();
+    m_actionChangeFolder = view->addAction("Change Folder…", this, [this]() {
+        chooseWorkingDirectory(QString(m_activeProjectId));
+    });
+    m_actionChangeFolder->setObjectName("actionChangeFolder");
     connect(view, &QMenu::aboutToShow, this, [this]() {
-        m_actionSourceControl->setEnabled(
-            !m_activeProjectId.isEmpty()
-            && TaskGit::looksLikeRepository(m_fileManager->workingDirectory(m_activeProjectId)));
+        const bool hasProject = !m_activeProjectId.isEmpty();
+        const QString dir = hasProject ? m_fileManager->workingDirectory(m_activeProjectId) : QString();
+        const bool hasFolder = !dir.isEmpty() && QDir(dir).exists();
+        m_actionSourceControl->setEnabled(hasProject && TaskGit::looksLikeRepository(dir));
+        m_actionShowInExplorer->setEnabled(hasFolder);
+        m_actionShowInTerminal->setEnabled(hasFolder);
+        m_actionChangeFolder->setEnabled(hasProject);
     });
 
     QMenu *help = addMenu("&Help");
@@ -407,6 +420,14 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
     if (watched == ui->projectList->viewport() && event->type() == QEvent::Resize) {
         // Dijadwalkan sesudah QListView selesai menata ulang kotak item untuk lebar yang baru
         QTimer::singleShot(0, this, [this]() { fitProjectRowsToList(); });
+    }
+
+    if ((watched == m_sidebarRail || watched == ui->mainSplitter)
+        && (event->type() == QEvent::Resize || event->type() == QEvent::Move)) {
+        syncSidebarGeometry();
+    }
+    if (watched == m_btnShowSidebar && event->type() == QEvent::Enter) {
+        showSidebarPeek();
     }
 
     auto *btn = qobject_cast<QPushButton*>(watched);
@@ -574,13 +595,108 @@ void MainWindow::handleProjectSelected(QListWidgetItem *current, QListWidgetItem
     setActiveProject(current->data(Qt::UserRole).toString());
 }
 
+void MainWindow::setupSidebarRail() {
+    m_sidebarRail = new QWidget;
+    m_sidebarRail->setObjectName("sidebarRail");
+    m_sidebarRail->setMinimumWidth(m_sidebarMinWidth);
+    m_sidebarRail->setMaximumWidth(m_sidebarMaxWidth);
+
+    // Kembaran btnToggleSidebar: tetap terlihat selama sidebar disembunyikan, di ketinggian yang sama
+    m_btnShowSidebar = new QPushButton(m_sidebarRail);
+    m_btnShowSidebar->setObjectName("btnShowSidebar");
+    m_btnShowSidebar->setIcon(Theme::icon(":/icons/sidebar.svg"));
+    m_btnShowSidebar->setIconSize(ui->btnToggleSidebar->iconSize());
+    m_btnShowSidebar->setFixedSize(ui->btnToggleSidebar->maximumSize());
+    m_btnShowSidebar->setCursor(Qt::PointingHandCursor);
+    m_btnShowSidebar->setToolTip("Pasang kembali daftar project");
+    m_btnShowSidebar->hide();
+    m_btnShowSidebar->installEventFilter(this);
+    connect(m_btnShowSidebar, &QPushButton::clicked, this, &MainWindow::toggleSidebar);
+
+    auto *railLayout = new QVBoxLayout(m_sidebarRail);
+    railLayout->setContentsMargins(0, ui->sidebarLayout->contentsMargins().top(), 0, 0);
+    railLayout->addWidget(m_btnShowSidebar, 0, Qt::AlignHCenter);
+    railLayout->addStretch(1);
+
+    // Rel menggantikan sidebarPanel di splitter; panelnya pindah ke atas contentWidget dan
+    // mengikuti geometri rel lewat eventFilter(), jadi batas lebarnya kini milik rel
+    ui->mainSplitter->replaceWidget(0, m_sidebarRail);
+    ui->sidebarPanel->setParent(ui->contentWidget);
+    ui->sidebarPanel->setMinimumWidth(0);
+    ui->sidebarPanel->setMaximumWidth(QWIDGETSIZE_MAX);
+    ui->sidebarPanel->show();
+    m_sidebarRail->installEventFilter(this);
+    ui->mainSplitter->installEventFilter(this);
+
+    m_sidebarPeekTimer = new QTimer(this);
+    m_sidebarPeekTimer->setInterval(kSidebarPeekPollMs);
+    connect(m_sidebarPeekTimer, &QTimer::timeout, this, &MainWindow::hideSidebarPeekIfLeft);
+}
+
+int MainWindow::dockedSidebarWidth() const {
+    return qBound(m_sidebarMinWidth, m_savedSidebarWidth, m_sidebarMaxWidth);
+}
+
+void MainWindow::syncSidebarGeometry() {
+    if (!m_sidebarRail) return;
+
+    QRect rect(m_sidebarRail->mapTo(ui->contentWidget, QPoint(0, 0)), m_sidebarRail->size());
+    if (m_sidebarPeeking) {
+        // Tepat di atas tepi kiri board: di kanan rel, melewati handle splitter
+        rect.moveLeft(rect.right() + 1 + ui->mainSplitter->handleWidth());
+        rect.setWidth(dockedSidebarWidth());
+    } else if (m_sidebarHeldWidth > rect.width()) {
+        rect.setWidth(m_sidebarHeldWidth);
+    }
+    ui->sidebarPanel->setGeometry(rect);
+}
+
 void MainWindow::toggleSidebar() {
-    animateSidebar(!ui->sidebarPanel->isVisible());
+    animateSidebar(!m_sidebarDocked);
+}
+
+void MainWindow::showSidebarPeek() {
+    const bool animating = m_sidebarAnimation && m_sidebarAnimation->state() == QAbstractAnimation::Running;
+    if (m_sidebarDocked || m_sidebarPeeking || animating) return;
+
+    m_sidebarPeeking = true;
+    m_sidebarPeekMisses = 0;
+    // Selama tampil sementara, tombol di pojok sidebar memasangnya kembali (sama dengan tombol rel)
+    ui->btnToggleSidebar->setToolTip(m_btnShowSidebar->toolTip());
+    syncSidebarGeometry();
+    ui->sidebarPanel->show();
+    ui->sidebarPanel->raise();
+    m_sidebarPeekTimer->start();
+}
+
+void MainWindow::hideSidebarPeekIfLeft() {
+    if (!m_sidebarPeeking) {
+        m_sidebarPeekTimer->stop();
+        return;
+    }
+
+    // Rel + sidebar dihitung satu area, supaya celah di antara keduanya tidak menutup sidebar.
+    // Popup konfirmasi hapus menempel di tombol baris project: selama popup itu terbuka, sidebar
+    // (anchor-nya) ikut bertahan.
+    const QRect area = ui->sidebarPanel->geometry().united(
+        QRect(m_sidebarRail->mapTo(ui->contentWidget, QPoint(0, 0)), m_sidebarRail->size()));
+    if (area.contains(ui->contentWidget->mapFromGlobal(QCursor::pos())) || QApplication::activePopupWidget()) {
+        m_sidebarPeekMisses = 0;
+        return;
+    }
+    // Baru ditutup setelah dua pemeriksaan berturut-turut di luar: kursor yang meleset sebentar
+    // tidak langsung menghilangkan sidebar
+    if (++m_sidebarPeekMisses < 2) return;
+
+    m_sidebarPeekTimer->stop();
+    m_sidebarPeeking = false;
+    ui->sidebarPanel->hide();
 }
 
 void MainWindow::animateSidebar(bool opening) {
     // Interupsi animasi sebelumnya (mis. tombol diklik cepat berulang) agar
     // sidebar melanjutkan geseran dari posisi saat ini, bukan melompat.
+    const bool interrupted = m_sidebarAnimation && m_sidebarAnimation->state() == QAbstractAnimation::Running;
     if (m_sidebarAnimation) {
         m_sidebarAnimation->stop();
     }
@@ -592,28 +708,39 @@ void MainWindow::animateSidebar(bool opening) {
     const int sidebarBoardWidth = sizes.at(0) + sizes.at(1);
     const int consoleWidth = sizes.at(2);
 
-    // Selalu mulai dari lebar sidebar saat ini agar animasi yang diinterupsi
-    // melanjutkan geseran, bukan melompat balik ke 0
+    // Selalu mulai dari lebar rel saat ini agar animasi yang diinterupsi
+    // melanjutkan geseran, bukan melompat balik
     const int startWidth = sizes.at(0);
     int endWidth;
 
-    // Lebar digiring lewat maximumWidth, bukan cuma minimumWidth: QSplitter
-    // tetap menahan panel di minimumSizeHint layout-nya (~118px) sehingga sidebar
-    // mentok di situ lalu melompat ke 0 saat disembunyikan (terlihat seperti resize 2x)
-    ui->sidebarPanel->setMinimumWidth(0);
+    // Lebar digiring lewat maximumWidth rel; sidebarPanel mengikutinya (lihat eventFilter)
+    m_sidebarRail->setMinimumWidth(kSidebarRailWidth);
+    QSplitterHandle *handle = ui->mainSplitter->handle(1);
 
     if (opening) {
-        endWidth = qBound(m_sidebarMinWidth, m_savedSidebarWidth, m_sidebarMaxWidth);
+        endWidth = dockedSidebarWidth();
 
-        // Kunci ke lebar awal sebelum panel di-show, kalau tidak splitter sempat
-        // memberinya lebar penuh dulu lalu animasi membukanya lagi
-        ui->sidebarPanel->setMaximumWidth(startWidth);
-        ui->sidebarPanel->setVisible(true);
-        ui->mainSplitter->setSizes({startWidth, qMax(0, sidebarBoardWidth - startWidth), consoleWidth});
+        // Sidebar yang sedang tampil sementara langsung jadi sidebar terpasang: lebarnya ditahan
+        // selama rel melebar di bawahnya, jadi isinya tidak menciut dulu ke lebar rel
+        m_sidebarHeldWidth = m_sidebarPeeking ? endWidth : 0;
+        m_sidebarPeeking = false;
+        m_sidebarPeekTimer->stop();
+
+        m_btnShowSidebar->hide();
+        ui->btnToggleSidebar->setToolTip("Sembunyikan daftar project");
+        handle->setEnabled(true);
+        handle->setCursor(Qt::SplitHCursor);
+        syncSidebarGeometry();
+        ui->sidebarPanel->show();
+        ui->sidebarPanel->raise();
     } else {
-        m_savedSidebarWidth = startWidth;
-        endWidth = 0;
+        // Animasi buka yang dipotong belum sampai lebar penuh: lebar tersimpan yang lama tetap berlaku
+        if (!interrupted) {
+            m_savedSidebarWidth = startWidth;
+        }
+        endWidth = kSidebarRailWidth;
     }
+    m_sidebarDocked = opening;
 
     auto *animation = new QVariantAnimation(this);
     animation->setStartValue(startWidth);
@@ -625,18 +752,25 @@ void MainWindow::animateSidebar(bool opening) {
             [this, sidebarBoardWidth, consoleWidth](const QVariant &value) {
         const int sidebarWidth = value.toInt();
         const int boardWidth = qMax(0, sidebarBoardWidth - sidebarWidth);
-        ui->sidebarPanel->setMaximumWidth(sidebarWidth);
+        m_sidebarRail->setMaximumWidth(sidebarWidth);
         ui->mainSplitter->setSizes({sidebarWidth, boardWidth, consoleWidth});
     });
 
-    connect(animation, &QVariantAnimation::finished, this, [this, opening]() {
-        // Sembunyikan dulu baru kembalikan batasan lebar; urutan sebaliknya
-        // membuat splitter melebarkan sidebar sesaat sebelum panel hilang
-        if (!opening) {
-            ui->sidebarPanel->setVisible(false);
+    connect(animation, &QVariantAnimation::finished, this, [this, opening, handle]() {
+        m_sidebarHeldWidth = 0;
+        if (opening) {
+            m_sidebarRail->setMinimumWidth(m_sidebarMinWidth);
+            m_sidebarRail->setMaximumWidth(m_sidebarMaxWidth);
+        } else {
+            // Tinggal rel berisi tombol sidebar. Lebarnya tetap, jadi handle di kanannya tidak
+            // lagi menawarkan geser.
+            ui->sidebarPanel->hide();
+            m_btnShowSidebar->show();
+            m_sidebarRail->setFixedWidth(kSidebarRailWidth);
+            handle->setEnabled(false);
+            handle->unsetCursor();
         }
-        ui->sidebarPanel->setMinimumWidth(m_sidebarMinWidth);
-        ui->sidebarPanel->setMaximumWidth(m_sidebarMaxWidth);
+        syncSidebarGeometry();
     });
 
     m_sidebarAnimation = animation;
@@ -864,7 +998,7 @@ void MainWindow::handleDeleteTaskRequested(const QString &taskId) {
 void MainWindow::loadInitialMockData() {
     // Log awal konsol
     ui->consolePanel->appendLog("--- SYSTEM INITIALIZED ---");
-    ui->consolePanel->appendLog("Belum ada project. Klik \"New Project\" untuk memulai.");
+    ui->consolePanel->appendLog("Belum ada project. Pilih File > New Project untuk memulai.");
     ui->consolePanel->appendLog("Ready for instructions.");
 }
 
@@ -1296,6 +1430,20 @@ QString MainWindow::chooseWorkingDirectory(const QString &projectId) {
     }
     ui->consolePanel->appendLog(QString("[SYSTEM] Folder kerja %1: %2").arg(projectId, dir));
     return dir;
+}
+
+void MainWindow::revealWorkingDirectory(const QString &projectId, FolderTarget target) {
+    const QString dir = m_fileManager->workingDirectory(projectId);
+    if (dir.isEmpty() || !QDir(dir).exists()) {
+        ui->consolePanel->appendLog(QString("[SYSTEM] Folder kerja %1 belum dipilih atau sudah tidak ada").arg(projectId));
+        return;
+    }
+    const bool terminal = target == FolderTarget::Terminal;
+    if (!(terminal ? FolderLauncher::showInTerminal(dir) : FolderLauncher::showInExplorer(dir))) {
+        ui->consolePanel->appendLog(QString("[SYSTEM] Gagal membuka folder kerja %1 di %2: %3")
+                                        .arg(projectId, terminal ? QStringLiteral("terminal") : QStringLiteral("File Explorer"),
+                                             QDir::toNativeSeparators(dir)));
+    }
 }
 
 void MainWindow::showBranchViewer(const QString &projectId, const QString &branch, const QString &compareWith) {

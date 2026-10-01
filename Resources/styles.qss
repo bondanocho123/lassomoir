@@ -5,6 +5,8 @@
      Navy sekunder  : #33517a   (aksen pendukung, judul task, badge)
      Navy muda      : #e3ebf6
      Krem latar     : #f8f4ee
+     Krem panel     : #f1eadf   (sidebar, panel konsol, menu atas: krem latar yang lebih tua,
+                                 dipakai sebagai gradasi mengilap)
    ============================================================ */
 
 /* Font Dasar Aplikasi: seluruh widget memakai gaya Garamond (serif).
@@ -355,11 +357,17 @@ QScrollBar::sub-page:horizontal {
     background: transparent;
 }
 
-/* ============ Sidebar daftar project ============ */
+/* ============ Sidebar daftar project + panel konsol (Lieutenant) ============ */
 
-QWidget#sidebarPanel {
-    background-color: #f7f9f8;
-    border: 1px solid #d3d8d5;
+/* Panel samping kiri dan kanan berlatar sama: krem latar yang sedikit lebih tua, dengan kilau
+   tipis di bagian atas dan garis pembatas 1px.
+   sidebarRail: rel sempit yang tersisa (berisi tombol sidebar) saat sidebar disembunyikan */
+QWidget#sidebarPanel,
+QWidget#sidebarRail,
+ConsolePanelWidget {
+    background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #f9f5ee, stop:0.06 #f1eadf, stop:1 #eae2d4);
+    border: 1px solid #d9cdbb;
     border-radius: 8px;
 }
 
@@ -382,8 +390,9 @@ QListWidget#projectList::item {
     border-radius: 5px;
 }
 
+/* Lebih tua dari coklat muda biasa (#f2e3d1) supaya tetap terbaca di atas latar panel */
 QListWidget#projectList::item:hover {
-    background-color: #f2e3d1;
+    background-color: #e6d3ba;
 }
 
 /* Kedua state dipakai agar project terpilih tetap coklat walau daftar kehilangan fokus */
@@ -599,20 +608,30 @@ QPushButton#btnDeleteConfirmCancel:pressed {
     border: 1px solid #24201b;
 }
 
-/* Tombol hamburger pengendali sidebar di top bar */
-QPushButton#btnToggleSidebar {
+/* Tombol sidebar: di pojok kanan atas sidebar (sejajar judul PROJECTS), dan kembarannya di rel
+   selama sidebar disembunyikan */
+QPushButton#btnToggleSidebar,
+QPushButton#btnShowSidebar {
     background: transparent;
     border: none;
-    padding: 2px 4px;
+    border-radius: 5px;
+    padding: 0;
+}
+
+QPushButton#btnToggleSidebar:hover,
+QPushButton#btnShowSidebar:hover {
+    background-color: #e6d3ba;
 }
 
 /* ============ Menu utama di baris paling atas jendela (File / View / Help) ============ */
 
-/* Latar sama dengan top bar di bawahnya: keduanya tampil sebagai satu kepala jendela.
-   Tanpa padding/spacing supaya "File" mepet ke pojok kiri atas. */
+/* Tanpa padding/spacing supaya "File" mepet ke pojok kiri atas. Latarnya mengilap: separuh atas
+   terang, separuh bawah sedikit lebih tua. Garis bawah 1px memisahkan kepala jendela dari isi. */
 QMenuBar#topMenuBar {
-    background-color: #f7f9f8;
+    background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #fdfbf8, stop:0.5 #f3ede4, stop:0.51 #ece5d9, stop:1 #f0e9de);
     border: none;
+    border-bottom: 1px solid #d9cdbb;
     padding: 0px;
     spacing: 0px;
     font-size: 13px;
@@ -626,7 +645,7 @@ QMenuBar#topMenuBar::item {
 
 QMenuBar#topMenuBar::item:selected,
 QMenuBar#topMenuBar::item:pressed {
-    background-color: #f2e3d1;
+    background-color: #e6d3ba;
     color: #3d3730;
 }
 

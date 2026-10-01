@@ -14,12 +14,7 @@
    <string>Form</string>
   </property>
   <property name="styleSheet">
-   <string notr="true">#ConsolePanelWidget {
-    background-color: #ffffff;
-    border-left: 1px solid #d3d8d5;
-}
-
-#labelConsoleHeader {
+   <string notr="true">#labelConsoleHeader {
     font-size: 11px;
     font-weight: bold;
     color: #374151;

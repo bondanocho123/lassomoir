@@ -7,6 +7,7 @@
 #include "DiagramViewer.h"
 #include "DiffView.h"
 #include "FakeAgentRuntime.h"
+#include "FolderLauncher.h"
 #include "GitSandbox.h"
 #include "HoverInfoPopup.h"
 #include "KanbanCardWidget.h"
@@ -33,6 +34,7 @@
 #include <QBuffer>
 #include <QClipboard>
 #include <QComboBox>
+#include <QDesktopServices>
 #include <QDialog>
 #include <QDir>
 #include <QDropEvent>
@@ -176,6 +178,10 @@ QList<T *> shownChildren(const QWidget *parent, const QString &name) {
 class TestGui : public QObject {
     Q_OBJECT
 
+public:
+    // Penerima QDesktopServices::setUrlHandler: mencatat URL yang hendak dibuka di luar aplikasi
+    Q_INVOKABLE void recordOpenedUrl(const QUrl &url) { m_openedUrls.append(url); }
+
 private slots:
     void init();
     void cleanup();
@@ -192,6 +198,9 @@ private slots:
     void consoleShowsLiveAsSignalIcon();
     // Menu File / View / Help di baris paling atas jendela, mepet pojok kiri atas
     void menuBarSitsTopLeft();
+    // Menu atas mengilap dengan garis bawah 1px; sidebar dan panel konsol berlatar sama (krem latar
+    // yang lebih tua, mengilap) dan bergaris tepi 1px
+    void chromeIsGlossyWithHairlines();
     // File > New Project: tanya nama, buat project + session.json, tampilkan di board
     void fileMenuCreatesProject();
     // File > Close Project: project yang tampil ditutup, datanya tetap di disk
@@ -200,10 +209,14 @@ private slots:
     void fileMenuRemovesProject();
     // View > Source Control: jendela branch & commit project yang tampil (folder kerja repository git)
     void viewMenuOpensSourceControl();
+    // View > Show in Explorer / Show in Terminal / Change Folder: folder kerja project yang tampil
+    void viewMenuOpensAndChangesWorkingFolder();
 
     // Hover judul atau ikon info di tiap kolom stage memunculkan penjelasan tugas dan fitur stage itu
     // seketika, tanpa berkedip saat kursor berpindah antara keduanya
     void stageColumnsExplainThemselves();
+    // Kolom stage selebar 300px (3/4 dari 400px semula)
+    void stageColumnsAreThreeQuartersWide();
 
     void cardShowsHandCursor();
     void workingDirButtonShowsIconAndCaption();
@@ -247,6 +260,11 @@ private slots:
     void longProjectNameKeepsRowButtonsVisible();
     // Sidebar menyempit setelah tampil pertama (ukuran splitter awal): baris ikut menyempit tanpa digeser
     void rowButtonsFollowSidebarWidth();
+    // Top bar sudah tidak ada: tombol sidebar di pojok kanan atas sidebar, sejajar judul PROJECTS
+    void sidebarButtonSitsInProjectsHeader();
+    // Sidebar disembunyikan: tombolnya tetap ada di rel, hover menampilkan sidebar menimpa board
+    // tanpa menggesernya, klik memasangnya kembali
+    void hiddenSidebarKeepsButtonAndPeeksOnHover();
 
     // Notice Claude Code: belum terpasang / perlu update / belum login, dengan tombol buka link atau batal
     void runtimeCheckShowsNotice_data();
@@ -297,6 +315,7 @@ private:
     // yang dibuka lewat QTimer::singleShot): dicari berulang sampai ketemu
     void driveNextModalDialog(std::function<void(QDialog *)> action);
     bool m_dialogSeen = false;
+    QList<QUrl> m_openedUrls;
 
     // Rakit TaskManager + MainWindow seperti main.cpp (termasuk runFinished -> recordRun);
     // size valid = ukuran jendela dipasang sebelum tampil, seperti main.cpp
@@ -692,12 +711,12 @@ void TestGui::menuBarSitsTopLeft() {
 
     auto *bar = m_window->findChild<QMenuBar *>(QStringLiteral("topMenuBar"));
     QVERIFY(bar);
-    // Baris menu jendela itu sendiri: di atas top bar, "File" mepet pojok kiri atas
+    // Baris menu jendela itu sendiri: di atas isi jendela, "File" mepet pojok kiri atas
     QCOMPARE(m_window->menuWidget(), bar);
-    auto *topBar = m_window->findChild<QWidget *>(QStringLiteral("topNavBar"));
-    QVERIFY(topBar);
+    auto *content = m_window->findChild<QWidget *>(QStringLiteral("contentWidget"));
+    QVERIFY(content);
     // Tata letak disusun ulang setelah stylesheet berganti
-    QTRY_VERIFY(bar->isVisible() && topBar->mapTo(m_window.get(), QPoint(0, 0)).y() > bar->geometry().bottom());
+    QTRY_VERIFY(bar->isVisible() && content->mapTo(m_window.get(), QPoint(0, 0)).y() > bar->geometry().bottom());
     QCOMPARE(bar->geometry().topLeft(), QPoint(0, 0));
 
     auto entries = [](const QMenu *menu) {
@@ -715,9 +734,12 @@ void TestGui::menuBarSitsTopLeft() {
              (QStringList{QStringLiteral("New Project"), QStringLiteral("Close Project"),
                           QStringLiteral("Remove Project"), QStringLiteral("---"),
                           QStringLiteral("Integrations…"), QStringLiteral("Preferences…"),
-                          QStringLiteral("Exit")}));
+                          QStringLiteral("---"), QStringLiteral("Exit")}));
     QCOMPARE(menus.at(1)->text(), QStringLiteral("&View"));
-    QCOMPARE(entries(menus.at(1)->menu()), QStringList{QStringLiteral("Source Control")});
+    QCOMPARE(entries(menus.at(1)->menu()),
+             (QStringList{QStringLiteral("Source Control"), QStringLiteral("Show in Explorer"),
+                          QStringLiteral("Show in Terminal"), QStringLiteral("---"),
+                          QStringLiteral("Change Folder…")}));
     QCOMPARE(menus.at(2)->text(), QStringLiteral("&Help"));
     QCOMPARE(entries(menus.at(2)->menu()),
              (QStringList{QStringLiteral("Report Issue"), QStringLiteral("Tutorial (Tips && Tricks)"),
@@ -735,6 +757,54 @@ void TestGui::menuBarSitsTopLeft() {
                      qPrintable(QStringLiteral("%1: item %2..%3, menu %4").arg(action->text())
                                     .arg(item.left()).arg(item.right()).arg(menu->sizeHint().width())));
         }
+    }
+}
+
+void TestGui::chromeIsGlossyWithHairlines() {
+    QFile qss(QStringLiteral(":/styles.qss"));
+    QVERIFY(qss.open(QIODevice::ReadOnly));
+    qApp->setStyleSheet(QString::fromUtf8(qss.readAll()));
+    const auto resetStyle = qScopeGuard([]() { qApp->setStyleSheet(QString()); });
+
+    auto *bar = m_window->findChild<QMenuBar *>(QStringLiteral("topMenuBar"));
+    auto *sidebar = m_window->findChild<QWidget *>(QStringLiteral("sidebarPanel"));
+    ConsolePanelWidget *console = consolePanel();
+    QVERIFY(bar && sidebar && console);
+    QTest::qWait(50);   // ukuran splitter awal sudah diterapkan
+    QTRY_VERIFY(sidebar->isVisible() && console->isVisible() && sidebar->height() == console->height());
+
+    const QImage image = m_window->grab().toImage();
+    auto lightness = [this, &image](const QWidget *widget, const QPoint &local) {
+        return image.pixelColor(widget->mapTo(m_window.get(), local)).lightness();
+    };
+    auto color = [this, &image](const QWidget *widget, const QPoint &local) {
+        return image.pixelColor(widget->mapTo(m_window.get(), local));
+    };
+    const int page = QColor(QStringLiteral("#f8f4ee")).lightness();
+
+    // Menu atas: di kanan item menu, separuh atas lebih terang dari separuh bawah, dan baris
+    // terbawahnya garis pembatas yang lebih tua dari keduanya
+    const int barX = bar->width() - 10;
+    const int barTop = lightness(bar, QPoint(barX, 1));
+    const int barLow = lightness(bar, QPoint(barX, bar->height() - 4));
+    const int barRule = lightness(bar, QPoint(barX, bar->height() - 1));
+    QVERIFY2(barTop > barLow, qPrintable(QStringLiteral("%1 vs %2").arg(barTop).arg(barLow)));
+    QVERIFY2(barRule < barLow, qPrintable(QStringLiteral("%1 vs %2").arg(barRule).arg(barLow)));
+
+    // Sidebar dan panel konsol: latar sama persis, lebih tua dari latar halaman, dengan kilau di atas
+    const int middle = sidebar->height() / 2;
+    QCOMPARE(color(sidebar, QPoint(4, middle)), color(console, QPoint(4, middle)));
+    QCOMPARE(color(sidebar, QPoint(4, sidebar->height() - 12)), color(console, QPoint(4, console->height() - 12)));
+    QVERIFY2(lightness(sidebar, QPoint(4, middle)) < page, qPrintable(color(sidebar, QPoint(4, middle)).name()));
+    QVERIFY(lightness(sidebar, QPoint(12, 2)) > lightness(sidebar, QPoint(4, middle)));
+    QVERIFY(lightness(console, QPoint(12, 2)) > lightness(console, QPoint(4, middle)));
+
+    // Garis tepi 1px: piksel terluar lebih tua dari isi panel, piksel berikutnya sudah isi panel
+    for (const QWidget *panel : {sidebar, static_cast<QWidget *>(console)}) {
+        const int inside = lightness(panel, QPoint(4, middle));
+        QVERIFY2(lightness(panel, QPoint(0, middle)) < inside, qPrintable(panel->objectName()));
+        QVERIFY2(lightness(panel, QPoint(panel->width() - 1, middle)) < inside, qPrintable(panel->objectName()));
+        QCOMPARE(color(panel, QPoint(1, middle)), color(panel, QPoint(4, middle)));
     }
 }
 
@@ -959,6 +1029,95 @@ void TestGui::viewMenuOpensSourceControl() {
     QVERIFY(!sourceControl->isEnabled());
 }
 
+void TestGui::viewMenuOpensAndChangesWorkingFolder() {
+    QAction *explorer = fileAction(QStringLiteral("actionShowInExplorer"));
+    QAction *terminal = fileAction(QStringLiteral("actionShowInTerminal"));
+    QAction *change = fileAction(QStringLiteral("actionChangeFolder"));
+    QVERIFY(explorer && terminal && change);
+    QMenu *menu = qobject_cast<QMenu *>(explorer->parent());
+    QVERIFY(menu);
+
+    // Tidak ada jendela yang benar-benar dibuka: File Explorer dan terminal dicegat di sini
+    struct Launch {
+        FolderLauncher::Command command;
+        QString directory;
+    };
+    QList<Launch> launches;
+    bool launchResult = true;
+    m_openedUrls.clear();
+    QDesktopServices::setUrlHandler(QStringLiteral("file"), this, "recordOpenedUrl");
+    FolderLauncher::setProcessStarter([&launches, &launchResult](const FolderLauncher::Command &command,
+                                                                  const QString &directory) {
+        launches.append(Launch{command, directory});
+        return launchResult;
+    });
+    const auto restore = qScopeGuard([]() {
+        QDesktopServices::unsetUrlHandler(QStringLiteral("file"));
+        FolderLauncher::setProcessStarter({});
+    });
+
+    // Demo punya folder kerja yang ada: ketiganya aktif
+    const QString workDir = m_workDir.path();
+    menu->aboutToShow();
+    QVERIFY(explorer->isEnabled() && terminal->isEnabled() && change->isEnabled());
+
+    explorer->trigger();
+    QCOMPARE(m_openedUrls, QList<QUrl>{QUrl::fromLocalFile(workDir)});
+    QVERIFY(launches.isEmpty());
+
+    terminal->trigger();
+    QCOMPARE(launches.size(), 1);
+    QCOMPARE(launches.first().directory, workDir);
+    QVERIFY(!launches.first().command.program.isEmpty());
+    QVERIFY(launches.first().command == FolderLauncher::terminalCommand(workDir));
+    QCOMPARE(m_openedUrls.size(), 1);
+    QVERIFY2(!consoleText().contains(QStringLiteral("Gagal membuka")), qPrintable(consoleText()));
+
+    // Terminal tidak bisa dijalankan: dicatat di konsol
+    launchResult = false;
+    terminal->trigger();
+    QVERIFY2(consoleText().contains(QStringLiteral("[SYSTEM] Gagal membuka folder kerja Demo di terminal: %1")
+                                        .arg(QDir::toNativeSeparators(workDir))),
+             qPrintable(consoleText()));
+    launchResult = true;
+
+    // Change Folder…: pemilih folder yang sama dengan tombol folder di header swimlane
+    QTemporaryDir other;
+    QVERIFY(other.isValid());
+    driveNextModalDialog([&other](QDialog *dialog) {
+        auto *picker = qobject_cast<QFileDialog *>(dialog);
+        QVERIFY(picker);
+        QVERIFY(picker->windowTitle().startsWith(QStringLiteral("Folder kerja agent untuk Demo")));
+        picker->selectFile(other.path());
+        dialog->accept();   // QFileDialog::accept() memeriksa pilihan; lewat QDialog karena protected di sana
+    });
+    change->trigger();
+    QVERIFY(m_dialogSeen);
+    const QString changed = QDir::cleanPath(other.path());
+    QVERIFY2(consoleText().contains(QStringLiteral("[SYSTEM] Folder kerja Demo: ")), qPrintable(consoleText()));
+
+    // Explorer dan terminal kini membuka folder yang baru
+    m_openedUrls.clear();
+    launches.clear();
+    explorer->trigger();
+    terminal->trigger();
+    QCOMPARE(m_openedUrls.size(), 1);
+    QCOMPARE(QDir::cleanPath(m_openedUrls.first().toLocalFile()), changed);
+    QCOMPARE(launches.size(), 1);
+    QCOMPARE(QDir::cleanPath(launches.first().directory), changed);
+
+    // Folder kerja hilang: tidak ada yang bisa dibuka, tapi masih bisa diganti
+    QVERIFY(other.remove());
+    menu->aboutToShow();
+    QVERIFY(!explorer->isEnabled() && !terminal->isEnabled());
+    QVERIFY(change->isEnabled());
+
+    // Project ditutup: ketiganya mati
+    fileAction(QStringLiteral("actionCloseProject"))->trigger();
+    menu->aboutToShow();
+    QVERIFY(!explorer->isEnabled() && !terminal->isEnabled() && !change->isEnabled());
+}
+
 void TestGui::stageColumnsExplainThemselves() {
     auto *swimlane = m_window->findChild<SwimlaneWidget *>();
     QVERIFY(swimlane);
@@ -1088,6 +1247,17 @@ void TestGui::driveNextModalDialog(std::function<void(QDialog *)> action) {
         }
     });
     safety->start(5000);
+}
+
+void TestGui::stageColumnsAreThreeQuartersWide() {
+    auto *swimlane = m_window->findChild<SwimlaneWidget *>();
+    QVERIFY(swimlane);
+    for (const QString &key : m_catalog.keys()) {
+        KanbanColumnWidget *column = swimlane->column(key);
+        QVERIFY2(column, qPrintable(key));
+        QCOMPARE(column->minimumWidth(), 300);
+        QCOMPARE(column->maximumWidth(), 300);
+    }
 }
 
 void TestGui::cardShowsHandCursor() {
@@ -3017,13 +3187,13 @@ void TestGui::longProjectNameKeepsRowButtonsVisible() {
     }
     QVERIFY(row);
 
-    // Tombol baris harus utuh di dalam area tampil daftar, sesempit apa pun sidebar-nya
-    const QRect viewport = list->viewport()->rect();
+    // Tombol baris harus utuh di dalam area tampil daftar, sesempit apa pun sidebar-nya. Dihitung
+    // ulang tiap percobaan: lebar sidebar baru mapan setelah ukuran splitter awal diterapkan.
     for (const QString &name : {QStringLiteral("btnProjectDelete"), QStringLiteral("btnProjectNewTask")}) {
         auto *button = row->findChild<QPushButton *>(name);
         QVERIFY(button);
-        const QRect rect(button->mapTo(list->viewport(), QPoint(0, 0)), button->size());
-        QTRY_VERIFY2(viewport.contains(rect), qPrintable(name));
+        QTRY_VERIFY2(list->viewport()->rect().contains(QRect(button->mapTo(list->viewport(), QPoint(0, 0)), button->size())),
+                     qPrintable(name));
     }
 
     // Nama dipotong, nama lengkap tersedia lewat tooltip
@@ -3076,6 +3246,102 @@ void TestGui::rowButtonsFollowSidebarWidth() {
                                                               .arg(list->visualItemRect(list->item(0)).width())
                                                               .arg(splitter->sizes().value(0))),
                               1000);
+}
+
+void TestGui::sidebarButtonSitsInProjectsHeader() {
+    // Top bar beserta wordmark dan tombol New Project-nya sudah dibuang
+    QVERIFY(!m_window->findChild<QWidget *>(QStringLiteral("topNavBar")));
+    QVERIFY(!m_window->findChild<QWidget *>(QStringLiteral("labelAppName")));
+    QVERIFY(!m_window->findChild<QWidget *>(QStringLiteral("btnGlobalNewProject")));
+
+    auto *panel = m_window->findChild<QWidget *>(QStringLiteral("sidebarPanel"));
+    auto *title = m_window->findChild<QLabel *>(QStringLiteral("labelSidebarTitle"));
+    auto *button = m_window->findChild<QPushButton *>(QStringLiteral("btnToggleSidebar"));
+    QVERIFY(panel && title && button);
+    QVERIFY(panel->isAncestorOf(button));
+    QTRY_VERIFY(button->isVisible());
+
+    // Sebaris dengan judul PROJECTS, menempel tepi kanan panel
+    auto inPanel = [panel](const QWidget *widget) {
+        return QRect(widget->mapTo(panel, QPoint(0, 0)), widget->size());
+    };
+    QTRY_VERIFY(inPanel(button).left() > inPanel(title).right());
+    QVERIFY(qAbs(inPanel(button).center().y() - inPanel(title).center().y()) <= 1);
+    QTRY_VERIFY2(panel->width() - inPanel(button).right() <= 12,
+                 qPrintable(QStringLiteral("panel %1, tombol sampai %2").arg(panel->width()).arg(inPanel(button).right())));
+}
+
+void TestGui::hiddenSidebarKeepsButtonAndPeeksOnHover() {
+    auto *splitter = m_window->findChild<QSplitter *>(QStringLiteral("mainSplitter"));
+    auto *panel = m_window->findChild<QWidget *>(QStringLiteral("sidebarPanel"));
+    auto *rail = m_window->findChild<QWidget *>(QStringLiteral("sidebarRail"));
+    auto *hide = m_window->findChild<QPushButton *>(QStringLiteral("btnToggleSidebar"));
+    auto *show = m_window->findChild<QPushButton *>(QStringLiteral("btnShowSidebar"));
+    QListWidget *list = projectList();
+    QVERIFY(splitter && panel && rail && hide && show && list);
+
+    const QPoint cursorBefore = QCursor::pos();
+    const auto restoreCursor = qScopeGuard([cursorBefore]() { QCursor::setPos(cursorBefore); });
+    auto hover = [](QWidget *widget) {
+        const QPoint local = widget->rect().center();
+        const QPoint global = widget->mapToGlobal(local);
+        QCursor::setPos(global);
+        QEnterEvent enter(local, widget->window()->mapFromGlobal(global), global);
+        QApplication::sendEvent(widget, &enter);
+    };
+    auto leave = [this]() {
+        QCursor::setPos(consolePanel()->mapToGlobal(consolePanel()->rect().center()));
+    };
+    auto railRect = [rail, panel]() {
+        return QRect(rail->mapTo(panel->parentWidget(), QPoint(0, 0)), rail->size());
+    };
+
+    QTest::qWait(50);   // ukuran splitter awal sudah diterapkan
+    QTRY_VERIFY(panel->isVisible());
+    QVERIFY(!show->isVisible());
+    const QList<int> dockedSizes = splitter->sizes();
+    const int dockedWidth = dockedSizes.at(0);
+    QTRY_COMPARE(panel->geometry(), railRect());
+
+    // Disembunyikan: sidebar hilang, tombolnya pindah ke rel sempit di tempat yang sama
+    hide->click();
+    QTRY_VERIFY(!panel->isVisible());
+    QVERIFY(show->isVisible());
+    const QList<int> hiddenSizes = splitter->sizes();
+    QVERIFY2(hiddenSizes.at(0) < 60, qPrintable(QString::number(hiddenSizes.at(0))));
+    // Lebar yang dilepas sidebar jatuh ke board; konsol tidak berubah
+    QCOMPARE(hiddenSizes.at(0) + hiddenSizes.at(1), dockedSizes.at(0) + dockedSizes.at(1));
+    QCOMPARE(hiddenSizes.at(2), dockedSizes.at(2));
+
+    // Hover tombol: sidebar tampil di kanan rel, menimpa board tanpa menggeser pane mana pun
+    hover(show);
+    QTRY_VERIFY(panel->isVisible());
+    QVERIFY(list->isVisible());
+    QVERIFY(show->isVisible());
+    QVERIFY(panel->geometry().left() > railRect().right());
+    QCOMPARE(panel->width(), dockedWidth);
+    QCOMPARE(panel->height(), rail->height());
+    QCOMPARE(splitter->sizes(), hiddenSizes);
+
+    // Selama kursor di atas sidebar ia bertahan; begitu kursor pergi, hilang lagi
+    QCursor::setPos(list->mapToGlobal(list->rect().center()));
+    QTest::qWait(500);
+    QVERIFY(panel->isVisible());
+    leave();
+    QTRY_VERIFY(!panel->isVisible());
+    QVERIFY(show->isVisible());
+    QCOMPARE(splitter->sizes(), hiddenSizes);
+
+    // Klik tombol rel selagi sidebar tampil sementara: terpasang kembali selebar semula
+    hover(show);
+    QTRY_VERIFY(panel->isVisible());
+    show->click();
+    QTRY_COMPARE(splitter->sizes().at(0), dockedWidth);
+    QTRY_VERIFY(!show->isVisible());
+    QTRY_COMPARE(panel->geometry(), railRect());
+    leave();
+    QTest::qWait(500);
+    QVERIFY(panel->isVisible());
 }
 
 QDialog *TestGui::runtimeNotice() const {
@@ -3548,16 +3814,16 @@ void TestGui::themeAdaptsWidgetStyleSheets() {
     widget.setStyleSheet(QStringLiteral("color: #a9743f;"));
     QCOMPARE(widget.styleSheet(), QStringLiteral("color: #e0b07a;"));
 
-    // Jendela yang sudah ada: mis. top bar dari mainwindow.ui
-    auto *topBar = m_window->findChild<QWidget *>(QStringLiteral("topNavBar"));
-    QVERIFY(topBar);
-    QVERIFY2(!topBar->styleSheet().contains(QStringLiteral("#f7f9f8")), qPrintable(topBar->styleSheet()));
+    // Jendela yang sudah ada: mis. swimlane, yang stylesheet-nya dari SwimlaneWidget.ui
+    auto *lane = m_window->findChild<SwimlaneWidget *>();
+    QVERIFY(lane);
+    QVERIFY2(!lane->styleSheet().contains(QStringLiteral("#f7f9f8")), qPrintable(lane->styleSheet()));
 
     // Kembali ke terang: stylesheet asli dipulihkan
     Theme::setSchemeOverride(Theme::Scheme::Light);
     QVERIFY(Theme::apply(*qApp));
     QCOMPARE(widget.styleSheet(), QStringLiteral("color: #a9743f;"));
-    QVERIFY(topBar->styleSheet().contains(QStringLiteral("#f7f9f8")));
+    QVERIFY(lane->styleSheet().contains(QStringLiteral("#f7f9f8")));
 }
 
 void TestGui::bundledFontsAreRegistered() {
@@ -3628,8 +3894,6 @@ void TestGui::preferencesChangesFont() {
 
     QCOMPARE(AppFonts::saved(), QStringLiteral("Inter"));
     QVERIFY2(qApp->styleSheet().contains(QStringLiteral("font-family: \"Inter\"")), "font override missing");
-    // Wordmark tetap Garamond
-    QVERIFY(qApp->styleSheet().contains(QStringLiteral("QLabel#labelAppName")));
 
     // Dibuka lagi: Inter yang terpilih; kembali ke bawaan menghapus override
     dialog = openPicker();

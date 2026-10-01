@@ -35,7 +35,9 @@ class TaskManager;
 class QAction;
 class QDialog;
 class QListWidgetItem;
+class QPushButton;
 class QSplitter;
+class QTimer;
 class QVariantAnimation;
 namespace TaskAttachments {
 struct Draft;
@@ -78,8 +80,8 @@ private slots:
     // Slot saat kartu diklik dua kali: buka form task terisi data kartu, lalu terapkan perubahannya
     void handleEditTaskRequested(const QString &projectId, const QString &taskId);
 
-    // Slot saat "New Project" dipilih (tombol top bar atau menu File): tanya nama, buat swimlane
-    // + session.json-nya, lalu tampilkan di board
+    // Slot saat File > New Project dipilih: tanya nama, buat swimlane + session.json-nya, lalu
+    // tampilkan di board
     void handleNewProjectRequested();
 
     // Slot saat tombol "Close" di header swimlane atau menu File > Close Project dipilih
@@ -100,8 +102,12 @@ private slots:
     // Slot saat baris project di sidebar dipilih
     void handleProjectSelected(QListWidgetItem *current, QListWidgetItem *previous);
 
-    // Ciutkan / lebarkan panel sidebar
+    // Sembunyikan sidebar (tinggal rel berisi tombolnya) / pasang kembali
     void toggleSidebar();
+
+    // Tombol sidebar di rel di-hover selagi sidebar disembunyikan: sidebar tampil sementara di
+    // samping rel, menimpa board, sampai kursor meninggalkannya
+    void showSidebarPeek();
 
     // Kejadian run agent dari SwarmCoordinator: perbarui kartu, drawer, dan konsol
     void handleRunQueued(const TaskItem &task);
@@ -167,7 +173,22 @@ private:
     QMap<QString, SwimlaneWidget*> m_swimlanes;
     // Project yang sedang ditampilkan di board; kosong bila belum ada
     QString m_activeProjectId;
-    // Lebar sidebar terakhir sebelum diciutkan, dipakai saat dibuka kembali
+    // Rel di pane 0 mainSplitter: memegang tempat (lebar) sidebar. sidebarPanel sendiri mengambang
+    // di atas contentWidget dan mengikuti geometri rel ini, supaya saat disembunyikan ia bisa
+    // tampil menimpa board (lihat showSidebarPeek) tanpa menggeser pane lain.
+    QWidget *m_sidebarRail = nullptr;
+    // Tombol sidebar di rel; hanya tampil selama sidebar disembunyikan
+    QPushButton *m_btnShowSidebar = nullptr;
+    // true = sidebar terpasang (terbuka atau sedang membuka); false = tinggal rel
+    bool m_sidebarDocked = true;
+    // Sidebar sedang tampil sementara karena tombol di rel di-hover
+    bool m_sidebarPeeking = false;
+    // Selama sidebar tampil sementara: periksa berkala apakah kursor sudah meninggalkannya
+    QTimer *m_sidebarPeekTimer = nullptr;
+    int m_sidebarPeekMisses = 0;
+    // Lebar yang ditahan sidebarPanel selama rel masih melebar di bawahnya (lihat animateSidebar)
+    int m_sidebarHeldWidth = 0;
+    // Lebar sidebar terakhir sebelum disembunyikan, dipakai saat dibuka kembali
     int m_savedSidebarWidth = 0;
     // Animasi geser lebar sidebar saat dibuka/ditutup
     QPointer<QVariantAnimation> m_sidebarAnimation;
@@ -176,14 +197,14 @@ private:
     // Dialog Integrations yang sedang terbuka (lihat showIntegrations)
     QPointer<QDialog> m_integrations;
     // Lebar minimum asli sidebarPanel (dari file .ui), disimpan karena
-    // animasi sempat menurunkannya ke 0 agar splitter bisa menciutkannya penuh
+    // animasi sempat menurunkannya ke lebar rel agar splitter bisa menciutkannya
     int m_sidebarMinWidth = 180;
     // Batas maksimum asli sidebarPanel; maximumWidth dipakai untuk menggiring
     // lebar selama animasi sehingga nilainya harus disimpan dulu
     int m_sidebarMaxWidth = 240;
 
     // Menu File / View / Help di baris paling atas jendela. Yang tersambung baru File > New /
-    // Close / Remove Project / Integrations / Preferences dan View > Source Control; item lainnya
+    // Close / Remove Project / Integrations / Preferences dan semua item View; item lainnya
     // masih tampilan saja.
     void setupMenuBar();
     // Close / Remove Project hanya berlaku untuk project yang sedang tampil di board
@@ -191,6 +212,15 @@ private:
     QAction *m_actionRemoveProject = nullptr;
     // Source Control hanya berlaku bila folder kerja project yang tampil adalah repository git
     QAction *m_actionSourceControl = nullptr;
+    // Show in Explorer / Terminal hanya berlaku bila folder kerja project yang tampil masih ada;
+    // Change Folder cukup ada project yang tampil
+    QAction *m_actionShowInExplorer = nullptr;
+    QAction *m_actionShowInTerminal = nullptr;
+    QAction *m_actionChangeFolder = nullptr;
+    // View > Show in Explorer / Show in Terminal: buka folder kerja project di luar aplikasi;
+    // gagalnya dicatat di konsol
+    enum class FolderTarget { Explorer, Terminal };
+    void revealWorkingDirectory(const QString &projectId, FolderTarget target);
     // Helper untuk memuat data awal saat aplikasi baru dibuka
     void loadInitialMockData();
     // Muat semua project dari <AppData>/projects; return jumlah project yang dimuat
@@ -199,8 +229,16 @@ private:
     void saveProject(const QString &projectId);
     // Cari baris sidebar milik projectId; -1 bila tidak ada
     int findProjectRow(const QString &projectId) const;
-    // Jalankan animasi geser: opening=true melebarkan sidebar, false menciutkannya
+    // Pasang rel di pane 0 mainSplitter dan lepaskan sidebarPanel ke atas contentWidget
+    void setupSidebarRail();
+    // Jalankan animasi geser: opening=true melebarkan sidebar, false menciutkannya jadi rel
     void animateSidebar(bool opening);
+    // Tempatkan sidebarPanel: menutupi rel (terpasang) atau di samping rel (tampil sementara)
+    void syncSidebarGeometry();
+    // Lebar sidebar saat terpasang: lebar terakhirnya, dalam batas minimum/maksimum
+    int dockedSidebarWidth() const;
+    // Sembunyikan sidebar yang tampil sementara begitu kursor sudah meninggalkan rel + sidebar
+    void hideSidebarPeekIfLeft();
     // Baris item sidebar kustom: label nama project (kiri) + tombol hapus & "+" New Task (kanan)
     QWidget *createProjectRowWidget(const QString &projectId);
     // Samakan warna label + icon tombol tiap baris sidebar dengan status seleksinya
@@ -259,7 +297,7 @@ private:
 
 protected:
     // Tukar icon tombol baris sidebar jadi putih selama kursor berada di atasnya,
-    // supaya tetap terbaca di atas background hover yang gelap
+    // supaya tetap terbaca di atas background hover yang gelap; sidebarPanel mengikuti rel-nya
     bool eventFilter(QObject *watched, QEvent *event) override;
     // Jendela kembali aktif: branch folder kerja project yang tampil bisa sudah diganti di luar aplikasi
     void changeEvent(QEvent *event) override;

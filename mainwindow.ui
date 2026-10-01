@@ -31,107 +31,6 @@
      <number>0</number>
     </property>
     <item>
-     <widget class="QWidget" name="topNavBar" native="true">
-      <property name="minimumSize">
-       <size>
-        <width>0</width>
-        <height>44</height>
-       </size>
-      </property>
-      <property name="styleSheet">
-       <string notr="true">
-#topNavBar {
-background-color: #f7f9f8;
-border-bottom: 1px solid #d3d8d5;
-}
-#btnGlobalNewProject {
-background-color: #f7f9f8;
-border-bottom: 1px solid #d3d8d5;
-}
-       </string>
-      </property>
-      <layout class="QHBoxLayout" name="navLayout">
-       <property name="leftMargin">
-        <number>16</number>
-       </property>
-       <property name="topMargin">
-        <number>6</number>
-       </property>
-       <property name="rightMargin">
-        <number>16</number>
-       </property>
-       <property name="bottomMargin">
-        <number>6</number>
-       </property>
-       <item>
-        <widget class="QPushButton" name="btnToggleSidebar">
-         <property name="maximumSize">
-          <size>
-           <width>32</width>
-           <height>16777215</height>
-          </size>
-         </property>
-         <property name="cursor">
-          <cursorShape>PointingHandCursor</cursorShape>
-         </property>
-         <property name="toolTip">
-          <string>Tampilkan / sembunyikan daftar project</string>
-         </property>
-         <property name="text">
-          <string/>
-         </property>
-         <property name="icon">
-          <iconset resource="Resources/resources.qrc">
-           <normaloff>:/icons/sidebar.svg</normaloff>:/icons/sidebar.svg</iconset>
-         </property>
-         <property name="iconSize">
-          <size>
-           <width>16</width>
-           <height>16</height>
-          </size>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <widget class="QLabel" name="labelAppName">
-         <property name="font">
-          <font>
-           <pointsize>12</pointsize>
-           <bold>true</bold>
-          </font>
-         </property>
-         <property name="text">
-          <string>L'Assommoir</string>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <spacer name="navSpacer">
-         <property name="orientation">
-          <enum>Qt::Orientation::Horizontal</enum>
-         </property>
-         <property name="sizeHint" stdset="0">
-          <size>
-           <width>40</width>
-           <height>20</height>
-          </size>
-         </property>
-        </spacer>
-       </item>
-       <item>
-        <widget class="QPushButton" name="btnGlobalNewProject">
-         <property name="cursor">
-          <cursorShape>PointingHandCursor</cursorShape>
-         </property>
-         <property name="text">
-          <string>New Project</string>
-         </property>
-        </widget>
-       </item>
-      </layout>
-     </widget>
-    </item>
-    <item>
      <widget class="QWidget" name="contentWidget" native="true">
       <layout class="QHBoxLayout" name="mainContentLayout">
        <property name="spacing">
@@ -190,11 +89,66 @@ border-bottom: 1px solid #d3d8d5;
             <number>8</number>
            </property>
            <item>
-            <widget class="QLabel" name="labelSidebarTitle">
-             <property name="text">
-              <string>PROJECTS</string>
+            <layout class="QHBoxLayout" name="sidebarHeaderLayout">
+             <property name="spacing">
+              <number>4</number>
              </property>
-            </widget>
+             <item>
+              <widget class="QLabel" name="labelSidebarTitle">
+               <property name="text">
+                <string>PROJECTS</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <spacer name="sidebarHeaderSpacer">
+               <property name="orientation">
+                <enum>Qt::Orientation::Horizontal</enum>
+               </property>
+               <property name="sizeHint" stdset="0">
+                <size>
+                 <width>0</width>
+                 <height>0</height>
+                </size>
+               </property>
+              </spacer>
+             </item>
+             <item>
+              <widget class="QPushButton" name="btnToggleSidebar">
+               <property name="minimumSize">
+                <size>
+                 <width>22</width>
+                 <height>22</height>
+                </size>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>22</width>
+                 <height>22</height>
+                </size>
+               </property>
+               <property name="cursor">
+                <cursorShape>PointingHandCursor</cursorShape>
+               </property>
+               <property name="toolTip">
+                <string>Sembunyikan daftar project</string>
+               </property>
+               <property name="text">
+                <string/>
+               </property>
+               <property name="icon">
+                <iconset resource="Resources/resources.qrc">
+                 <normaloff>:/icons/sidebar.svg</normaloff>:/icons/sidebar.svg</iconset>
+               </property>
+               <property name="iconSize">
+                <size>
+                 <width>16</width>
+                 <height>16</height>
+                </size>
+               </property>
+              </widget>
+             </item>
+            </layout>
            </item>
            <item>
             <widget class="QListWidget" name="projectList">
@@ -218,7 +172,7 @@ border-bottom: 1px solid #d3d8d5;
              <widget class="QLabel" name="labelEmptyState">
               <property name="text">
                <string>Belum ada project yang dipilih.
-Pilih salah satu dari sidebar, atau buat lewat &quot;New Project&quot;.</string>
+Pilih salah satu dari sidebar, atau buat lewat File &gt; New Project.</string>
               </property>
               <property name="alignment">
                <set>Qt::AlignmentFlag::AlignCenter</set>
