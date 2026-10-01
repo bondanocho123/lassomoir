@@ -11,6 +11,7 @@
 #include "AppFonts.h"
 #include "ElidedLabel.h"
 #include "FileManager.h"
+#include "FolderLauncher.h"
 #include "FontPickerDialog.h"
 #include "IntegrationsDialog.h"
 #include "NewTaskDialog.h"
@@ -204,8 +205,8 @@ MainWindow::MainWindow(const StageCatalog &catalog, TaskManager &tasks, SwarmCoo
 
 void MainWindow::setupMenuBar() {
     // Menu utama di baris paling atas jendela, mepet pojok kiri atas.
-    // Yang tersambung: File > New / Close / Remove Project / Integrations / Preferences dan
-    // View > Source Control; item lainnya belum ada aksinya.
+    // Yang tersambung: File > New / Close / Remove Project / Integrations / Preferences dan semua
+    // item View; item lainnya belum ada aksinya.
     auto *menuBar = new QMenuBar(this);
     menuBar->setObjectName("topMenuBar");
     setMenuBar(menuBar);
@@ -245,6 +246,7 @@ void MainWindow::setupMenuBar() {
     QAction *preferences = file->addAction("Preferences…");
     preferences->setObjectName("actionPreferences");
     connect(preferences, &QAction::triggered, this, &MainWindow::showFontPicker);
+    file->addSeparator();
     file->addAction("Exit");
 
     // Jendela branch & commit project yang tampil, sama dengan tombol branch di header swimlane.
@@ -254,10 +256,29 @@ void MainWindow::setupMenuBar() {
         showBranchViewer(m_activeProjectId);
     });
     m_actionSourceControl->setObjectName("actionSourceControl");
+    // Folder kerja project yang tampil: buka di File Explorer atau di terminal, dan ganti foldernya
+    // (sama dengan tombol folder di header swimlane). Id dioper sebagai salinan, lihat File di atas.
+    m_actionShowInExplorer = view->addAction("Show in Explorer", this, [this]() {
+        revealWorkingDirectory(QString(m_activeProjectId), FolderTarget::Explorer);
+    });
+    m_actionShowInExplorer->setObjectName("actionShowInExplorer");
+    m_actionShowInTerminal = view->addAction("Show in Terminal", this, [this]() {
+        revealWorkingDirectory(QString(m_activeProjectId), FolderTarget::Terminal);
+    });
+    m_actionShowInTerminal->setObjectName("actionShowInTerminal");
+    view->addSeparator();
+    m_actionChangeFolder = view->addAction("Change Folder…", this, [this]() {
+        chooseWorkingDirectory(QString(m_activeProjectId));
+    });
+    m_actionChangeFolder->setObjectName("actionChangeFolder");
     connect(view, &QMenu::aboutToShow, this, [this]() {
-        m_actionSourceControl->setEnabled(
-            !m_activeProjectId.isEmpty()
-            && TaskGit::looksLikeRepository(m_fileManager->workingDirectory(m_activeProjectId)));
+        const bool hasProject = !m_activeProjectId.isEmpty();
+        const QString dir = hasProject ? m_fileManager->workingDirectory(m_activeProjectId) : QString();
+        const bool hasFolder = !dir.isEmpty() && QDir(dir).exists();
+        m_actionSourceControl->setEnabled(hasProject && TaskGit::looksLikeRepository(dir));
+        m_actionShowInExplorer->setEnabled(hasFolder);
+        m_actionShowInTerminal->setEnabled(hasFolder);
+        m_actionChangeFolder->setEnabled(hasProject);
     });
 
     QMenu *help = addMenu("&Help");
@@ -1409,6 +1430,20 @@ QString MainWindow::chooseWorkingDirectory(const QString &projectId) {
     }
     ui->consolePanel->appendLog(QString("[SYSTEM] Folder kerja %1: %2").arg(projectId, dir));
     return dir;
+}
+
+void MainWindow::revealWorkingDirectory(const QString &projectId, FolderTarget target) {
+    const QString dir = m_fileManager->workingDirectory(projectId);
+    if (dir.isEmpty() || !QDir(dir).exists()) {
+        ui->consolePanel->appendLog(QString("[SYSTEM] Folder kerja %1 belum dipilih atau sudah tidak ada").arg(projectId));
+        return;
+    }
+    const bool terminal = target == FolderTarget::Terminal;
+    if (!(terminal ? FolderLauncher::showInTerminal(dir) : FolderLauncher::showInExplorer(dir))) {
+        ui->consolePanel->appendLog(QString("[SYSTEM] Gagal membuka folder kerja %1 di %2: %3")
+                                        .arg(projectId, terminal ? QStringLiteral("terminal") : QStringLiteral("File Explorer"),
+                                             QDir::toNativeSeparators(dir)));
+    }
 }
 
 void MainWindow::showBranchViewer(const QString &projectId, const QString &branch, const QString &compareWith) {

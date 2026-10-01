@@ -33,6 +33,7 @@ SOURCES += \
     DocumentText.cpp \
     EdgeMermaidRenderer.cpp \
     FileManager.cpp \
+    FolderLauncher.cpp \
     FontPickerDialog.cpp \
     GitHistory.cpp \
     GitProcess.cpp \
@@ -92,6 +93,7 @@ HEADERS += \
     DocumentText.h \
     EdgeMermaidRenderer.h \
     FileManager.h \
+    FolderLauncher.h \
     FontPickerDialog.h \
     GitHistory.h \
     GitProcess.h \

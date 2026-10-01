@@ -32,6 +32,7 @@ SOURCES += \
     ../../DiffView.cpp \
     ../../DocumentText.cpp \
     ../../FileManager.cpp \
+    ../../FolderLauncher.cpp \
     ../../FontPickerDialog.cpp \
     ../../GitHistory.cpp \
     ../../GitProcess.cpp \
@@ -91,6 +92,7 @@ HEADERS += \
     ../../DiffView.h \
     ../../DocumentText.h \
     ../../FileManager.h \
+    ../../FolderLauncher.h \
     ../../FontPickerDialog.h \
     ../../GitHistory.h \
     ../../GitProcess.h \

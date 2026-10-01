@@ -204,7 +204,7 @@ private:
     int m_sidebarMaxWidth = 240;
 
     // Menu File / View / Help di baris paling atas jendela. Yang tersambung baru File > New /
-    // Close / Remove Project / Integrations / Preferences dan View > Source Control; item lainnya
+    // Close / Remove Project / Integrations / Preferences dan semua item View; item lainnya
     // masih tampilan saja.
     void setupMenuBar();
     // Close / Remove Project hanya berlaku untuk project yang sedang tampil di board
@@ -212,6 +212,15 @@ private:
     QAction *m_actionRemoveProject = nullptr;
     // Source Control hanya berlaku bila folder kerja project yang tampil adalah repository git
     QAction *m_actionSourceControl = nullptr;
+    // Show in Explorer / Terminal hanya berlaku bila folder kerja project yang tampil masih ada;
+    // Change Folder cukup ada project yang tampil
+    QAction *m_actionShowInExplorer = nullptr;
+    QAction *m_actionShowInTerminal = nullptr;
+    QAction *m_actionChangeFolder = nullptr;
+    // View > Show in Explorer / Show in Terminal: buka folder kerja project di luar aplikasi;
+    // gagalnya dicatat di konsol
+    enum class FolderTarget { Explorer, Terminal };
+    void revealWorkingDirectory(const QString &projectId, FolderTarget target);
     // Helper untuk memuat data awal saat aplikasi baru dibuka
     void loadInitialMockData();
     // Muat semua project dari <AppData>/projects; return jumlah project yang dimuat

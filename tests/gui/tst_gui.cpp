@@ -7,6 +7,7 @@
 #include "DiagramViewer.h"
 #include "DiffView.h"
 #include "FakeAgentRuntime.h"
+#include "FolderLauncher.h"
 #include "GitSandbox.h"
 #include "HoverInfoPopup.h"
 #include "KanbanCardWidget.h"
@@ -33,6 +34,7 @@
 #include <QBuffer>
 #include <QClipboard>
 #include <QComboBox>
+#include <QDesktopServices>
 #include <QDialog>
 #include <QDir>
 #include <QDropEvent>
@@ -176,6 +178,10 @@ QList<T *> shownChildren(const QWidget *parent, const QString &name) {
 class TestGui : public QObject {
     Q_OBJECT
 
+public:
+    // Penerima QDesktopServices::setUrlHandler: mencatat URL yang hendak dibuka di luar aplikasi
+    Q_INVOKABLE void recordOpenedUrl(const QUrl &url) { m_openedUrls.append(url); }
+
 private slots:
     void init();
     void cleanup();
@@ -203,6 +209,8 @@ private slots:
     void fileMenuRemovesProject();
     // View > Source Control: jendela branch & commit project yang tampil (folder kerja repository git)
     void viewMenuOpensSourceControl();
+    // View > Show in Explorer / Show in Terminal / Change Folder: folder kerja project yang tampil
+    void viewMenuOpensAndChangesWorkingFolder();
 
     // Hover judul atau ikon info di tiap kolom stage memunculkan penjelasan tugas dan fitur stage itu
     // seketika, tanpa berkedip saat kursor berpindah antara keduanya
@@ -307,6 +315,7 @@ private:
     // yang dibuka lewat QTimer::singleShot): dicari berulang sampai ketemu
     void driveNextModalDialog(std::function<void(QDialog *)> action);
     bool m_dialogSeen = false;
+    QList<QUrl> m_openedUrls;
 
     // Rakit TaskManager + MainWindow seperti main.cpp (termasuk runFinished -> recordRun);
     // size valid = ukuran jendela dipasang sebelum tampil, seperti main.cpp
@@ -725,9 +734,12 @@ void TestGui::menuBarSitsTopLeft() {
              (QStringList{QStringLiteral("New Project"), QStringLiteral("Close Project"),
                           QStringLiteral("Remove Project"), QStringLiteral("---"),
                           QStringLiteral("Integrations…"), QStringLiteral("Preferences…"),
-                          QStringLiteral("Exit")}));
+                          QStringLiteral("---"), QStringLiteral("Exit")}));
     QCOMPARE(menus.at(1)->text(), QStringLiteral("&View"));
-    QCOMPARE(entries(menus.at(1)->menu()), QStringList{QStringLiteral("Source Control")});
+    QCOMPARE(entries(menus.at(1)->menu()),
+             (QStringList{QStringLiteral("Source Control"), QStringLiteral("Show in Explorer"),
+                          QStringLiteral("Show in Terminal"), QStringLiteral("---"),
+                          QStringLiteral("Change Folder…")}));
     QCOMPARE(menus.at(2)->text(), QStringLiteral("&Help"));
     QCOMPARE(entries(menus.at(2)->menu()),
              (QStringList{QStringLiteral("Report Issue"), QStringLiteral("Tutorial (Tips && Tricks)"),
@@ -1015,6 +1027,95 @@ void TestGui::viewMenuOpensSourceControl() {
     QTRY_VERIFY(!viewer || !viewer->isVisible());
     menu->aboutToShow();
     QVERIFY(!sourceControl->isEnabled());
+}
+
+void TestGui::viewMenuOpensAndChangesWorkingFolder() {
+    QAction *explorer = fileAction(QStringLiteral("actionShowInExplorer"));
+    QAction *terminal = fileAction(QStringLiteral("actionShowInTerminal"));
+    QAction *change = fileAction(QStringLiteral("actionChangeFolder"));
+    QVERIFY(explorer && terminal && change);
+    QMenu *menu = qobject_cast<QMenu *>(explorer->parent());
+    QVERIFY(menu);
+
+    // Tidak ada jendela yang benar-benar dibuka: File Explorer dan terminal dicegat di sini
+    struct Launch {
+        FolderLauncher::Command command;
+        QString directory;
+    };
+    QList<Launch> launches;
+    bool launchResult = true;
+    m_openedUrls.clear();
+    QDesktopServices::setUrlHandler(QStringLiteral("file"), this, "recordOpenedUrl");
+    FolderLauncher::setProcessStarter([&launches, &launchResult](const FolderLauncher::Command &command,
+                                                                  const QString &directory) {
+        launches.append(Launch{command, directory});
+        return launchResult;
+    });
+    const auto restore = qScopeGuard([]() {
+        QDesktopServices::unsetUrlHandler(QStringLiteral("file"));
+        FolderLauncher::setProcessStarter({});
+    });
+
+    // Demo punya folder kerja yang ada: ketiganya aktif
+    const QString workDir = m_workDir.path();
+    menu->aboutToShow();
+    QVERIFY(explorer->isEnabled() && terminal->isEnabled() && change->isEnabled());
+
+    explorer->trigger();
+    QCOMPARE(m_openedUrls, QList<QUrl>{QUrl::fromLocalFile(workDir)});
+    QVERIFY(launches.isEmpty());
+
+    terminal->trigger();
+    QCOMPARE(launches.size(), 1);
+    QCOMPARE(launches.first().directory, workDir);
+    QVERIFY(!launches.first().command.program.isEmpty());
+    QVERIFY(launches.first().command == FolderLauncher::terminalCommand(workDir));
+    QCOMPARE(m_openedUrls.size(), 1);
+    QVERIFY2(!consoleText().contains(QStringLiteral("Gagal membuka")), qPrintable(consoleText()));
+
+    // Terminal tidak bisa dijalankan: dicatat di konsol
+    launchResult = false;
+    terminal->trigger();
+    QVERIFY2(consoleText().contains(QStringLiteral("[SYSTEM] Gagal membuka folder kerja Demo di terminal: %1")
+                                        .arg(QDir::toNativeSeparators(workDir))),
+             qPrintable(consoleText()));
+    launchResult = true;
+
+    // Change Folder…: pemilih folder yang sama dengan tombol folder di header swimlane
+    QTemporaryDir other;
+    QVERIFY(other.isValid());
+    driveNextModalDialog([&other](QDialog *dialog) {
+        auto *picker = qobject_cast<QFileDialog *>(dialog);
+        QVERIFY(picker);
+        QVERIFY(picker->windowTitle().startsWith(QStringLiteral("Folder kerja agent untuk Demo")));
+        picker->selectFile(other.path());
+        dialog->accept();   // QFileDialog::accept() memeriksa pilihan; lewat QDialog karena protected di sana
+    });
+    change->trigger();
+    QVERIFY(m_dialogSeen);
+    const QString changed = QDir::cleanPath(other.path());
+    QVERIFY2(consoleText().contains(QStringLiteral("[SYSTEM] Folder kerja Demo: ")), qPrintable(consoleText()));
+
+    // Explorer dan terminal kini membuka folder yang baru
+    m_openedUrls.clear();
+    launches.clear();
+    explorer->trigger();
+    terminal->trigger();
+    QCOMPARE(m_openedUrls.size(), 1);
+    QCOMPARE(QDir::cleanPath(m_openedUrls.first().toLocalFile()), changed);
+    QCOMPARE(launches.size(), 1);
+    QCOMPARE(QDir::cleanPath(launches.first().directory), changed);
+
+    // Folder kerja hilang: tidak ada yang bisa dibuka, tapi masih bisa diganti
+    QVERIFY(other.remove());
+    menu->aboutToShow();
+    QVERIFY(!explorer->isEnabled() && !terminal->isEnabled());
+    QVERIFY(change->isEnabled());
+
+    // Project ditutup: ketiganya mati
+    fileAction(QStringLiteral("actionCloseProject"))->trigger();
+    menu->aboutToShow();
+    QVERIFY(!explorer->isEnabled() && !terminal->isEnabled() && !change->isEnabled());
 }
 
 void TestGui::stageColumnsExplainThemselves() {
