@@ -29,10 +29,17 @@ NoticeText textFor(const RuntimeCheck &check) {
                 QStringLiteral("Buka panduan update")};
     case RuntimeCheck::Status::LoggedOut:
         return {QStringLiteral("Claude Code belum login"),
-                QStringLiteral("Login Claude Code tidak ada atau sudah tidak berlaku. Jalankan <b>claude</b> "
-                               "di terminal lalu ketik <b>/login</b> dan ikuti langkah di browser, "
-                               "setelah itu jalankan ulang agent-nya."),
+                QStringLiteral("Login Claude Code tidak ada atau sudah tidak berlaku. Login lewat "
+                               "<b>File &gt; Integrations</b>, atau jalankan <b>claude</b> di terminal lalu "
+                               "ketik <b>/login</b> dan ikuti langkah di browser, setelah itu jalankan ulang "
+                               "agent-nya."),
                 QStringLiteral("Buka panduan login")};
+    case RuntimeCheck::Status::BadApiKey:
+        return {QStringLiteral("API key Anthropic bermasalah"),
+                QStringLiteral("Run agent memakai API key dari <b>File &gt; Integrations</b>, tapi key itu "
+                               "kosong atau ditolak server. Perbarui key-nya atau pilih login Claude Code, "
+                               "setelah itu jalankan ulang agent-nya."),
+                QStringLiteral("Buka Integrations")};
     case RuntimeCheck::Status::Ok:
         break;
     }
@@ -68,12 +75,16 @@ RuntimeNoticeDialog::RuntimeNoticeDialog(const RuntimeCheck &check, QWidget *par
     auto *btnOpen = new QPushButton(text.openLabel, this);
     btnOpen->setObjectName(QStringLiteral("btnRuntimeNoticeOpen"));
     btnOpen->setCursor(Qt::PointingHandCursor);
-    btnOpen->setEnabled(!check.helpUrl.isEmpty());
+    // BadApiKey tidak punya halaman panduan: tombolnya membuka File > Integrations lewat accepted()
+    const bool opensIntegrations = check.status == RuntimeCheck::Status::BadApiKey;
+    btnOpen->setEnabled(opensIntegrations || !check.helpUrl.isEmpty());
     btnOpen->setDefault(true);
 
     connect(btnCancel, &QPushButton::clicked, this, &QDialog::reject);
-    connect(btnOpen, &QPushButton::clicked, this, [this]() {
-        QDesktopServices::openUrl(QUrl(property("helpUrl").toString()));
+    connect(btnOpen, &QPushButton::clicked, this, [this, opensIntegrations]() {
+        if (!opensIntegrations) {
+            QDesktopServices::openUrl(QUrl(property("helpUrl").toString()));
+        }
         accept();
     });
 

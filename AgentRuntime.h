@@ -29,6 +29,28 @@ signals:
     void finished(const AgentResult &result);
 };
 
+// Login akun backend untuk File > Integrations. OAuth-nya dijalankan CLI backend itu sendiri di
+// browser, jadi aplikasi tidak pernah memegang token. Kontrak:
+// - refresh() -> statusChanged() satu kali, boleh langsung di dalam refresh();
+// - start() -> finished() satu kali (boleh di dalam start()), lalu statusChanged() dengan status baru;
+// - cancel() hanya berpengaruh selama login berjalan: finished(false) menyusul.
+class AccountLogin : public QObject {
+    Q_OBJECT
+
+public:
+    using QObject::QObject;
+    ~AccountLogin() override = default;
+
+    virtual void refresh() = 0;
+    virtual void start() = 0;
+    virtual void cancel() = 0;
+    virtual bool isRunning() const = 0;
+
+signals:
+    void statusChanged(const AccountStatus &status);
+    void finished(bool success, const QString &message);   // message: alasan gagal; kosong bila berhasil atau dibatalkan
+};
+
 // Pabrik AgentSession. StageSwarm hanya mengenal interface ini, bukan QProcess,
 // jadi logika gerombolan bisa dites dengan runtime palsu.
 class AgentRuntime {
@@ -40,6 +62,9 @@ public:
 
     // Session baru yang belum di-start; dimiliki parent
     virtual AgentSession *createSession(const AgentLaunch &launch, QObject *parent) = 0;
+
+    // Login akun backend ini; dimiliki parent
+    virtual AccountLogin *createAccountLogin(QObject *parent) = 0;
 
     // Pemeriksaan lengkap (terpasang, versi, login). Boleh memblokir beberapa detik karena
     // menjalankan proses, jadi panggil dari thread lain. Bawaan: dianggap siap.

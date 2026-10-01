@@ -12,12 +12,17 @@ win32: RC_ICONS = Resources/app.ico
 # In order to do so, uncomment the following line.
 #DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
 
+# Windows Credential Manager (SecretStore.cpp)
+win32: LIBS += -ladvapi32
+
 SOURCES += \
+    AgentAccess.cpp \
     AppFonts.cpp \
     BranchViewer.cpp \
     ClaudeCli.cpp \
     CSharpMetrics.cpp \
     ClassDiagram.cpp \
+    ClaudeCodeLogin.cpp \
     ClaudeCodeRuntime.cpp \
     CodeMetrics.cpp \
     ConsolePanelWidget.cpp \
@@ -32,6 +37,7 @@ SOURCES += \
     GitHistory.cpp \
     GitProcess.cpp \
     HoverInfoPopup.cpp \
+    IntegrationsDialog.cpp \
     KanbanCardWidget.cpp \
     KanbanColumnWidget.cpp \
     MaintainabilityView.cpp \
@@ -44,6 +50,7 @@ SOURCES += \
     RunLogFormatter.cpp \
     RuntimeNoticeDialog.cpp \
     RunPulse.cpp \
+    SecretStore.cpp \
     SourceTokens.cpp \
     SplitterPaneAnimator.cpp \
     StageCatalog.cpp \
@@ -64,14 +71,17 @@ SOURCES += \
     mainwindow.cpp
 
 HEADERS += \
+    AgentAccess.h \
     AgentDefinition.h \
     AgentRuntime.h \
     AgentTypes.h \
     AppFonts.h \
+    AppSettings.h \
     BranchViewer.h \
     ClaudeCli.h \
     CSharpMetrics.h \
     ClassDiagram.h \
+    ClaudeCodeLogin.h \
     ClaudeCodeRuntime.h \
     CodeMetrics.h \
     ConsolePanelWidget.h \
@@ -86,6 +96,7 @@ HEADERS += \
     GitHistory.h \
     GitProcess.h \
     HoverInfoPopup.h \
+    IntegrationsDialog.h \
     KanbanCardWidget.h \
     KanbanColumnWidget.h \
     MaintainabilityView.h \
@@ -98,6 +109,7 @@ HEADERS += \
     RunLogFormatter.h \
     RuntimeNoticeDialog.h \
     RunPulse.h \
+    SecretStore.h \
     SourceTokens.h \
     SplitterPaneAnimator.h \
     StageCatalog.h \

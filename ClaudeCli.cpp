@@ -51,13 +51,22 @@ QVersionNumber ClaudeCli::parseVersion(const QByteArray &output) {
     return QVersionNumber(match.captured(1).toInt(), match.captured(2).toInt(), match.captured(3).toInt());
 }
 
-std::optional<bool> ClaudeCli::parseLoggedIn(const QByteArray &output) {
-    const QJsonDocument document = QJsonDocument::fromJson(output.trimmed());
-    const QJsonValue loggedIn = document.object().value(QStringLiteral("loggedIn"));
+AccountStatus ClaudeCli::parseAccountStatus(const QByteArray &output) {
+    AccountStatus status;
+    const QJsonObject object = QJsonDocument::fromJson(output.trimmed()).object();
+    const QJsonValue loggedIn = object.value(QStringLiteral("loggedIn"));
     if (!loggedIn.isBool()) {
-        return std::nullopt;
+        return status;
     }
-    return loggedIn.toBool();
+    status.state = loggedIn.toBool() ? AccountStatus::State::LoggedIn : AccountStatus::State::LoggedOut;
+    status.account = object.value(QStringLiteral("email")).toString();
+    // "pro" -> "Pro"
+    status.plan = object.value(QStringLiteral("subscriptionType")).toString();
+    if (!status.plan.isEmpty()) {
+        status.plan[0] = status.plan.at(0).toUpper();
+    }
+    status.keySource = object.value(QStringLiteral("apiKeySource")).toString();
+    return status;
 }
 
 bool ClaudeCli::looksLikeAuthError(const QString &text) {
@@ -67,6 +76,15 @@ bool ClaudeCli::looksLikeAuthError(const QString &text) {
         QStringLiteral(R"(invalid api key|please run /login|not logged in|oauth token (?:has )?expired|authentication_error|api error: 401)"),
         QRegularExpression::CaseInsensitiveOption);
     return !text.isEmpty() && pattern.match(text).hasMatch();
+}
+
+QProcessEnvironment ClaudeCli::environment(const AgentAccess::Settings &access) {
+    QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+    if (access.method == AgentAccess::Method::ApiKey) {
+        environment.insert(QStringLiteral("ANTHROPIC_API_KEY"), access.apiKey);
+        environment.remove(QStringLiteral("ANTHROPIC_AUTH_TOKEN"));
+    }
+    return environment;
 }
 
 QString ClaudeCli::installUrl() {

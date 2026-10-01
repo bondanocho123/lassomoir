@@ -176,14 +176,16 @@ KanbanCardWidget[done="true"][state="idle"] {
     border: 1px solid #9cc9a0;
 }
 
-/* Notice Claude Code (belum terpasang / perlu update / belum login) */
+/* Notice Claude Code (belum terpasang / perlu update / belum login), pemilih font, Integrations */
 QDialog#runtimeNoticeDialog,
-QDialog#fontPickerDialog {
+QDialog#fontPickerDialog,
+QDialog#integrationsDialog {
     background-color: #fbf8f3;
 }
 
 QLabel#runtimeNoticeTitle,
-QLabel#fontPickerTitle {
+QLabel#fontPickerTitle,
+QLabel#integrationsTitle {
     font-size: 15px;
     font-weight: bold;
     color: #33517a;
@@ -195,7 +197,8 @@ QLabel#runtimeNoticeMessage {
 }
 
 QPushButton#btnRuntimeNoticeOpen,
-QPushButton#btnFontApply {
+QPushButton#btnFontApply,
+QPushButton#btnIntegrationsSave {
     background-color: #a9743f;
     color: #ffffff;
     border: none;
@@ -205,7 +208,8 @@ QPushButton#btnFontApply {
 }
 
 QPushButton#btnRuntimeNoticeOpen:hover,
-QPushButton#btnFontApply:hover {
+QPushButton#btnFontApply:hover,
+QPushButton#btnIntegrationsSave:hover {
     background-color: #8a5a2f;
 }
 
@@ -214,7 +218,10 @@ QPushButton#btnRuntimeNoticeOpen:disabled {
 }
 
 QPushButton#btnRuntimeNoticeCancel,
-QPushButton#btnFontCancel {
+QPushButton#btnFontCancel,
+QPushButton#btnIntegrationsCancel,
+QPushButton#btnIntegrationsLogin,
+QPushButton#btnIntegrationsReveal {
     background-color: #ffffff;
     color: #3d3730;
     border: 1px solid #e2d5c1;
@@ -223,8 +230,76 @@ QPushButton#btnFontCancel {
 }
 
 QPushButton#btnRuntimeNoticeCancel:hover,
-QPushButton#btnFontCancel:hover {
+QPushButton#btnFontCancel:hover,
+QPushButton#btnIntegrationsCancel:hover,
+QPushButton#btnIntegrationsLogin:hover,
+QPushButton#btnIntegrationsReveal:hover {
     background-color: #f2e3d1;
+}
+
+QPushButton#btnIntegrationsLogin:disabled,
+QPushButton#btnIntegrationsReveal:disabled {
+    color: #b3aa9c;
+}
+
+/* File > Integrations: dua pilihan cara agent masuk ke Claude */
+QDialog#integrationsDialog QRadioButton {
+    font-size: 13px;
+    font-weight: bold;
+    color: #3d3730;
+    spacing: 8px;
+}
+
+/* Bulatan pilihan digambar sendiri: bawaan sistem nyaris tidak terlihat di mode gelap.
+   Lebar luar keduanya 14px (isi + garis), jadi teks tidak bergeser saat dipilih. */
+QDialog#integrationsDialog QRadioButton::indicator {
+    width: 12px;
+    height: 12px;
+    border: 1px solid #b3aa9c;
+    border-radius: 7px;
+    background-color: #ffffff;
+}
+
+QDialog#integrationsDialog QRadioButton::indicator:hover {
+    border: 1px solid #a9743f;
+}
+
+QDialog#integrationsDialog QRadioButton::indicator:checked {
+    width: 6px;
+    height: 6px;
+    border: 4px solid #a9743f;
+}
+
+QLabel#integrationsHint {
+    font-size: 11px;
+    color: #8a7f70;
+}
+
+QLabel#integrationsLoginStatus {
+    font-size: 12px;
+    color: #33517a;
+}
+
+QLabel#integrationsError {
+    font-size: 12px;
+    color: #b4442f;
+}
+
+QLineEdit#integrationsApiKey {
+    background-color: #ffffff;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-size: 12px;
+    color: #111827;
+}
+
+QLineEdit#integrationsApiKey:focus {
+    border: 1px solid #a9743f;
+}
+
+QLineEdit#integrationsApiKey:disabled {
+    color: #b3aa9c;
 }
 
 /* Scrollbar ramping selaras palet */

@@ -100,3 +100,14 @@ QList<AgentEvent> StreamJsonParser::parseLine(const QByteArray &line) {
     }
     return events;
 }
+
+bool StreamJsonParser::isAuthRejection(const QByteArray &line) {
+    // Hampir semua baris bukan api_retry: jangan mengurai JSON besar dua kali
+    if (!line.contains("\"api_retry\"")) {
+        return false;
+    }
+    const QJsonObject object = QJsonDocument::fromJson(line.trimmed()).object();
+    return object.value(QLatin1String("type")).toString() == QLatin1String("system")
+           && object.value(QLatin1String("subtype")).toString() == QLatin1String("api_retry")
+           && object.value(QLatin1String("error_status")).toInt() == 401;
+}

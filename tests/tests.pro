@@ -10,11 +10,16 @@ TARGET = tst_swarm
 
 INCLUDEPATH += ..
 
+# Windows Credential Manager (SecretStore.cpp)
+win32: LIBS += -ladvapi32
+
 SOURCES += \
     tst_swarm.cpp \
+    ../AgentAccess.cpp \
     ../ClaudeCli.cpp \
     ../CSharpMetrics.cpp \
     ../ClassDiagram.cpp \
+    ../ClaudeCodeLogin.cpp \
     ../ClaudeCodeRuntime.cpp \
     ../CodeMetrics.cpp \
     ../DocumentText.cpp \
@@ -25,6 +30,7 @@ SOURCES += \
     ../MermaidRenderer.cpp \
     ../PromptComposer.cpp \
     ../RunLogFormatter.cpp \
+    ../SecretStore.cpp \
     ../SourceTokens.cpp \
     ../StageCatalog.cpp \
     ../StageInfo.cpp \
@@ -42,12 +48,15 @@ SOURCES += \
 HEADERS += \
     FakeAgentRuntime.h \
     GitSandbox.h \
+    ../AgentAccess.h \
     ../AgentDefinition.h \
     ../AgentRuntime.h \
     ../AgentTypes.h \
+    ../AppSettings.h \
     ../ClaudeCli.h \
     ../CSharpMetrics.h \
     ../ClassDiagram.h \
+    ../ClaudeCodeLogin.h \
     ../ClaudeCodeRuntime.h \
     ../CodeMetrics.h \
     ../DocumentText.h \
@@ -58,6 +67,7 @@ HEADERS += \
     ../MermaidRenderer.h \
     ../PromptComposer.h \
     ../RunLogFormatter.h \
+    ../SecretStore.h \
     ../SourceTokens.h \
     ../StageCatalog.h \
     ../StageInfo.h \

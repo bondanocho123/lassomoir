@@ -58,6 +58,37 @@ private:
     bool m_done = false;
 };
 
+// Login akun palsu yang memenuhi kontrak AccountLogin tanpa menjalankan proses.
+// Test yang memutuskan kapan login selesai dan status apa yang menyusul.
+class FakeAccountLogin final : public AccountLogin {
+    Q_OBJECT
+
+public:
+    FakeAccountLogin(AccountStatus status, QObject *parent)
+        : AccountLogin(parent), m_status(std::move(status)) {
+    }
+
+    void refresh() override { emit statusChanged(m_status); }
+    void start() override { m_running = true; }
+    void cancel() override { finishWith(false, QString(), m_status); }
+    bool isRunning() const override { return m_running; }
+
+    // Seperti CLI asli: finished dulu, lalu status barunya. Di luar login yang berjalan diabaikan.
+    void finishWith(bool success, const QString &message, const AccountStatus &status) {
+        if (!m_running) {
+            return;
+        }
+        m_running = false;
+        m_status = status;
+        emit finished(success, message);
+        emit statusChanged(m_status);
+    }
+
+private:
+    AccountStatus m_status;
+    bool m_running = false;
+};
+
 class FakeAgentRuntime final : public AgentRuntime {
 public:
     bool isAvailable(QString *reason) const override {
@@ -71,6 +102,12 @@ public:
         auto *session = new FakeAgentSession(launch, finishOnStart, parent);
         sessions.append(session);
         return session;
+    }
+
+    AccountLogin *createAccountLogin(QObject *parent) override {
+        auto *login = new FakeAccountLogin(accountStatus, parent);
+        logins.append(login);
+        return login;
     }
 
     RuntimeCheck check() const override { return checkResult; }
@@ -88,6 +125,8 @@ public:
     bool available = true;                        // uji penolakan "runtime tidak tersedia"
     bool finishOnStart = false;                   // uji session yang selesai di dalam start()
     QList<QPointer<FakeAgentSession>> sessions;   // semua session yang pernah dibuat
+    AccountStatus accountStatus;                  // status login yang dilaporkan login baru
+    QList<QPointer<FakeAccountLogin>> logins;     // semua login yang pernah dibuat
 };
 
 #endif // FAKEAGENTRUNTIME_H

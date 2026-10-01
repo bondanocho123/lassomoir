@@ -1,10 +1,10 @@
 #include "AppFonts.h"
+#include "AppSettings.h"
 
 #include <QDir>
 #include <QDirIterator>
 #include <QFontDatabase>
 #include <QSettings>
-#include <QStandardPaths>
 #include <QtDebug>
 
 #include <algorithm>
@@ -12,13 +12,6 @@
 namespace {
 
 constexpr char kFontKey[] = "ui/fontFamily";
-
-// File INI di folder konfigurasi aplikasi (bukan registry), jadi test mode QStandardPaths ikut terpisah
-QString settingsPath() {
-    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
-    QDir().mkpath(dir);
-    return QDir(dir).filePath(QStringLiteral("settings.ini"));
-}
 
 }
 
@@ -55,12 +48,12 @@ QString AppFonts::defaultLabel() {
 }
 
 QString AppFonts::saved() {
-    const QSettings settings(settingsPath(), QSettings::IniFormat);
+    const QSettings settings(AppSettings::filePath(), QSettings::IniFormat);
     return settings.value(QLatin1String(kFontKey)).toString();
 }
 
 void AppFonts::save(const QString &family) {
-    QSettings settings(settingsPath(), QSettings::IniFormat);
+    QSettings settings(AppSettings::filePath(), QSettings::IniFormat);
     if (family.isEmpty()) {
         settings.remove(QLatin1String(kFontKey));
     } else {

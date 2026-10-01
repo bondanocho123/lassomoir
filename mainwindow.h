@@ -64,8 +64,8 @@ public:
     // Periksa Claude Code (terpasang, versi, login) di thread lain; masalahnya tampil sebagai notice
     void checkRuntime();
 
-    // Notice "belum terpasang / perlu update / belum login"; Ok diabaikan, dan selama satu notice
-    // masih terbuka notice berikutnya tidak ditumpuk
+    // Notice "belum terpasang / perlu update / belum login / API key bermasalah"; Ok diabaikan, dan
+    // selama satu notice masih terbuka notice berikutnya tidak ditumpuk
     void showRuntimeNotice(const RuntimeCheck &check);
 
 private slots:
@@ -130,6 +130,10 @@ private slots:
     // File > Preferences: dialog pilih font antarmuka; pilihan langsung diterapkan dan disimpan
     void showFontPicker();
 
+    // File > Integrations: dialog cara run agent masuk ke Claude (login Claude Code atau API key).
+    // Dialog yang masih terbuka diangkat ke depan, tidak dibuat dua kali.
+    void showIntegrations();
+
     // Tombol × di popup folder referensi swimlane
     void removeReferenceDirectory(const QString &projectId, const QString &dir);
 
@@ -169,6 +173,8 @@ private:
     QPointer<QVariantAnimation> m_sidebarAnimation;
     // Notice runtime yang sedang terbuka (lihat showRuntimeNotice)
     QPointer<QDialog> m_runtimeNotice;
+    // Dialog Integrations yang sedang terbuka (lihat showIntegrations)
+    QPointer<QDialog> m_integrations;
     // Lebar minimum asli sidebarPanel (dari file .ui), disimpan karena
     // animasi sempat menurunkannya ke 0 agar splitter bisa menciutkannya penuh
     int m_sidebarMinWidth = 180;
@@ -177,7 +183,8 @@ private:
     int m_sidebarMaxWidth = 240;
 
     // Menu File / View / Help di baris paling atas jendela. Yang tersambung baru File > New /
-    // Close / Remove Project dan View > Source Control; item lainnya masih tampilan saja.
+    // Close / Remove Project / Integrations / Preferences dan View > Source Control; item lainnya
+    // masih tampilan saja.
     void setupMenuBar();
     // Close / Remove Project hanya berlaku untuk project yang sedang tampil di board
     QAction *m_actionCloseProject = nullptr;
