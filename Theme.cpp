@@ -324,12 +324,10 @@ bool Theme::apply(QApplication &app) {
     }
     if (!g_uiFontFamily.isEmpty()) {
         // Menimpa aturan "*" di awal styles.qss (sama spesifiknya, ditulis lebih akhir). Selector ID
-        // monospace (log, diff) lebih spesifik, jadi tetap; wordmark dikunci ke Garamond.
+        // monospace (log, diff) lebih spesifik, jadi tetap.
         QString family = g_uiFontFamily;
         family.remove(QLatin1Char('"'));
-        sheet += QStringLiteral("\n* {\n    font-family: \"%1\";\n}\n"
-                                "QLabel#labelAppName {\n    font-family: \"Garamond\", \"EB Garamond\", serif;\n}\n")
-                     .arg(family);
+        sheet += QStringLiteral("\n* {\n    font-family: \"%1\";\n}\n").arg(family);
     }
     QApplication::setPalette(palette());
     app.setStyleSheet(sheet);

@@ -48,7 +48,7 @@ QPalette palette();
 QString styleSheetFor(const QString &lightStyleSheet, Scheme scheme);
 
 // Font antarmuka pilihan pengguna (lihat AppFonts); kosong = font bawaan styles.qss.
-// Berlaku pada apply() berikutnya. Font monospace (log, diff) dan wordmark tidak ikut berganti.
+// Berlaku pada apply() berikutnya. Font monospace (log, diff) tidak ikut berganti.
 void setUiFontFamily(const QString &family);
 QString uiFontFamily();
 

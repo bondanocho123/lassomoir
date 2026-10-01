@@ -357,7 +357,9 @@ QScrollBar::sub-page:horizontal {
 
 /* ============ Sidebar daftar project ============ */
 
-QWidget#sidebarPanel {
+/* sidebarRail: rel sempit yang tersisa (berisi tombol sidebar) saat sidebar disembunyikan */
+QWidget#sidebarPanel,
+QWidget#sidebarRail {
     background-color: #f7f9f8;
     border: 1px solid #d3d8d5;
     border-radius: 8px;
@@ -599,20 +601,29 @@ QPushButton#btnDeleteConfirmCancel:pressed {
     border: 1px solid #24201b;
 }
 
-/* Tombol hamburger pengendali sidebar di top bar */
-QPushButton#btnToggleSidebar {
+/* Tombol sidebar: di pojok kanan atas sidebar (sejajar judul PROJECTS), dan kembarannya di rel
+   selama sidebar disembunyikan */
+QPushButton#btnToggleSidebar,
+QPushButton#btnShowSidebar {
     background: transparent;
     border: none;
-    padding: 2px 4px;
+    border-radius: 5px;
+    padding: 0;
+}
+
+QPushButton#btnToggleSidebar:hover,
+QPushButton#btnShowSidebar:hover {
+    background-color: #f2e3d1;
 }
 
 /* ============ Menu utama di baris paling atas jendela (File / View / Help) ============ */
 
-/* Latar sama dengan top bar di bawahnya: keduanya tampil sebagai satu kepala jendela.
-   Tanpa padding/spacing supaya "File" mepet ke pojok kiri atas. */
+/* Tanpa padding/spacing supaya "File" mepet ke pojok kiri atas. Garis bawahnya memisahkan
+   kepala jendela dari isi. */
 QMenuBar#topMenuBar {
     background-color: #f7f9f8;
     border: none;
+    border-bottom: 1px solid #d3d8d5;
     padding: 0px;
     spacing: 0px;
     font-size: 13px;

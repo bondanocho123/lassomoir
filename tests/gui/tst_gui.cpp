@@ -247,6 +247,11 @@ private slots:
     void longProjectNameKeepsRowButtonsVisible();
     // Sidebar menyempit setelah tampil pertama (ukuran splitter awal): baris ikut menyempit tanpa digeser
     void rowButtonsFollowSidebarWidth();
+    // Top bar sudah tidak ada: tombol sidebar di pojok kanan atas sidebar, sejajar judul PROJECTS
+    void sidebarButtonSitsInProjectsHeader();
+    // Sidebar disembunyikan: tombolnya tetap ada di rel, hover menampilkan sidebar menimpa board
+    // tanpa menggesernya, klik memasangnya kembali
+    void hiddenSidebarKeepsButtonAndPeeksOnHover();
 
     // Notice Claude Code: belum terpasang / perlu update / belum login, dengan tombol buka link atau batal
     void runtimeCheckShowsNotice_data();
@@ -692,12 +697,12 @@ void TestGui::menuBarSitsTopLeft() {
 
     auto *bar = m_window->findChild<QMenuBar *>(QStringLiteral("topMenuBar"));
     QVERIFY(bar);
-    // Baris menu jendela itu sendiri: di atas top bar, "File" mepet pojok kiri atas
+    // Baris menu jendela itu sendiri: di atas isi jendela, "File" mepet pojok kiri atas
     QCOMPARE(m_window->menuWidget(), bar);
-    auto *topBar = m_window->findChild<QWidget *>(QStringLiteral("topNavBar"));
-    QVERIFY(topBar);
+    auto *content = m_window->findChild<QWidget *>(QStringLiteral("contentWidget"));
+    QVERIFY(content);
     // Tata letak disusun ulang setelah stylesheet berganti
-    QTRY_VERIFY(bar->isVisible() && topBar->mapTo(m_window.get(), QPoint(0, 0)).y() > bar->geometry().bottom());
+    QTRY_VERIFY(bar->isVisible() && content->mapTo(m_window.get(), QPoint(0, 0)).y() > bar->geometry().bottom());
     QCOMPARE(bar->geometry().topLeft(), QPoint(0, 0));
 
     auto entries = [](const QMenu *menu) {
@@ -3017,13 +3022,13 @@ void TestGui::longProjectNameKeepsRowButtonsVisible() {
     }
     QVERIFY(row);
 
-    // Tombol baris harus utuh di dalam area tampil daftar, sesempit apa pun sidebar-nya
-    const QRect viewport = list->viewport()->rect();
+    // Tombol baris harus utuh di dalam area tampil daftar, sesempit apa pun sidebar-nya. Dihitung
+    // ulang tiap percobaan: lebar sidebar baru mapan setelah ukuran splitter awal diterapkan.
     for (const QString &name : {QStringLiteral("btnProjectDelete"), QStringLiteral("btnProjectNewTask")}) {
         auto *button = row->findChild<QPushButton *>(name);
         QVERIFY(button);
-        const QRect rect(button->mapTo(list->viewport(), QPoint(0, 0)), button->size());
-        QTRY_VERIFY2(viewport.contains(rect), qPrintable(name));
+        QTRY_VERIFY2(list->viewport()->rect().contains(QRect(button->mapTo(list->viewport(), QPoint(0, 0)), button->size())),
+                     qPrintable(name));
     }
 
     // Nama dipotong, nama lengkap tersedia lewat tooltip
@@ -3076,6 +3081,102 @@ void TestGui::rowButtonsFollowSidebarWidth() {
                                                               .arg(list->visualItemRect(list->item(0)).width())
                                                               .arg(splitter->sizes().value(0))),
                               1000);
+}
+
+void TestGui::sidebarButtonSitsInProjectsHeader() {
+    // Top bar beserta wordmark dan tombol New Project-nya sudah dibuang
+    QVERIFY(!m_window->findChild<QWidget *>(QStringLiteral("topNavBar")));
+    QVERIFY(!m_window->findChild<QWidget *>(QStringLiteral("labelAppName")));
+    QVERIFY(!m_window->findChild<QWidget *>(QStringLiteral("btnGlobalNewProject")));
+
+    auto *panel = m_window->findChild<QWidget *>(QStringLiteral("sidebarPanel"));
+    auto *title = m_window->findChild<QLabel *>(QStringLiteral("labelSidebarTitle"));
+    auto *button = m_window->findChild<QPushButton *>(QStringLiteral("btnToggleSidebar"));
+    QVERIFY(panel && title && button);
+    QVERIFY(panel->isAncestorOf(button));
+    QTRY_VERIFY(button->isVisible());
+
+    // Sebaris dengan judul PROJECTS, menempel tepi kanan panel
+    auto inPanel = [panel](const QWidget *widget) {
+        return QRect(widget->mapTo(panel, QPoint(0, 0)), widget->size());
+    };
+    QTRY_VERIFY(inPanel(button).left() > inPanel(title).right());
+    QVERIFY(qAbs(inPanel(button).center().y() - inPanel(title).center().y()) <= 1);
+    QTRY_VERIFY2(panel->width() - inPanel(button).right() <= 12,
+                 qPrintable(QStringLiteral("panel %1, tombol sampai %2").arg(panel->width()).arg(inPanel(button).right())));
+}
+
+void TestGui::hiddenSidebarKeepsButtonAndPeeksOnHover() {
+    auto *splitter = m_window->findChild<QSplitter *>(QStringLiteral("mainSplitter"));
+    auto *panel = m_window->findChild<QWidget *>(QStringLiteral("sidebarPanel"));
+    auto *rail = m_window->findChild<QWidget *>(QStringLiteral("sidebarRail"));
+    auto *hide = m_window->findChild<QPushButton *>(QStringLiteral("btnToggleSidebar"));
+    auto *show = m_window->findChild<QPushButton *>(QStringLiteral("btnShowSidebar"));
+    QListWidget *list = projectList();
+    QVERIFY(splitter && panel && rail && hide && show && list);
+
+    const QPoint cursorBefore = QCursor::pos();
+    const auto restoreCursor = qScopeGuard([cursorBefore]() { QCursor::setPos(cursorBefore); });
+    auto hover = [](QWidget *widget) {
+        const QPoint local = widget->rect().center();
+        const QPoint global = widget->mapToGlobal(local);
+        QCursor::setPos(global);
+        QEnterEvent enter(local, widget->window()->mapFromGlobal(global), global);
+        QApplication::sendEvent(widget, &enter);
+    };
+    auto leave = [this]() {
+        QCursor::setPos(consolePanel()->mapToGlobal(consolePanel()->rect().center()));
+    };
+    auto railRect = [rail, panel]() {
+        return QRect(rail->mapTo(panel->parentWidget(), QPoint(0, 0)), rail->size());
+    };
+
+    QTest::qWait(50);   // ukuran splitter awal sudah diterapkan
+    QTRY_VERIFY(panel->isVisible());
+    QVERIFY(!show->isVisible());
+    const QList<int> dockedSizes = splitter->sizes();
+    const int dockedWidth = dockedSizes.at(0);
+    QTRY_COMPARE(panel->geometry(), railRect());
+
+    // Disembunyikan: sidebar hilang, tombolnya pindah ke rel sempit di tempat yang sama
+    hide->click();
+    QTRY_VERIFY(!panel->isVisible());
+    QVERIFY(show->isVisible());
+    const QList<int> hiddenSizes = splitter->sizes();
+    QVERIFY2(hiddenSizes.at(0) < 60, qPrintable(QString::number(hiddenSizes.at(0))));
+    // Lebar yang dilepas sidebar jatuh ke board; konsol tidak berubah
+    QCOMPARE(hiddenSizes.at(0) + hiddenSizes.at(1), dockedSizes.at(0) + dockedSizes.at(1));
+    QCOMPARE(hiddenSizes.at(2), dockedSizes.at(2));
+
+    // Hover tombol: sidebar tampil di kanan rel, menimpa board tanpa menggeser pane mana pun
+    hover(show);
+    QTRY_VERIFY(panel->isVisible());
+    QVERIFY(list->isVisible());
+    QVERIFY(show->isVisible());
+    QVERIFY(panel->geometry().left() > railRect().right());
+    QCOMPARE(panel->width(), dockedWidth);
+    QCOMPARE(panel->height(), rail->height());
+    QCOMPARE(splitter->sizes(), hiddenSizes);
+
+    // Selama kursor di atas sidebar ia bertahan; begitu kursor pergi, hilang lagi
+    QCursor::setPos(list->mapToGlobal(list->rect().center()));
+    QTest::qWait(500);
+    QVERIFY(panel->isVisible());
+    leave();
+    QTRY_VERIFY(!panel->isVisible());
+    QVERIFY(show->isVisible());
+    QCOMPARE(splitter->sizes(), hiddenSizes);
+
+    // Klik tombol rel selagi sidebar tampil sementara: terpasang kembali selebar semula
+    hover(show);
+    QTRY_VERIFY(panel->isVisible());
+    show->click();
+    QTRY_COMPARE(splitter->sizes().at(0), dockedWidth);
+    QTRY_VERIFY(!show->isVisible());
+    QTRY_COMPARE(panel->geometry(), railRect());
+    leave();
+    QTest::qWait(500);
+    QVERIFY(panel->isVisible());
 }
 
 QDialog *TestGui::runtimeNotice() const {
@@ -3548,16 +3649,16 @@ void TestGui::themeAdaptsWidgetStyleSheets() {
     widget.setStyleSheet(QStringLiteral("color: #a9743f;"));
     QCOMPARE(widget.styleSheet(), QStringLiteral("color: #e0b07a;"));
 
-    // Jendela yang sudah ada: mis. top bar dari mainwindow.ui
-    auto *topBar = m_window->findChild<QWidget *>(QStringLiteral("topNavBar"));
-    QVERIFY(topBar);
-    QVERIFY2(!topBar->styleSheet().contains(QStringLiteral("#f7f9f8")), qPrintable(topBar->styleSheet()));
+    // Jendela yang sudah ada: mis. swimlane, yang stylesheet-nya dari SwimlaneWidget.ui
+    auto *lane = m_window->findChild<SwimlaneWidget *>();
+    QVERIFY(lane);
+    QVERIFY2(!lane->styleSheet().contains(QStringLiteral("#f7f9f8")), qPrintable(lane->styleSheet()));
 
     // Kembali ke terang: stylesheet asli dipulihkan
     Theme::setSchemeOverride(Theme::Scheme::Light);
     QVERIFY(Theme::apply(*qApp));
     QCOMPARE(widget.styleSheet(), QStringLiteral("color: #a9743f;"));
-    QVERIFY(topBar->styleSheet().contains(QStringLiteral("#f7f9f8")));
+    QVERIFY(lane->styleSheet().contains(QStringLiteral("#f7f9f8")));
 }
 
 void TestGui::bundledFontsAreRegistered() {
@@ -3628,8 +3729,6 @@ void TestGui::preferencesChangesFont() {
 
     QCOMPARE(AppFonts::saved(), QStringLiteral("Inter"));
     QVERIFY2(qApp->styleSheet().contains(QStringLiteral("font-family: \"Inter\"")), "font override missing");
-    // Wordmark tetap Garamond
-    QVERIFY(qApp->styleSheet().contains(QStringLiteral("QLabel#labelAppName")));
 
     // Dibuka lagi: Inter yang terpilih; kembali ke bawaan menghapus override
     dialog = openPicker();
