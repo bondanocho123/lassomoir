@@ -84,6 +84,17 @@ RuntimeCheck ClaudeCodeRuntime::probe() const {
 
     // Status login yang tidak terbaca (mis. versi tanpa subcommand auth) tidak dilaporkan sebagai
     // masalah; run yang gagal karena belum login tetap ditangkap diagnose()
+    // Kredensial lewat environment (API key, Bedrock, Vertex, Foundry) tidak tercatat sebagai login
+    // CLI; status auth-nya tidak dipakai supaya pengguna seperti itu tidak diminta login tiap kali buka
+    static const char *const kEnvCredentials[] = {
+        "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
+    };
+    for (const char *name : kEnvCredentials) {
+        if (!qEnvironmentVariableIsEmpty(name)) {
+            return RuntimeCheck::of(Status::Ok, QString(), versionText);
+        }
+    }
     const CommandOutput authOutput = runCommand(m_program, {QStringLiteral("auth"), QStringLiteral("status")});
     if (ClaudeCli::parseLoggedIn(authOutput.stdoutData) == std::optional<bool>(false)) {
         return RuntimeCheck::of(Status::LoggedOut, QStringLiteral("Claude Code belum login."), versionText);

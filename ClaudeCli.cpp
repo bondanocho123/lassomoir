@@ -61,9 +61,10 @@ std::optional<bool> ClaudeCli::parseLoggedIn(const QByteArray &output) {
 }
 
 bool ClaudeCli::looksLikeAuthError(const QString &text) {
-    // Pesan CLI saat token/API key tidak ada, kedaluwarsa, atau ditolak server (401)
+    // Hanya frasa milik CLI saat token/API key tidak ada, kedaluwarsa, atau ditolak server (401).
+    // Kata umum seperti "login" tidak dipakai: hasil agent tentang halaman login bukan tanda belum login.
     static const QRegularExpression pattern(
-        QStringLiteral(R"(\blog ?in\b|/login|not logged|api key|unauthori[sz]ed|authenticat|\b401\b|oauth token|credential)"),
+        QStringLiteral(R"(invalid api key|please run /login|not logged in|oauth token (?:has )?expired|authentication_error|api error: 401)"),
         QRegularExpression::CaseInsensitiveOption);
     return !text.isEmpty() && pattern.match(text).hasMatch();
 }

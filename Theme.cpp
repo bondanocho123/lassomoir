@@ -12,6 +12,8 @@
 #include <QWidget>
 #include <QtDebug>
 
+#include <memory>
+
 namespace {
 
 std::optional<Theme::Scheme> g_override;
@@ -133,7 +135,7 @@ public:
 
     void paint(QPainter *painter, const QRect &rect, QIcon::Mode mode, QIcon::State state) override {
         Q_UNUSED(state);
-        QSvgRenderer renderer(svgFor(Theme::scheme()));
+        QSvgRenderer &renderer = rendererFor(Theme::scheme());
         if (mode == QIcon::Disabled) {
             painter->save();
             painter->setOpacity(painter->opacity() * 0.4);
@@ -163,18 +165,20 @@ public:
     QString key() const override { return QStringLiteral("ThemedSvgEngine"); }
 
 private:
-    QByteArray svgFor(Theme::Scheme scheme) {
-        QByteArray &cached = scheme == Theme::Scheme::Dark ? m_dark : m_light;
-        if (cached.isEmpty()) {
+    // SVG diurai sekali per mode, bukan tiap kali tombol dilukis ulang
+    QSvgRenderer &rendererFor(Theme::Scheme scheme) {
+        std::unique_ptr<QSvgRenderer> &cached = scheme == Theme::Scheme::Dark ? m_dark : m_light;
+        if (!cached) {
             const QString light = readFile(m_path);
-            cached = (scheme == Theme::Scheme::Dark ? replaceHex(light, textMap()) : light).toUtf8();
+            cached = std::make_unique<QSvgRenderer>(
+                (scheme == Theme::Scheme::Dark ? replaceHex(light, textMap()) : light).toUtf8());
         }
-        return cached;
+        return *cached;
     }
 
     QString m_path;
-    QByteArray m_light;
-    QByteArray m_dark;
+    std::unique_ptr<QSvgRenderer> m_light;
+    std::unique_ptr<QSvgRenderer> m_dark;
 };
 
 // Stylesheet milik widget sendiri (dari .ui atau setStyleSheet di kode) juga ditulis untuk mode
@@ -247,6 +251,12 @@ QString Theme::styleSheetFor(const QString &lightStyleSheet, Scheme scheme) {
     if (scheme == Scheme::Light) {
         return lightStyleSheet;
     }
+    // Stylesheet widget yang sama dipetakan berulang (tiap polish / setStyleSheet); hasilnya disimpan.
+    // Hanya dipanggil dari thread GUI.
+    static QHash<QString, QString> cache;
+    if (const auto it = cache.constFind(lightStyleSheet); it != cache.constEnd()) {
+        return *it;
+    }
     // Tiap deklarasi "properti: nilai": warna di `color` memakai peta teks, sisanya peta bidang.
     // Selektor seperti "QPushButton:hover" ikut tertangkap pola ini, tapi tidak berisi warna.
     static const QRegularExpression declaration(QStringLiteral("([A-Za-z-]+)(\\s*:\\s*)([^;{}]*)"));
@@ -263,6 +273,7 @@ QString Theme::styleSheetFor(const QString &lightStyleSheet, Scheme scheme) {
         last = match.capturedEnd();
     }
     result += lightStyleSheet.mid(last);
+    cache.insert(lightStyleSheet, result);
     return result;
 }
 

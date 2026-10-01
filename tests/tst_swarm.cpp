@@ -1071,6 +1071,10 @@ void TestSwarm::claudeCliRecognizesAuthErrors() {
     QVERIFY(ClaudeCli::looksLikeAuthError(QStringLiteral("OAuth token has expired")));
     QVERIFY(!ClaudeCli::looksLikeAuthError(QStringLiteral("API Error: 529 Overloaded")));
     QVERIFY(!ClaudeCli::looksLikeAuthError(QStringLiteral("claude berhenti dengan exit code 1")));
+    // Kata "login"/"authentication" di luar pesan auth CLI tidak dianggap belum login
+    QVERIFY(!ClaudeCli::looksLikeAuthError(QStringLiteral("Selesai: halaman login sudah dibuat")));
+    QVERIFY(!ClaudeCli::looksLikeAuthError(QStringLiteral("MCP server github requires authentication")));
+    QVERIFY(!ClaudeCli::looksLikeAuthError(QStringLiteral("Missing credentials file for git")));
     QVERIFY(!ClaudeCli::looksLikeAuthError(QString()));
 }
 
@@ -1097,8 +1101,21 @@ void TestSwarm::claudeRuntimeChecksInstallVersionAndLogin() {
         QVERIFY(check.detail.contains(ClaudeCli::minimumVersion().toString()));
     }
     {
+        // Kredensial lewat environment di mesin penguji tidak boleh mengubah hasil
+        const QByteArray apiKey = qgetenv("ANTHROPIC_API_KEY");
+        qunsetenv("ANTHROPIC_API_KEY");
+        const auto restoreKey = qScopeGuard([apiKey]() {
+            if (!apiKey.isEmpty()) {
+                qputenv("ANTHROPIC_API_KEY", apiKey);
+            }
+        });
         const FakeClaudeMode mode(QStringLiteral("preflight:2.1.300:false"));
         QCOMPARE(runtime.check().status, RuntimeCheck::Status::LoggedOut);
+
+        // Memakai API key: status login CLI tidak relevan
+        qputenv("ANTHROPIC_API_KEY", "sk-test");
+        QCOMPARE(runtime.check().status, RuntimeCheck::Status::Ok);
+        qunsetenv("ANTHROPIC_API_KEY");
     }
     {
         // Status login tidak terbaca: jangan menakut-nakuti pengguna, anggap siap

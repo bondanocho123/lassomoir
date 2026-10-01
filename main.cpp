@@ -1,5 +1,6 @@
 #include <QApplication>
 #include <QIcon>
+#include <QThreadPool>
 
 #include "mainwindow.h" // Gunakan "mainwindow.h" jika tanpa subfolder
 #include "ClaudeCodeRuntime.h"
@@ -46,5 +47,9 @@ int main(int argc, char *argv[])
     // bila tidak, notice berisi cara memperbaikinya muncul di atas jendela
     window.checkRuntime();
 
-    return QApplication::exec();
+    const int exitCode = QApplication::exec();
+    // Pemeriksaan Claude Code (checkRuntime) yang masih berjalan memakai runtime & swarm di atas:
+    // tunggu sampai selesai sebelum keduanya dihancurkan
+    QThreadPool::globalInstance()->waitForDone();
+    return exitCode;
 }
