@@ -42,6 +42,7 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QMenu>
 #include <QMimeData>
 #include <QPlainTextEdit>
@@ -219,6 +220,9 @@ private slots:
     void promptEditorAttachesPhotosAndDocuments();
     void newTaskWithAttachmentsFeedsRun();
     void referenceFoldersFeedRuns();
+
+    // Nama project panjang dipotong "…" supaya tombol hapus dan "+" di barisnya tetap terlihat
+    void longProjectNameKeepsRowButtonsVisible();
 
 private:
     // Dialog modal membuka event loop sendiri di dalam handler klik; timer ini jalan di loop itu
@@ -2635,6 +2639,48 @@ void TestGui::referenceFoldersFeedRuns() {
     runButton(QStringLiteral("t3"))->click();
     QVERIFY(m_runtime.sessions.last()->launch().readableDirectories.isEmpty());
     QVERIFY(!m_runtime.sessions.last()->launch().prompt.contains(QStringLiteral("Folder referensi")));
+}
+
+void TestGui::longProjectNameKeepsRowButtonsVisible() {
+    const QString longName = QStringLiteral("Project Dengan Nama Yang Sangat Panjang Sekali Untuk Sidebar");
+    const QString base = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    QVERIFY(QDir().mkpath(base + QStringLiteral("/projects/") + longName));
+    QJsonObject root;
+    root[QStringLiteral("schemaVersion")] = 1;
+    root[QStringLiteral("projectId")] = longName;
+    root[QStringLiteral("tasks")] = QJsonArray{};
+    QVERIFY(writeFile(base + QStringLiteral("/projects/") + longName + QStringLiteral("/session.json"),
+                      QJsonDocument(root).toJson()));
+
+    m_window.reset();
+    m_tasks.reset();
+    createWindow();
+    m_window->resize(1200, 700);
+
+    auto *list = m_window->findChild<QListWidget *>(QStringLiteral("projectList"));
+    QVERIFY(list);
+    QWidget *row = nullptr;
+    for (int i = 0; i < list->count(); ++i) {
+        if (list->item(i)->data(Qt::UserRole).toString() == longName) {
+            row = list->itemWidget(list->item(i));
+        }
+    }
+    QVERIFY(row);
+
+    // Tombol baris harus utuh di dalam area tampil daftar, sesempit apa pun sidebar-nya
+    const QRect viewport = list->viewport()->rect();
+    for (const QString &name : {QStringLiteral("btnProjectDelete"), QStringLiteral("btnProjectNewTask")}) {
+        auto *button = row->findChild<QPushButton *>(name);
+        QVERIFY(button);
+        const QRect rect(button->mapTo(list->viewport(), QPoint(0, 0)), button->size());
+        QTRY_VERIFY2(viewport.contains(rect), qPrintable(name));
+    }
+
+    // Nama dipotong, nama lengkap tersedia lewat tooltip
+    auto *label = row->findChild<QLabel *>(QStringLiteral("projectRowLabel"));
+    QVERIFY(label);
+    QTRY_VERIFY(label->text().endsWith(QChar(0x2026)));
+    QCOMPARE(label->toolTip(), longName);
 }
 
 int main(int argc, char *argv[]) {

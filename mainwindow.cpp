@@ -7,6 +7,7 @@
 #include "KanbanCardWidget.h"
 #include "TaskItem.h"
 #include "ConsolePanelWidget.h"
+#include "ElidedLabel.h"
 #include "FileManager.h"
 #include "NewTaskDialog.h"
 #include "ResponseDrawer.h"
@@ -286,7 +287,8 @@ void MainWindow::addSwimlane(const QString &projectId) {
     auto *item = new QListWidgetItem(ui->projectList);
     item->setData(Qt::UserRole, projectId);
     QWidget *rowWidget = createProjectRowWidget(projectId);
-    item->setSizeHint(rowWidget->sizeHint());
+    // Hanya tingginya yang dipatok: lebar baris mengikuti lebar daftar, bukan panjang nama project
+    item->setSizeHint(QSize(0, rowWidget->sizeHint().height()));
     ui->projectList->setItemWidget(item, rowWidget);
 
     m_swimlanes.insert(projectId, swimlane);
@@ -297,7 +299,8 @@ QWidget *MainWindow::createProjectRowWidget(const QString &projectId) {
     auto *row = new QWidget();
     row->setObjectName("projectRow");
 
-    auto *label = new QLabel(projectId, row);
+    // Nama panjang dipotong "…" (nama lengkap di tooltip) supaya tombol di kanan tidak terdorong keluar
+    auto *label = new ElidedLabel(projectId, row);
     label->setObjectName("projectRowLabel");
 
     auto *btnDelete = new QPushButton(row);
@@ -331,8 +334,7 @@ QWidget *MainWindow::createProjectRowWidget(const QString &projectId) {
     auto *rowLayout = new QHBoxLayout(row);
     rowLayout->setContentsMargins(6, 3, 4, 3);
     rowLayout->setSpacing(2);
-    rowLayout->addWidget(label);
-    rowLayout->addStretch(1);
+    rowLayout->addWidget(label, 1);
     rowLayout->addWidget(btnDelete);
     rowLayout->addWidget(btnNewTask);
 

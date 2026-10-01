@@ -21,6 +21,7 @@ SOURCES += \
     ../../CodeMetrics.cpp \
     ../../ConsolePanelWidget.cpp \
     ../../ConsoleTaskCard.cpp \
+    ../../ElidedLabel.cpp \
     ../../DiagramViewer.cpp \
     ../../DiffView.cpp \
     ../../DocumentText.cpp \
@@ -70,6 +71,7 @@ HEADERS += \
     ../../CodeMetrics.h \
     ../../ConsolePanelWidget.h \
     ../../ConsoleTaskCard.h \
+    ../../ElidedLabel.h \
     ../../DiagramViewer.h \
     ../../DiffView.h \
     ../../DocumentText.h \
