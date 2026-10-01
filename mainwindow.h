@@ -161,11 +161,13 @@ private:
     int m_sidebarMaxWidth = 240;
 
     // Menu File / View / Help di baris paling atas jendela. Yang tersambung baru File > New /
-    // Close / Remove Project; item lainnya masih tampilan saja.
+    // Close / Remove Project dan View > Source Control; item lainnya masih tampilan saja.
     void setupMenuBar();
     // Close / Remove Project hanya berlaku untuk project yang sedang tampil di board
     QAction *m_actionCloseProject = nullptr;
     QAction *m_actionRemoveProject = nullptr;
+    // Source Control hanya berlaku bila folder kerja project yang tampil adalah repository git
+    QAction *m_actionSourceControl = nullptr;
     // Helper untuk memuat data awal saat aplikasi baru dibuka
     void loadInitialMockData();
     // Muat semua project dari <AppData>/projects; return jumlah project yang dimuat
