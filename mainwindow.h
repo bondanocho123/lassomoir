@@ -32,6 +32,7 @@ class SplitterPaneAnimator;
 class StageCatalog;
 class SwarmCoordinator;
 class TaskManager;
+class QAction;
 class QDialog;
 class QListWidgetItem;
 class QSplitter;
@@ -77,8 +78,16 @@ private slots:
     // Slot saat kartu diklik dua kali: buka form task terisi data kartu, lalu terapkan perubahannya
     void handleEditTaskRequested(const QString &projectId, const QString &taskId);
 
-    // Slot saat tombol "Close" di header swimlane diklik
+    // Slot saat "New Project" dipilih (tombol top bar atau menu File): tanya nama, buat swimlane
+    // + session.json-nya, lalu tampilkan di board
+    void handleNewProjectRequested();
+
+    // Slot saat tombol "Close" di header swimlane atau menu File > Close Project dipilih
     void handleCloseProjectRequested(const QString &projectId);
+
+    // Menu File > Remove Project: tanya dulu lewat dialog, baru handleDeleteProjectRequested()
+    // bila dijawab "Ya"
+    void confirmRemoveProject(const QString &projectId);
 
     // Slot saat konfirmasi "Ya" pada popup hapus project ditekan:
     // project dibuang dari UI sekaligus dihapus permanen dari disk
@@ -167,8 +176,14 @@ private:
     // lebar selama animasi sehingga nilainya harus disimpan dulu
     int m_sidebarMaxWidth = 240;
 
-    // Menu File / View / Help di baris paling atas jendela (tampilan saja, belum ada aksinya)
+    // Menu File / View / Help di baris paling atas jendela. Yang tersambung baru File > New /
+    // Close / Remove Project dan View > Source Control; item lainnya masih tampilan saja.
     void setupMenuBar();
+    // Close / Remove Project hanya berlaku untuk project yang sedang tampil di board
+    QAction *m_actionCloseProject = nullptr;
+    QAction *m_actionRemoveProject = nullptr;
+    // Source Control hanya berlaku bila folder kerja project yang tampil adalah repository git
+    QAction *m_actionSourceControl = nullptr;
     // Helper untuk memuat data awal saat aplikasi baru dibuka
     void loadInitialMockData();
     // Muat semua project dari <AppData>/projects; return jumlah project yang dimuat

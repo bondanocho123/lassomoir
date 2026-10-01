@@ -577,6 +577,12 @@ QMenu#topMenu::item:selected {
     color: #3d3730;
 }
 
+/* Close / Remove Project selama belum ada project yang tampil */
+QMenu#topMenu::item:disabled {
+    color: #b8ad9d;
+    background: transparent;
+}
+
 QMenu#topMenu::separator {
     height: 1px;
     background: #efe6d8;

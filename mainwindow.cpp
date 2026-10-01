@@ -31,6 +31,7 @@
 #include <QtConcurrent/QtConcurrentRun>
 #include <QInputDialog>
 #include <QAbstractAnimation>
+#include <QAction>
 #include <QEasingCurve>
 #include <QEvent>
 #include <QFont>
@@ -44,6 +45,7 @@
 #include <QApplication>
 #include <QMenu>
 #include <QMenuBar>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSize>
@@ -191,28 +193,7 @@ MainWindow::MainWindow(const StageCatalog &catalog, TaskManager &tasks, SwarmCoo
             this, &MainWindow::toggleSidebar);
 
     // Tombol global New Project di top bar
-    connect(ui->btnGlobalNewProject, &QPushButton::clicked, this, [this]() {
-        bool ok;
-        QString projectName = QInputDialog::getText(this, "New Project",
-                                                    "Project Name / Target:",
-                                                    QLineEdit::Normal, "", &ok);
-        if (ok && !projectName.trimmed().isEmpty()) {
-            QString projectId = projectName.trimmed();
-
-            if (m_swimlanes.contains(projectId)){
-                ui->consolePanel->appendLog("[SYSTEM] Project '" + projectId + "' sudah ada.");
-                setActiveProject(projectId);
-                return;
-            }
-
-            addSwimlane(projectId);
-            saveProject(projectId);
-
-            // Project baru langsung ditampilkan di board
-            setActiveProject(projectId);
-            ui->consolePanel->appendLog("[SYSTEM] Project swimlane baru dibuat: " + projectId);
-        }
-    });
+    connect(ui->btnGlobalNewProject, &QPushButton::clicked, this, &MainWindow::handleNewProjectRequested);
 
     // Prioritaskan data tersimpan; mock hanya dipakai bila belum ada project di disk
     if (loadProjectsFromDisk() == 0) {
@@ -229,7 +210,8 @@ MainWindow::MainWindow(const StageCatalog &catalog, TaskManager &tasks, SwarmCoo
 
 void MainWindow::setupMenuBar() {
     // Menu utama di baris paling atas jendela, mepet pojok kiri atas (di atas top bar).
-    // Baru tampilannya: aksi-aksinya belum disambungkan ke apa pun.
+    // Yang tersambung: File > New / Close / Remove Project dan View > Source Control; item lainnya
+    // belum ada aksinya.
     auto *menuBar = new QMenuBar(this);
     menuBar->setObjectName("topMenuBar");
     setMenuBar(menuBar);
@@ -241,9 +223,26 @@ void MainWindow::setupMenuBar() {
     };
 
     QMenu *file = addMenu("&File");
-    file->addAction("New Project");
-    file->addAction("Close Project");
-    file->addAction("Remove Project");
+    QAction *newProject = file->addAction("New Project", this, &MainWindow::handleNewProjectRequested);
+    newProject->setObjectName("actionNewProject");
+    // Id dioper sebagai salinan: slot-slot ini menerima referensi, dan membuang project
+    // mengosongkan m_activeProjectId di tengah jalan (id kosong = log salah, dan deleteProject("")
+    // menghapus folder projects/ seluruhnya)
+    m_actionCloseProject = file->addAction("Close Project", this, [this]() {
+        handleCloseProjectRequested(QString(m_activeProjectId));
+    });
+    m_actionCloseProject->setObjectName("actionCloseProject");
+    m_actionRemoveProject = file->addAction("Remove Project", this, [this]() {
+        confirmRemoveProject(QString(m_activeProjectId));
+    });
+    m_actionRemoveProject->setObjectName("actionRemoveProject");
+    // Keduanya bekerja pada project yang sedang tampil: mati selama board kosong. Dihitung tiap
+    // menu dibuka, jadi tidak ada tempat lain yang perlu ingat memperbaruinya.
+    connect(file, &QMenu::aboutToShow, this, [this]() {
+        const bool hasProject = !m_activeProjectId.isEmpty();
+        m_actionCloseProject->setEnabled(hasProject);
+        m_actionRemoveProject->setEnabled(hasProject);
+    });
     file->addSeparator();
     file->addAction("Agent Access");
     // Pengaturan aplikasi (sementara: ganti font antarmuka)
@@ -252,8 +251,18 @@ void MainWindow::setupMenuBar() {
     connect(preferences, &QAction::triggered, this, &MainWindow::showFontPicker);
     file->addAction("Exit");
 
+    // Jendela branch & commit project yang tampil, sama dengan tombol branch di header swimlane.
+    // Seperti tombol itu, hanya berlaku bila folder kerjanya repository git.
     QMenu *view = addMenu("&View");
-    view->addAction("Source Control");
+    m_actionSourceControl = view->addAction("Source Control", this, [this]() {
+        showBranchViewer(m_activeProjectId);
+    });
+    m_actionSourceControl->setObjectName("actionSourceControl");
+    connect(view, &QMenu::aboutToShow, this, [this]() {
+        m_actionSourceControl->setEnabled(
+            !m_activeProjectId.isEmpty()
+            && TaskGit::looksLikeRepository(m_fileManager->workingDirectory(m_activeProjectId)));
+    });
 
     QMenu *help = addMenu("&Help");
     help->addAction("Report Issue");
@@ -760,6 +769,50 @@ void MainWindow::removeProjectFromUi(const QString &projectId) {
             m_activeProjectId.clear();
             ui->boardStack->setCurrentIndex(0);
         }
+    }
+}
+
+void MainWindow::handleNewProjectRequested() {
+    bool ok;
+    QString projectName = QInputDialog::getText(this, "New Project",
+                                                "Project Name / Target:",
+                                                QLineEdit::Normal, "", &ok);
+    if (ok && !projectName.trimmed().isEmpty()) {
+        QString projectId = projectName.trimmed();
+
+        if (m_swimlanes.contains(projectId)){
+            ui->consolePanel->appendLog("[SYSTEM] Project '" + projectId + "' sudah ada.");
+            setActiveProject(projectId);
+            return;
+        }
+
+        addSwimlane(projectId);
+        saveProject(projectId);
+
+        // Project baru langsung ditampilkan di board
+        setActiveProject(projectId);
+        ui->consolePanel->appendLog("[SYSTEM] Project swimlane baru dibuat: " + projectId);
+    }
+}
+
+void MainWindow::confirmRemoveProject(const QString &projectId) {
+    if (!m_swimlanes.contains(projectId)) return;
+
+    // Popup konfirmasi sidebar menempel di tombol hapus baris project, yang bisa sedang
+    // tersembunyi (sidebar diciutkan); dari menu, dialog biasa yang tidak butuh anchor
+    QMessageBox box(QMessageBox::Warning, "Remove Project",
+                    QString("Hapus project \"%1\"?").arg(projectId), QMessageBox::NoButton, this);
+    box.setInformativeText("Task, lampiran, dan worktree-nya dihapus permanen dari disk. "
+                           "Folder kerja project tidak disentuh.");
+    QPushButton *yes = box.addButton("Ya", QMessageBox::DestructiveRole);
+    QPushButton *cancel = box.addButton("Batal", QMessageBox::RejectRole);
+    // Hapus permanen: Enter/Esc jatuh ke "Batal"
+    box.setDefaultButton(cancel);
+    box.setEscapeButton(cancel);
+    box.exec();
+
+    if (box.clickedButton() == yes) {
+        handleDeleteProjectRequested(projectId);
     }
 }
 
