@@ -17,6 +17,7 @@
 namespace {
 
 std::optional<Theme::Scheme> g_override;
+QString g_uiFontFamily;
 
 constexpr QRgb kRgbMask = 0xffffff;
 
@@ -321,6 +322,15 @@ bool Theme::apply(QApplication &app) {
         // Tambahan khusus gelap yang tidak bisa diturunkan dari peta warna (mis. gambar panah)
         sheet += QLatin1Char('\n') + readFile(QStringLiteral(":/styles-dark.qss"));
     }
+    if (!g_uiFontFamily.isEmpty()) {
+        // Menimpa aturan "*" di awal styles.qss (sama spesifiknya, ditulis lebih akhir). Selector ID
+        // monospace (log, diff) lebih spesifik, jadi tetap; wordmark dikunci ke Garamond.
+        QString family = g_uiFontFamily;
+        family.remove(QLatin1Char('"'));
+        sheet += QStringLiteral("\n* {\n    font-family: \"%1\";\n}\n"
+                                "QLabel#labelAppName {\n    font-family: \"Garamond\", \"EB Garamond\", serif;\n}\n")
+                     .arg(family);
+    }
     QApplication::setPalette(palette());
     app.setStyleSheet(sheet);
     const QWidgetList widgets = QApplication::allWidgets();
@@ -329,6 +339,14 @@ bool Theme::apply(QApplication &app) {
     }
     emit Notifier::instance()->changed();
     return true;
+}
+
+void Theme::setUiFontFamily(const QString &family) {
+    g_uiFontFamily = family;
+}
+
+QString Theme::uiFontFamily() {
+    return g_uiFontFamily;
 }
 
 bool Theme::install(QApplication &app) {

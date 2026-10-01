@@ -13,6 +13,7 @@ win32: RC_ICONS = Resources/app.ico
 #DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
 
 SOURCES += \
+    AppFonts.cpp \
     BranchViewer.cpp \
     ClaudeCli.cpp \
     CSharpMetrics.cpp \
@@ -27,6 +28,7 @@ SOURCES += \
     DocumentText.cpp \
     EdgeMermaidRenderer.cpp \
     FileManager.cpp \
+    FontPickerDialog.cpp \
     GitHistory.cpp \
     GitProcess.cpp \
     HoverInfoPopup.cpp \
@@ -65,6 +67,7 @@ HEADERS += \
     AgentDefinition.h \
     AgentRuntime.h \
     AgentTypes.h \
+    AppFonts.h \
     BranchViewer.h \
     ClaudeCli.h \
     CSharpMetrics.h \
@@ -79,6 +82,7 @@ HEADERS += \
     DocumentText.h \
     EdgeMermaidRenderer.h \
     FileManager.h \
+    FontPickerDialog.h \
     GitHistory.h \
     GitProcess.h \
     HoverInfoPopup.h \
