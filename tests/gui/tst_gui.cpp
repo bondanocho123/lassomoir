@@ -1,3 +1,4 @@
+#include "AgentAccess.h"
 #include "AppFonts.h"
 #include "BranchViewer.h"
 #include "CodeMetrics.h"
@@ -17,6 +18,7 @@
 #include "PromptEditor.h"
 #include "ResponseDrawer.h"
 #include "RunPulse.h"
+#include "SecretStore.h"
 #include "StageCatalog.h"
 #include "StageInfo.h"
 #include "SwarmCoordinator.h"
@@ -55,6 +57,7 @@
 #include <QPointer>
 #include <QProcess>
 #include <QPushButton>
+#include <QRadioButton>
 #include <QRegularExpression>
 #include <QScopeGuard>
 #include <QScrollArea>
@@ -251,6 +254,12 @@ private slots:
     void readyRuntimeShowsNoNotice();
     void failedRunShowsLoginNoticeOnce();
     void unavailableRuntimeShowsInstallNotice();
+    // Notice "API key bermasalah": tombolnya membuka File > Integrations, bukan halaman panduan
+    void badApiKeyNoticeOpensIntegrations();
+
+    // File > Integrations: akses agent lewat login Claude Code atau API key Anthropic
+    void integrationsSavesApiKeyAndReturnsToLogin();
+    void integrationsRunsAccountLogin();
 
     // Kartu yang stage-nya selesai diberi penanda "✓ Selesai"
     void finishedStageMarksCardDone();
@@ -277,6 +286,10 @@ private:
     QString projectFile(const QString &projectId) const;
     // Dialog notice runtime yang sedang tampil; nullptr bila tidak ada
     QDialog *runtimeNotice() const;
+    // Dialog Integrations yang sedang tampil; nullptr bila tidak ada
+    QDialog *integrationsDialog() const;
+    // File > Integrations, lalu dialog yang muncul
+    QDialog *openIntegrations();
     // Dialog modal membuka event loop sendiri di dalam handler klik; timer ini jalan di loop itu
     // dan mengisi/menutup dialog. m_dialogSeen tetap false bila dialog tidak pernah muncul.
     void driveModalDialog(std::function<void(QDialog *)> action);
@@ -333,6 +346,8 @@ void TestGui::init() {
     m_runtime.available = true;
     m_runtime.checkResult = RuntimeCheck();
     m_runtime.failureDiagnosis = RuntimeCheck();
+    m_runtime.accountStatus = AccountStatus();
+    m_runtime.logins.clear();
     m_mermaid.requests.clear();
     m_swarm = std::make_unique<SwarmCoordinator>(m_catalog, m_runtime, m_composer);
     createWindow();
@@ -699,7 +714,7 @@ void TestGui::menuBarSitsTopLeft() {
     QCOMPARE(entries(menus.at(0)->menu()),
              (QStringList{QStringLiteral("New Project"), QStringLiteral("Close Project"),
                           QStringLiteral("Remove Project"), QStringLiteral("---"),
-                          QStringLiteral("Agent Access"), QStringLiteral("Preferences…"),
+                          QStringLiteral("Integrations…"), QStringLiteral("Preferences…"),
                           QStringLiteral("Exit")}));
     QCOMPARE(menus.at(1)->text(), QStringLiteral("&View"));
     QCOMPARE(entries(menus.at(1)->menu()), QStringList{QStringLiteral("Source Control")});
@@ -3083,6 +3098,8 @@ void TestGui::runtimeCheckShowsNotice_data() {
                                   << QStringLiteral("https://example.test/update");
     QTest::newRow("belum login") << int(RuntimeCheck::Status::LoggedOut) << QStringLiteral("belum login")
                                  << QStringLiteral("https://example.test/auth");
+    QTest::newRow("api key bermasalah") << int(RuntimeCheck::Status::BadApiKey) << QStringLiteral("API key")
+                                        << QString();
 }
 
 void TestGui::runtimeCheckShowsNotice() {
@@ -3148,6 +3165,245 @@ void TestGui::unavailableRuntimeShowsInstallNotice() {
     QVERIFY(runtimeNotice()->findChild<QLabel *>(QStringLiteral("runtimeNoticeTitle"))->text().contains(
         QStringLiteral("belum terpasang")));
     runtimeNotice()->reject();
+}
+
+QDialog *TestGui::integrationsDialog() const {
+    const QList<QDialog *> dialogs = m_window->findChildren<QDialog *>(QStringLiteral("integrationsDialog"));
+    for (QDialog *dialog : dialogs) {
+        if (dialog->isVisible()) {
+            return dialog;
+        }
+    }
+    return nullptr;
+}
+
+QDialog *TestGui::openIntegrations() {
+    QAction *action = fileAction(QStringLiteral("actionIntegrations"));
+    if (!action) {
+        return nullptr;
+    }
+    action->trigger();
+    return QTest::qWaitFor([this]() { return integrationsDialog() != nullptr; }) ? integrationsDialog() : nullptr;
+}
+
+void TestGui::badApiKeyNoticeOpensIntegrations() {
+    const QString rejected = QStringLiteral("API key Anthropic ditolak server (401)");
+    m_runtime.failureDiagnosis = RuntimeCheck::of(RuntimeCheck::Status::BadApiKey, rejected);
+
+    runButton(QStringLiteral("t1"))->click();
+    m_runtime.sessions.last()->finishWith(AgentResult::failure(QStringLiteral("api_key_rejected"), rejected));
+    QTRY_VERIFY(runtimeNotice());
+    QDialog *notice = runtimeNotice();
+    QVERIFY(notice->findChild<QLabel *>(QStringLiteral("runtimeNoticeTitle"))->text().contains(QStringLiteral("API key")));
+    QVERIFY(notice->findChild<QLabel *>(QStringLiteral("runtimeNoticeMessage"))->text().contains(rejected));
+
+    // Tidak ada halaman panduan untuk dibuka, tapi tombolnya tetap hidup
+    auto *open = notice->findChild<QPushButton *>(QStringLiteral("btnRuntimeNoticeOpen"));
+    QVERIFY(open);
+    QCOMPARE(open->text(), QStringLiteral("Buka Integrations"));
+    QVERIFY(notice->property("helpUrl").toString().isEmpty());
+    QVERIFY(open->isEnabled());
+    QVERIFY(!integrationsDialog());
+
+    open->click();
+    QTRY_VERIFY(!runtimeNotice());
+    QTRY_VERIFY(integrationsDialog());
+    integrationsDialog()->reject();
+}
+
+void TestGui::integrationsSavesApiKeyAndReturnsToLogin() {
+#ifndef Q_OS_WIN
+    QSKIP("API key disimpan di Windows Credential Manager");
+#endif
+    // Key test tersimpan sebagai "LassomoirGuiTest/anthropic-api-key", terpisah dari milik aplikasi
+    const QString secretName = QStringLiteral("anthropic-api-key");
+    const auto restore = qScopeGuard([]() { AgentAccess::save(AgentAccess::Settings()); });
+    QVERIFY(AgentAccess::save(AgentAccess::Settings()));
+    m_runtime.accountStatus.state = AccountStatus::State::LoggedIn;
+    m_runtime.accountStatus.account = QStringLiteral("dev@example.test");
+    m_runtime.accountStatus.plan = QStringLiteral("Pro");
+
+    struct Form {
+        QRadioButton *useLogin = nullptr;
+        QRadioButton *useApiKey = nullptr;
+        QLineEdit *apiKey = nullptr;
+        QPushButton *reveal = nullptr;
+        QLabel *error = nullptr;
+        QPushButton *save = nullptr;
+        bool complete() const { return useLogin && useApiKey && apiKey && reveal && error && save; }
+    };
+    auto formOf = [](QDialog *dialog) {
+        Form form;
+        if (dialog) {
+            form.useLogin = dialog->findChild<QRadioButton *>(QStringLiteral("radioAccessLogin"));
+            form.useApiKey = dialog->findChild<QRadioButton *>(QStringLiteral("radioAccessApiKey"));
+            form.apiKey = dialog->findChild<QLineEdit *>(QStringLiteral("integrationsApiKey"));
+            form.reveal = dialog->findChild<QPushButton *>(QStringLiteral("btnIntegrationsReveal"));
+            form.error = dialog->findChild<QLabel *>(QStringLiteral("integrationsError"));
+            form.save = dialog->findChild<QPushButton *>(QStringLiteral("btnIntegrationsSave"));
+        }
+        return form;
+    };
+
+    QPointer<QDialog> dialog = openIntegrations();
+    Form form = formOf(dialog);
+    QVERIFY(form.complete());
+
+    // Bawaan: login Claude Code dengan status akun dari backend; kolom key belum bisa diisi
+    QVERIFY(form.useLogin->isChecked());
+    QVERIFY(!form.apiKey->isEnabled());
+    const QString status = dialog->findChild<QLabel *>(QStringLiteral("integrationsLoginStatus"))->text();
+    QVERIFY2(status.contains(QStringLiteral("dev@example.test")) && status.contains(QStringLiteral("Claude Pro")),
+             qPrintable(status));
+    QVERIFY(!form.error->isVisible());
+
+    // API key dipilih tanpa isi: ditolak, dialog tetap terbuka, pilihan lama tetap berlaku
+    form.useApiKey->click();
+    QVERIFY(form.apiKey->isEnabled());
+    QCOMPARE(form.apiKey->echoMode(), QLineEdit::Password);
+    form.save->click();
+    QVERIFY(dialog && dialog->isVisible());
+    QVERIFY(form.error->isVisible());
+    QCOMPARE(AgentAccess::load().method, AgentAccess::Method::Login);
+
+    // Key salah tempel (berisi spasi) ditolak
+    form.apiKey->setText(QStringLiteral("sk-ant api03"));
+    form.save->click();
+    QVERIFY(dialog && dialog->isVisible());
+    QVERIFY2(form.error->text().contains(QStringLiteral("spasi")), qPrintable(form.error->text()));
+
+    // "Tampilkan" memperlihatkan yang diketik, lalu disembunyikan lagi
+    form.reveal->click();
+    QCOMPARE(form.apiKey->echoMode(), QLineEdit::Normal);
+    form.reveal->click();
+    QCOMPARE(form.apiKey->echoMode(), QLineEdit::Password);
+
+    // Key yang benar (spasi di tepi dibuang): tersimpan, dialog tertutup, konsol mencatat tanpa key-nya
+    const QString key = QStringLiteral("sk-ant-api03-gui-9876");
+    form.apiKey->setText(QStringLiteral("  %1  ").arg(key));
+    form.save->click();
+    QTRY_VERIFY(!dialog || !dialog->isVisible());
+    QCOMPARE(AgentAccess::load().method, AgentAccess::Method::ApiKey);
+    QCOMPARE(AgentAccess::load().apiKey, key);
+    QCOMPARE(SecretStore::read(secretName), key);
+    QVERIFY2(consoleText().contains(QStringLiteral("Akses agent: API key Anthropic")), qPrintable(consoleText()));
+    QVERIFY(!consoleText().contains(QStringLiteral("sk-ant")));
+
+    // Dibuka lagi: API key terpilih, kolomnya kosong dan hanya ujung key yang disebut.
+    // Simpan tanpa mengetik mempertahankan key itu.
+    dialog = openIntegrations();
+    form = formOf(dialog);
+    QVERIFY(form.complete());
+    QVERIFY(form.useApiKey->isChecked());
+    QVERIFY(form.apiKey->isEnabled());
+    QVERIFY(form.apiKey->text().isEmpty());
+    QVERIFY2(form.apiKey->placeholderText().contains(QStringLiteral("…9876")),
+             qPrintable(form.apiKey->placeholderText()));
+    QVERIFY(!form.apiKey->placeholderText().contains(QStringLiteral("api03")));
+    form.save->click();
+    QTRY_VERIFY(!dialog || !dialog->isVisible());
+    QCOMPARE(AgentAccess::load().apiKey, key);
+
+    // Batal tidak mengubah apa pun
+    dialog = openIntegrations();
+    form = formOf(dialog);
+    QVERIFY(form.complete());
+    form.useLogin->click();
+    dialog->findChild<QPushButton *>(QStringLiteral("btnIntegrationsCancel"))->click();
+    QTRY_VERIFY(!dialog || !dialog->isVisible());
+    QCOMPARE(AgentAccess::load().method, AgentAccess::Method::ApiKey);
+    QCOMPARE(AgentAccess::load().apiKey, key);
+
+    // Kembali ke login Claude Code: key tersimpan ikut dihapus
+    dialog = openIntegrations();
+    form = formOf(dialog);
+    QVERIFY(form.complete());
+    form.useLogin->click();
+    QVERIFY(!form.apiKey->isEnabled());
+    form.save->click();
+    QTRY_VERIFY(!dialog || !dialog->isVisible());
+    QCOMPARE(AgentAccess::load().method, AgentAccess::Method::Login);
+    QCOMPARE(SecretStore::read(secretName), QString());
+    QVERIFY(consoleText().contains(QStringLiteral("Akses agent: login Claude Code")));
+}
+
+void TestGui::integrationsRunsAccountLogin() {
+    AccountStatus loggedOut;
+    loggedOut.state = AccountStatus::State::LoggedOut;
+    m_runtime.accountStatus = loggedOut;
+
+    QPointer<QDialog> dialog = openIntegrations();
+    QVERIFY(dialog);
+    auto *status = dialog->findChild<QLabel *>(QStringLiteral("integrationsLoginStatus"));
+    auto *button = dialog->findChild<QPushButton *>(QStringLiteral("btnIntegrationsLogin"));
+    auto *error = dialog->findChild<QLabel *>(QStringLiteral("integrationsError"));
+    QVERIFY(status && button && error);
+    QCOMPARE(int(m_runtime.logins.size()), 1);
+    const QPointer<FakeAccountLogin> login = m_runtime.logins.last();
+    QVERIFY(login);
+
+    QVERIFY2(status->text().contains(QStringLiteral("Belum login")), qPrintable(status->text()));
+    QCOMPARE(button->text(), QStringLiteral("Login lewat browser"));
+    QVERIFY(button->isEnabled());
+
+    // Login dimulai: menunggu browser, tombolnya jadi pembatal
+    button->click();
+    QVERIFY(login->isRunning());
+    QVERIFY2(status->text().contains(QStringLiteral("Menunggu login di browser")), qPrintable(status->text()));
+    QCOMPARE(button->text(), QStringLiteral("Batal login"));
+
+    // Dibatalkan: kembali ke status semula, tanpa pesan gagal
+    button->click();
+    QVERIFY(!login->isRunning());
+    QVERIFY(status->text().contains(QStringLiteral("Belum login")));
+    QCOMPARE(button->text(), QStringLiteral("Login lewat browser"));
+    QVERIFY(!error->isVisible());
+
+    // Gagal: alasan dari CLI ditampilkan
+    button->click();
+    login->finishWith(false, QStringLiteral("Login failed: akun tidak diizinkan"), loggedOut);
+    QVERIFY(error->isVisible());
+    QVERIFY(error->text().contains(QStringLiteral("akun tidak diizinkan")));
+    QCOMPARE(button->text(), QStringLiteral("Login lewat browser"));
+
+    // Dicoba lagi dan berhasil: pesan gagal hilang, akun barunya tampil, tombol menawarkan ganti akun
+    button->click();
+    QVERIFY(!error->isVisible());
+    AccountStatus loggedIn;
+    loggedIn.state = AccountStatus::State::LoggedIn;
+    loggedIn.account = QStringLiteral("dev@example.test");
+    loggedIn.plan = QStringLiteral("Max");
+    login->finishWith(true, QString(), loggedIn);
+    QVERIFY2(status->text().contains(QStringLiteral("dev@example.test"))
+                 && status->text().contains(QStringLiteral("Claude Max")),
+             qPrintable(status->text()));
+    QCOMPARE(button->text(), QStringLiteral("Ganti akun"));
+    QVERIFY(!error->isVisible());
+
+    dialog->findChild<QPushButton *>(QStringLiteral("btnIntegrationsCancel"))->click();
+    QTRY_VERIFY(!dialog || !dialog->isVisible());
+
+    // API key di luar aplikasi mengalahkan login: disebutkan supaya tidak mengejutkan
+    loggedIn.keySource = QStringLiteral("ANTHROPIC_API_KEY");
+    m_runtime.accountStatus = loggedIn;
+    dialog = openIntegrations();
+    QVERIFY(dialog);
+    status = dialog->findChild<QLabel *>(QStringLiteral("integrationsLoginStatus"));
+    QVERIFY2(status->text().contains(QStringLiteral("ANTHROPIC_API_KEY")), qPrintable(status->text()));
+    dialog->reject();
+    QTRY_VERIFY(!dialog || !dialog->isVisible());
+
+    // Claude Code belum terpasang: tidak ada yang bisa dipakai login
+    AccountStatus unavailable;
+    unavailable.state = AccountStatus::State::Unavailable;
+    m_runtime.accountStatus = unavailable;
+    dialog = openIntegrations();
+    QVERIFY(dialog);
+    status = dialog->findChild<QLabel *>(QStringLiteral("integrationsLoginStatus"));
+    button = dialog->findChild<QPushButton *>(QStringLiteral("btnIntegrationsLogin"));
+    QVERIFY2(status->text().contains(QStringLiteral("belum terpasang")), qPrintable(status->text()));
+    QVERIFY(!button->isEnabled());
+    dialog->reject();
 }
 
 void TestGui::finishedStageMarksCardDone() {
@@ -3324,7 +3580,7 @@ void TestGui::preferencesChangesFont() {
     });
     AppFonts::save(QString());
 
-    // File > Preferences (di bawah Agent Access) membuka pemilih font
+    // File > Preferences (di bawah Integrations) membuka pemilih font
     QAction *preferences = m_window->findChild<QAction *>(QStringLiteral("actionPreferences"));
     QVERIFY(preferences);
     auto *fileMenu = qobject_cast<QMenu *>(preferences->parent());
@@ -3332,7 +3588,7 @@ void TestGui::preferencesChangesFont() {
     const QList<QAction *> fileActions = fileMenu->actions();
     const qsizetype at = fileActions.indexOf(preferences);
     QVERIFY(at > 0);
-    QCOMPARE(fileActions.at(at - 1)->text(), QStringLiteral("Agent Access"));
+    QCOMPARE(fileActions.at(at - 1)->text(), QStringLiteral("Integrations…"));
 
     auto openPicker = [&]() -> QDialog * {
         QAction *changeFont = preferences;

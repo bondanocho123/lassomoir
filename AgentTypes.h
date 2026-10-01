@@ -33,7 +33,8 @@ struct AgentResult {
 // Kesiapan backend agent di komputer ini: hasil pemeriksaan saat aplikasi dibuka
 // (AgentRuntime::check) atau tafsiran run yang gagal (AgentRuntime::diagnose)
 struct RuntimeCheck {
-    enum class Status { Ok, Missing, Outdated, LoggedOut };
+    // BadApiKey: run memakai API key dari File > Integrations, tapi key itu kosong atau ditolak server
+    enum class Status { Ok, Missing, Outdated, LoggedOut, BadApiKey };
 
     Status status = Status::Ok;
     QString version;             // versi terpasang, bila terbaca
@@ -47,6 +48,18 @@ struct RuntimeCheck {
         check.version = version;
         return check;
     }
+};
+
+// Login akun backend (OAuth yang disimpan CLI-nya sendiri), ditampilkan di File > Integrations
+struct AccountStatus {
+    // Unknown: status tidak terbaca; Unavailable: CLI backend tidak terpasang
+    enum class State { Unknown, Unavailable, LoggedOut, LoggedIn };
+
+    State state = State::Unknown;
+    QString account;             // siapa yang login (email), bila diketahui
+    QString plan;                // jenis langganan, mis. "Pro"
+    QString keySource;           // API key di luar aplikasi yang dipakai CLI lebih dulu daripada
+                                 // login ini, mis. "ANTHROPIC_API_KEY"
 };
 
 // Satu kejadian selama run

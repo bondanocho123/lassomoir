@@ -3,26 +3,36 @@
 
 #pragma once
 
+#include "AgentAccess.h"
 #include "AgentRuntime.h"
 #include "ClaudeCli.h"
 
 #include <QByteArray>
 #include <QProcess>
 #include <QTimer>
+#include <functional>
 #include <optional>
 
 // Runtime yang menjalankan agent sebagai proses `claude -p` (Claude Code CLI)
 class ClaudeCodeRuntime final : public AgentRuntime {
 public:
-    // Default: claude dicari sekali saat aplikasi mulai. Test bisa memberi exe palsu.
-    explicit ClaudeCodeRuntime(QString program = ClaudeCli::findExecutable());
+    // Pilihan File > Integrations. Dibaca tiap kali dibutuhkan (juga dari thread pemeriksaan),
+    // jadi perubahan langsung berlaku untuk run berikutnya.
+    using AccessSource = std::function<AgentAccess::Settings()>;
+
+    // Default: claude dicari sekali saat aplikasi mulai. Test bisa memberi exe dan akses palsu.
+    explicit ClaudeCodeRuntime(QString program = ClaudeCli::findExecutable(),
+                               AccessSource access = &AgentAccess::load);
 
     bool isAvailable(QString *reason) const override;
     AgentSession *createSession(const AgentLaunch &launch, QObject *parent) override;
+    AccountLogin *createAccountLogin(QObject *parent) override;
 
-    // Terpasang -> `claude --version` >= ClaudeCli::minimumVersion() -> `claude auth status`
+    // Terpasang -> `claude --version` >= ClaudeCli::minimumVersion() -> API key terisi (metode
+    // ApiKey) atau `claude auth status` (metode Login)
     RuntimeCheck check() const override;
-    // failed_to_start -> Missing; pesan gagal bernada auth -> LoggedOut
+    // failed_to_start -> Missing; API key kosong/ditolak -> BadApiKey; pesan gagal bernada auth ->
+    // BadApiKey di metode ApiKey, selain itu LoggedOut
     RuntimeCheck diagnose(const AgentResult &result) const override;
 
 private:
@@ -31,6 +41,7 @@ private:
     RuntimeCheck classify(const AgentResult &result) const;
 
     QString m_program;
+    AccessSource m_access;
 };
 
 // Satu proses `claude -p`: prompt masuk lewat stdin, event dibaca per baris dari stdout (stream-json)
@@ -38,7 +49,9 @@ class ClaudeCodeSession final : public AgentSession {
     Q_OBJECT
 
 public:
-    ClaudeCodeSession(QString program, AgentLaunch launch, QObject *parent = nullptr);
+    // access: pilihan akses saat run dibuat; run yang sudah berjalan tidak ikut berubah
+    ClaudeCodeSession(QString program, AgentLaunch launch, AgentAccess::Settings access,
+                      QObject *parent = nullptr);
     ~ClaudeCodeSession() override;
 
     void start() override;
@@ -58,6 +71,7 @@ private:
 
     QString m_program;
     AgentLaunch m_launch;
+    AgentAccess::Settings m_access;
     QProcess *m_process = nullptr;
     QTimer m_timeout;
     QByteArray m_stdoutBuffer;              // potongan baris stdout yang belum diakhiri '\n'
@@ -66,6 +80,7 @@ private:
     std::optional<AgentResult> m_result;    // dari event result
     bool m_cancelled = false;
     bool m_timedOut = false;
+    bool m_keyRejected = false;             // server menolak API key (401): proses dihentikan
     bool m_done = false;                    // finished sudah dipancarkan
 };
 

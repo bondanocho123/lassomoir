@@ -3,15 +3,15 @@
 
 #pragma once
 
+#include "AgentAccess.h"
 #include "AgentDefinition.h"
 #include "AgentTypes.h"
 
 #include <QByteArray>
+#include <QProcessEnvironment>
 #include <QString>
 #include <QStringList>
 #include <QVersionNumber>
-
-#include <optional>
 
 // Kontrak pemanggilan Claude Code CLI: lokasi executable dan flag-nya.
 // Flag dicocokkan dengan `claude --help` versi 2.1.266.
@@ -26,12 +26,17 @@ QVersionNumber minimumVersion();
 // Keluaran `claude --version` ("2.1.283 (Claude Code)") -> 2.1.283; null bila tidak terbaca
 QVersionNumber parseVersion(const QByteArray &output);
 
-// Keluaran JSON `claude auth status` -> nilai "loggedIn"; kosong bila tidak terbaca
+// Keluaran JSON `claude auth status` -> status akun; State::Unknown bila tidak terbaca
 // (mis. versi lama yang belum punya subcommand auth)
-std::optional<bool> parseLoggedIn(const QByteArray &output);
+AccountStatus parseAccountStatus(const QByteArray &output);
 
 // Pesan gagal dari CLI yang menandakan belum login / kredensial tidak berlaku
 bool looksLikeAuthError(const QString &text);
+
+// Environment proses `claude` untuk satu run. Metode ApiKey memasang ANTHROPIC_API_KEY (di mode -p
+// key itu dipakai lebih dulu daripada login) dan membuang ANTHROPIC_AUTH_TOKEN, yang kalau ada
+// mengalahkan API key. Metode Login tidak mengubah apa pun.
+QProcessEnvironment environment(const AgentAccess::Settings &access);
 
 // Halaman panduan untuk notice ke pengguna
 QString installUrl();

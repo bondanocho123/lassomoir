@@ -12,6 +12,7 @@
 #include <QObject>
 #include <QString>
 
+class AccountLogin;
 class AgentRuntime;
 class PromptComposer;
 class StageCatalog;
@@ -46,6 +47,7 @@ public:
     bool isRuntimeAvailable(QString *reason = nullptr) const;
     RuntimeCheck checkRuntime() const;
     RuntimeCheck diagnose(const AgentResult &result) const;
+    AccountLogin *createAccountLogin(QObject *parent) const;
 
 signals:
     // Diteruskan dari semua gerombolan

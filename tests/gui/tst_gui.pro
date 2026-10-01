@@ -10,14 +10,19 @@ TARGET = tst_gui
 # ../.. = sumber aplikasi, .. = FakeAgentRuntime.h
 INCLUDEPATH += ../.. ..
 
+# Windows Credential Manager (SecretStore.cpp)
+win32: LIBS += -ladvapi32
+
 # Semua sumber aplikasi kecuali main.cpp: MainWindow dirakit sendiri oleh test
 SOURCES += \
     tst_gui.cpp \
+    ../../AgentAccess.cpp \
     ../../AppFonts.cpp \
     ../../BranchViewer.cpp \
     ../../ClaudeCli.cpp \
     ../../CSharpMetrics.cpp \
     ../../ClassDiagram.cpp \
+    ../../ClaudeCodeLogin.cpp \
     ../../ClaudeCodeRuntime.cpp \
     ../../CodeMetrics.cpp \
     ../../ConsolePanelWidget.cpp \
@@ -31,6 +36,7 @@ SOURCES += \
     ../../GitHistory.cpp \
     ../../GitProcess.cpp \
     ../../HoverInfoPopup.cpp \
+    ../../IntegrationsDialog.cpp \
     ../../KanbanCardWidget.cpp \
     ../../KanbanColumnWidget.cpp \
     ../../MaintainabilityView.cpp \
@@ -43,6 +49,7 @@ SOURCES += \
     ../../RunLogFormatter.cpp \
     ../../RuntimeNoticeDialog.cpp \
     ../../RunPulse.cpp \
+    ../../SecretStore.cpp \
     ../../SourceTokens.cpp \
     ../../SplitterPaneAnimator.cpp \
     ../../StageCatalog.cpp \
@@ -64,14 +71,17 @@ SOURCES += \
 HEADERS += \
     ../FakeAgentRuntime.h \
     ../GitSandbox.h \
+    ../../AgentAccess.h \
     ../../AgentDefinition.h \
     ../../AgentRuntime.h \
     ../../AgentTypes.h \
     ../../AppFonts.h \
+    ../../AppSettings.h \
     ../../BranchViewer.h \
     ../../ClaudeCli.h \
     ../../CSharpMetrics.h \
     ../../ClassDiagram.h \
+    ../../ClaudeCodeLogin.h \
     ../../ClaudeCodeRuntime.h \
     ../../CodeMetrics.h \
     ../../ConsolePanelWidget.h \
@@ -85,6 +95,7 @@ HEADERS += \
     ../../GitHistory.h \
     ../../GitProcess.h \
     ../../HoverInfoPopup.h \
+    ../../IntegrationsDialog.h \
     ../../KanbanCardWidget.h \
     ../../KanbanColumnWidget.h \
     ../../MaintainabilityView.h \
@@ -97,6 +108,7 @@ HEADERS += \
     ../../RunLogFormatter.h \
     ../../RuntimeNoticeDialog.h \
     ../../RunPulse.h \
+    ../../SecretStore.h \
     ../../SourceTokens.h \
     ../../SplitterPaneAnimator.h \
     ../../StageCatalog.h \

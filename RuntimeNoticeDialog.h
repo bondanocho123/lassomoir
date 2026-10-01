@@ -8,8 +8,9 @@
 #include <QDialog>
 
 // Pemberitahuan bahwa Claude Code belum siap dipakai (belum terpasang, terlalu lama,
-// belum login), dengan tombol membuka panduan perbaikannya atau batal.
-// URL panduan tersimpan di property "helpUrl".
+// belum login, API key bermasalah), dengan tombol membuka panduan perbaikannya atau batal.
+// URL panduan tersimpan di property "helpUrl"; untuk API key bermasalah tombolnya hanya
+// menutup dialog dengan accepted(), dan pemanggil yang membuka File > Integrations.
 class RuntimeNoticeDialog : public QDialog {
     Q_OBJECT
 

@@ -105,6 +105,10 @@ RuntimeCheck SwarmCoordinator::diagnose(const AgentResult &result) const {
     return m_runtime.diagnose(result);
 }
 
+AccountLogin *SwarmCoordinator::createAccountLogin(QObject *parent) const {
+    return m_runtime.createAccountLogin(parent);
+}
+
 StageSwarm *SwarmCoordinator::swarmFor(const QString &stageKey) const {
     for (StageSwarm *swarm : m_swarms) {
         if (swarm->stageKey() == stageKey) {

@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 #include "ui_MainWindow.h"
+#include "AgentAccess.h"
 #include "BranchViewer.h"
 #include "GitHistory.h"
 #include "SwimlaneWidget.h"
@@ -11,6 +12,7 @@
 #include "ElidedLabel.h"
 #include "FileManager.h"
 #include "FontPickerDialog.h"
+#include "IntegrationsDialog.h"
 #include "NewTaskDialog.h"
 #include "ResponseDrawer.h"
 #include "RunLogFormatter.h"
@@ -210,8 +212,8 @@ MainWindow::MainWindow(const StageCatalog &catalog, TaskManager &tasks, SwarmCoo
 
 void MainWindow::setupMenuBar() {
     // Menu utama di baris paling atas jendela, mepet pojok kiri atas (di atas top bar).
-    // Yang tersambung: File > New / Close / Remove Project dan View > Source Control; item lainnya
-    // belum ada aksinya.
+    // Yang tersambung: File > New / Close / Remove Project / Integrations / Preferences dan
+    // View > Source Control; item lainnya belum ada aksinya.
     auto *menuBar = new QMenuBar(this);
     menuBar->setObjectName("topMenuBar");
     setMenuBar(menuBar);
@@ -244,7 +246,9 @@ void MainWindow::setupMenuBar() {
         m_actionRemoveProject->setEnabled(hasProject);
     });
     file->addSeparator();
-    file->addAction("Integrations");
+    // Cara run agent masuk ke Claude: login Claude Code (OAuth) atau API key Anthropic
+    QAction *integrations = file->addAction("Integrations…", this, &MainWindow::showIntegrations);
+    integrations->setObjectName("actionIntegrations");
     // Pengaturan aplikasi (sementara: ganti font antarmuka)
     QAction *preferences = file->addAction("Preferences…");
     preferences->setObjectName("actionPreferences");
@@ -1441,6 +1445,24 @@ void MainWindow::showFontPicker() {
     dialog->open();
 }
 
+void MainWindow::showIntegrations() {
+    // Dialog yang baru ditutup masih ada sampai deleteLater-nya jalan: yang dihitung hanya yang tampil
+    if (m_integrations && m_integrations->isVisible()) {
+        m_integrations->raise();
+        m_integrations->activateWindow();
+        return;
+    }
+    auto *dialog = new IntegrationsDialog(AgentAccess::load(), m_swarm.createAccountLogin(nullptr), this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dialog, &IntegrationsDialog::accessSaved, this, [this](AgentAccess::Method method) {
+        ui->consolePanel->appendLog(QStringLiteral("[SYSTEM] Akses agent: %1").arg(
+            method == AgentAccess::Method::ApiKey ? QStringLiteral("API key Anthropic")
+                                                  : QStringLiteral("login Claude Code")));
+    });
+    m_integrations = dialog;
+    dialog->open();
+}
+
 void MainWindow::checkRuntime() {
     auto *watcher = new QFutureWatcher<RuntimeCheck>(this);
     connect(watcher, &QFutureWatcher<RuntimeCheck>::finished, this, [this, watcher]() {
@@ -1457,6 +1479,10 @@ void MainWindow::showRuntimeNotice(const RuntimeCheck &check) {
     }
     auto *dialog = new RuntimeNoticeDialog(check, this);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
+    if (check.status == RuntimeCheck::Status::BadApiKey) {
+        // Key diperbaiki di File > Integrations, bukan lewat halaman panduan
+        connect(dialog, &QDialog::accepted, this, &MainWindow::showIntegrations);
+    }
     m_runtimeNotice = dialog;
     // open(): modal ke jendela ini tanpa menahan event loop pemanggilnya
     dialog->open();

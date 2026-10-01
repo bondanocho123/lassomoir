@@ -1,5 +1,8 @@
+#include "AgentAccess.h"
+#include "AppSettings.h"
 #include "ClassDiagram.h"
 #include "ClaudeCli.h"
+#include "ClaudeCodeLogin.h"
 #include "ClaudeCodeRuntime.h"
 #include "CodeMetrics.h"
 #include "DocumentText.h"
@@ -11,6 +14,7 @@
 #include "MermaidRenderer.h"
 #include "PromptComposer.h"
 #include "RunLogFormatter.h"
+#include "SecretStore.h"
 #include "StageCatalog.h"
 #include "StageInfo.h"
 #include "StreamJsonParser.h"
@@ -154,6 +158,14 @@ int runFakeClaude(const QString &mode) {
         QJsonObject echo;
         echo[QStringLiteral("args")] = QJsonArray::fromStringList(QCoreApplication::arguments().mid(1));
         echo[QStringLiteral("stdin")] = QString::fromUtf8(prompt);
+        // Kredensial yang sampai ke proses; variabel yang tidak terpasang tidak dicatat
+        QJsonObject env;
+        for (const char *name : {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"}) {
+            if (qEnvironmentVariableIsSet(name)) {
+                env[QLatin1String(name)] = qEnvironmentVariable(name);
+            }
+        }
+        echo[QStringLiteral("env")] = env;
         QFile file(mode.mid(5));
         if (file.open(QIODevice::WriteOnly)) {
             file.write(QJsonDocument(echo).toJson());
@@ -169,6 +181,49 @@ int runFakeClaude(const QString &mode) {
     if (mode == QLatin1String("fail")) {
         std::fputs("Error: belum login\n", stderr);
         return 3;
+    }
+    // Server menolak kredensial: CLI asli mengulang berkali-kali sebelum menyerah
+    if (mode == QLatin1String("reject401")) {
+        std::fputs(R"({"type":"system","subtype":"api_retry","attempt":1,"max_retries":10,"retry_delay_ms":505,"error_status":401,"error":"authentication_failed"})"
+                   "\n", stdout);
+        std::fflush(stdout);
+        QThread::sleep(60);
+        return 0;
+    }
+    // "login:<file penanda>": `claude auth login` berhasil dan membuat file penanda;
+    // `claude auth status` melaporkan sudah login bila file itu ada
+    if (mode.startsWith(QLatin1String("login:"))) {
+        const QString marker = mode.mid(6);
+        const QStringList args = QCoreApplication::arguments().mid(1);
+        if (args == QStringList{QStringLiteral("auth"), QStringLiteral("login")}) {
+            std::fputs("Opening browser to sign in\n", stdout);
+            QFile file(marker);
+            if (!file.open(QIODevice::WriteOnly)) {
+                return 1;
+            }
+            std::fputs("Login successful.\n", stdout);
+            return 0;
+        }
+        if (args == QStringList{QStringLiteral("auth"), QStringLiteral("status")}) {
+            const bool loggedIn = QFile::exists(marker);
+            std::fputs(loggedIn ? R"({"loggedIn": true, "authMethod": "claude.ai", "email": "dev@example.test", "subscriptionType": "pro"})"
+                                  "\n"
+                                : R"({"loggedIn": false, "authMethod": "none"})"
+                                  "\n",
+                       stdout);
+            return loggedIn ? 0 : 1;
+        }
+        return 2;
+    }
+    // `claude auth login` yang ditolak: alasannya di stderr
+    if (mode == QLatin1String("loginfail")) {
+        const QStringList args = QCoreApplication::arguments().mid(1);
+        if (args == QStringList{QStringLiteral("auth"), QStringLiteral("login")}) {
+            std::fputs("Login failed: akun tidak diizinkan\n", stderr);
+            return 1;
+        }
+        std::fputs("{\"loggedIn\": false}\n", stdout);
+        return 1;
     }
     // "preflight:<versi>:<true|false|rusak>": jawaban `claude --version` dan `claude auth status`
     if (mode.startsWith(QLatin1String("preflight:"))) {
@@ -199,6 +254,32 @@ public:
     explicit FakeClaudeMode(const QString &mode) { qputenv(kFakeClaudeEnv, mode.toUtf8()); }
     ~FakeClaudeMode() { qunsetenv(kFakeClaudeEnv); }
 };
+
+// Variabel environment diganti selama objek ini hidup, lalu dikembalikan seperti semula
+class ScopedEnv {
+public:
+    ScopedEnv(const char *name, const QByteArray &value)
+        : m_name(name), m_wasSet(qEnvironmentVariableIsSet(name)), m_previous(qgetenv(name)) {
+        qputenv(name, value);
+    }
+    ~ScopedEnv() {
+        if (m_wasSet) {
+            qputenv(m_name, m_previous);
+        } else {
+            qunsetenv(m_name);
+        }
+    }
+
+private:
+    const char *m_name;
+    bool m_wasSet;
+    QByteArray m_previous;
+};
+
+// Runtime claude palsu yang selalu memakai pilihan akses ini, tanpa menyentuh settings.ini
+ClaudeCodeRuntime::AccessSource fixedAccess(AgentAccess::Method method, const QString &apiKey = QString()) {
+    return [method, apiKey]() { return AgentAccess::Settings{method, apiKey}; };
+}
 
 struct SessionRecorder {
     QList<AgentEvent> events;
@@ -360,6 +441,8 @@ class TestSwarm : public QObject {
     Q_OBJECT
 
 private slots:
+    void initTestCase();
+
     // Konfigurasi stage
     void catalogKeepsPipelineOrder();
     void catalogGivesAgentsOnlyToWorkingStages();
@@ -404,6 +487,15 @@ private slots:
     void claudeCliRecognizesAuthErrors();
     void claudeRuntimeChecksInstallVersionAndLogin();
     void claudeRuntimeDiagnosesFailedRuns();
+
+    // File > Integrations: akses agent lewat login Claude Code atau API key Anthropic
+    void secretStoreRoundTrips();
+    void agentAccessPersistsMethodAndKey();
+    void claudeSessionAuthenticatesPerAccessMethod();
+    void parserRecognizesAuthRejection();
+    void claudeSessionStopsWhenApiKeyRejected();
+    void claudeLoginReportsStatusAndLogsIn();
+    void claudeLoginReportsFailureAndCancel();
 
     // Penanda "Selesai" di kartu: stage terakhir yang run-nya berhasil
     void taskReportsCompletedStage();
@@ -471,9 +563,17 @@ private slots:
     // Claude Code sungguhan; hanya jalan bila LASSOMOIR_REAL_CLAUDE=1 (memakai token)
     void realClaudeRunsCoderTask();
     void realClaudeReadsAttachmentsAndReferences();
+    // Idem, tanpa token: API key-nya sengaja salah
+    void realClaudeUsesApiKeyAndReportsLogin();
     // Edge sungguhan; hanya jalan bila LASSOMOIR_REAL_MERMAID=1 (tanpa token)
     void realEdgeRendersMermaid();
 };
+
+void TestSwarm::initTestCase() {
+    // Run test yang terhenti di tengah bisa meninggalkan pilihan "API key"; runtime bawaan
+    // membacanya, jadi mulai selalu dari login Claude Code
+    QVERIFY(AgentAccess::save(AgentAccess::Settings()));
+}
 
 void TestSwarm::catalogKeepsPipelineOrder() {
     const StageCatalog catalog = StageCatalog::standard();
@@ -1057,11 +1157,25 @@ void TestSwarm::claudeCliParsesVersion() {
 }
 
 void TestSwarm::claudeCliParsesAuthStatus() {
-    QCOMPARE(ClaudeCli::parseLoggedIn(R"({"loggedIn": true, "authMethod": "claude.ai"})"), std::optional<bool>(true));
-    QCOMPARE(ClaudeCli::parseLoggedIn(R"({"loggedIn": false})"), std::optional<bool>(false));
+    using State = AccountStatus::State;
+    const AccountStatus subscribed = ClaudeCli::parseAccountStatus(
+        R"({"loggedIn": true, "authMethod": "claude.ai", "email": "dev@example.test", "subscriptionType": "pro"})");
+    QCOMPARE(subscribed.state, State::LoggedIn);
+    QCOMPARE(subscribed.account, QStringLiteral("dev@example.test"));
+    QCOMPARE(subscribed.plan, QStringLiteral("Pro"));
+    QVERIFY(subscribed.keySource.isEmpty());
+
+    // API key di environment: CLI melaporkan sumbernya di samping login
+    const AccountStatus keyed = ClaudeCli::parseAccountStatus(
+        R"({"loggedIn": true, "authMethod": "claude.ai", "apiKeySource": "ANTHROPIC_API_KEY", "email": "dev@example.test", "subscriptionType": null})");
+    QCOMPARE(keyed.state, State::LoggedIn);
+    QCOMPARE(keyed.keySource, QStringLiteral("ANTHROPIC_API_KEY"));
+    QVERIFY(keyed.plan.isEmpty());
+
+    QCOMPARE(ClaudeCli::parseAccountStatus(R"({"loggedIn": false})").state, State::LoggedOut);
     // Versi lama tanpa subcommand auth, atau keluaran yang bukan JSON: tidak diketahui
-    QCOMPARE(ClaudeCli::parseLoggedIn("error: unknown command 'auth'"), std::optional<bool>());
-    QCOMPARE(ClaudeCli::parseLoggedIn(R"({"authMethod": "claude.ai"})"), std::optional<bool>());
+    QCOMPARE(ClaudeCli::parseAccountStatus("error: unknown command 'auth'").state, State::Unknown);
+    QCOMPARE(ClaudeCli::parseAccountStatus(R"({"authMethod": "claude.ai"})").state, State::Unknown);
 }
 
 void TestSwarm::claudeCliRecognizesAuthErrors() {
@@ -1122,6 +1236,21 @@ void TestSwarm::claudeRuntimeChecksInstallVersionAndLogin() {
         const FakeClaudeMode mode(QStringLiteral("preflight:2.1.300:rusak"));
         QCOMPARE(runtime.check().status, RuntimeCheck::Status::Ok);
     }
+    {
+        // Akses lewat API key (File > Integrations): login CLI tidak ditanya, key kosong dilaporkan
+        const FakeClaudeMode mode(QStringLiteral("preflight:2.1.300:false"));
+        const ClaudeCodeRuntime keyed(QCoreApplication::applicationFilePath(),
+                                      fixedAccess(AgentAccess::Method::ApiKey, QStringLiteral("sk-ant-uji")));
+        QCOMPARE(keyed.check().status, RuntimeCheck::Status::Ok);
+
+        const ClaudeCodeRuntime empty(QCoreApplication::applicationFilePath(),
+                                      fixedAccess(AgentAccess::Method::ApiKey));
+        const RuntimeCheck check = empty.check();
+        QCOMPARE(check.status, RuntimeCheck::Status::BadApiKey);
+        QCOMPARE(check.version, QStringLiteral("2.1.300"));
+        // Diperbaiki di File > Integrations, bukan lewat halaman panduan
+        QVERIFY(check.helpUrl.isEmpty());
+    }
 }
 
 void TestSwarm::claudeRuntimeDiagnosesFailedRuns() {
@@ -1141,6 +1270,261 @@ void TestSwarm::claudeRuntimeDiagnosesFailedRuns() {
              RuntimeCheck::Status::Ok);
     QCOMPARE(runtime.diagnose(AgentResult::failure(QStringLiteral("cancelled"), QStringLiteral("dibatalkan"))).status,
              RuntimeCheck::Status::Ok);
+
+    // Akses lewat API key: pesan auth yang sama berarti key-nya ditolak, bukan belum login
+    const ClaudeCodeRuntime keyed(QCoreApplication::applicationFilePath(),
+                                  fixedAccess(AgentAccess::Method::ApiKey, QStringLiteral("sk-ant-uji")));
+    const RuntimeCheck rejected = keyed.diagnose(
+        AgentResult::failure(QStringLiteral("no_result"), QStringLiteral("Invalid API key · Fix external API key")));
+    QCOMPARE(rejected.status, RuntimeCheck::Status::BadApiKey);
+    QCOMPARE(rejected.detail, QStringLiteral("Invalid API key · Fix external API key"));
+    QVERIFY(rejected.helpUrl.isEmpty());
+    QCOMPARE(keyed.diagnose(AgentResult::failure(QStringLiteral("error_during_execution"),
+                                                 QStringLiteral("API Error: 529 Overloaded"))).status,
+             RuntimeCheck::Status::Ok);
+}
+
+void TestSwarm::secretStoreRoundTrips() {
+#ifndef Q_OS_WIN
+    QSKIP("SecretStore memakai Windows Credential Manager");
+#endif
+    // Tersimpan sebagai "LassomoirTest/uji-rahasia": terpisah dari rahasia milik aplikasi
+    const QString name = QStringLiteral("uji-rahasia");
+    const auto cleanup = qScopeGuard([name]() { SecretStore::remove(name); });
+    SecretStore::remove(name);
+    QCOMPARE(SecretStore::read(name), QString());
+
+    QString error;
+    QVERIFY2(SecretStore::write(name, QStringLiteral("sk-ant-rahasia-✓"), &error), qPrintable(error));
+    QCOMPARE(SecretStore::read(name), QStringLiteral("sk-ant-rahasia-✓"));
+    // Menulis lagi mengganti isinya
+    QVERIFY(SecretStore::write(name, QStringLiteral("sk-ant-baru")));
+    QCOMPARE(SecretStore::read(name), QStringLiteral("sk-ant-baru"));
+
+    SecretStore::remove(name);
+    QCOMPARE(SecretStore::read(name), QString());
+    SecretStore::remove(name);   // yang sudah tidak ada dibiarkan
+}
+
+void TestSwarm::agentAccessPersistsMethodAndKey() {
+#ifndef Q_OS_WIN
+    QSKIP("API key disimpan di Windows Credential Manager");
+#endif
+    const auto restore = qScopeGuard([]() { AgentAccess::save(AgentAccess::Settings()); });
+    QCOMPARE(AgentAccess::load().method, AgentAccess::Method::Login);
+    QVERIFY(AgentAccess::load().apiKey.isEmpty());
+
+    const QString key = QStringLiteral("sk-ant-api03-uji-1234");
+    QString error;
+    QVERIFY2(AgentAccess::save({AgentAccess::Method::ApiKey, key}, &error), qPrintable(error));
+    QCOMPARE(AgentAccess::load().method, AgentAccess::Method::ApiKey);
+    QCOMPARE(AgentAccess::load().apiKey, key);
+
+    // settings.ini hanya mencatat metodenya; key-nya di Credential Manager
+    QFile settings(AppSettings::filePath());
+    QVERIFY(settings.open(QIODevice::ReadOnly));
+    const QByteArray ini = settings.readAll();
+    settings.close();
+    QVERIFY(ini.contains("apiKey"));
+    QVERIFY2(!ini.contains("sk-ant"), ini.constData());
+    QCOMPARE(SecretStore::read(QStringLiteral("anthropic-api-key")), key);
+
+    // Kembali ke login: key tersimpan ikut dihapus
+    QVERIFY(AgentAccess::save(AgentAccess::Settings()));
+    QCOMPARE(AgentAccess::load().method, AgentAccess::Method::Login);
+    QVERIFY(AgentAccess::load().apiKey.isEmpty());
+    QCOMPARE(SecretStore::read(QStringLiteral("anthropic-api-key")), QString());
+
+    // Yang ditampilkan hanya ujung key
+    QCOMPARE(AgentAccess::maskedKey(key), QStringLiteral("…1234"));
+    QCOMPARE(AgentAccess::maskedKey(QStringLiteral("pendek")), QStringLiteral("…"));
+}
+
+void TestSwarm::claudeSessionAuthenticatesPerAccessMethod() {
+    // Kredensial di environment penguji diganti penanda supaya hasilnya tidak bergantung mesin
+    const ScopedEnv environmentKey("ANTHROPIC_API_KEY", "key-dari-environment");
+    const ScopedEnv environmentToken("ANTHROPIC_AUTH_TOKEN", "token-dari-environment");
+
+    QTemporaryDir dir;
+    const QString echoPath = dir.filePath(QStringLiteral("echo.json"));
+    const FakeClaudeMode mode(QStringLiteral("echo:") + echoPath);
+
+    // Kredensial yang sampai ke proses claude untuk satu run
+    auto processCredentials = [&](const ClaudeCodeRuntime::AccessSource &access) {
+        ClaudeCodeRuntime runtime(QCoreApplication::applicationFilePath(), access);
+        SessionRecorder recorder;
+        std::unique_ptr<AgentSession> session(runtime.createSession(fakeLaunch(dir.path()), nullptr));
+        recorder.attach(session.get());
+        session->start();
+        if (!QTest::qWaitFor([&recorder]() { return recorder.results.size() == 1; }, 15000)) {
+            return QJsonObject();
+        }
+        QFile file(echoPath);
+        if (!file.open(QIODevice::ReadOnly)) {
+            return QJsonObject();
+        }
+        return QJsonDocument::fromJson(file.readAll()).object().value(QStringLiteral("env")).toObject();
+    };
+
+    // Login Claude Code: environment diteruskan apa adanya
+    const QJsonObject inherited = processCredentials(fixedAccess(AgentAccess::Method::Login));
+    QCOMPARE(inherited.value(QStringLiteral("ANTHROPIC_API_KEY")).toString(), QStringLiteral("key-dari-environment"));
+    QCOMPARE(inherited.value(QStringLiteral("ANTHROPIC_AUTH_TOKEN")).toString(),
+             QStringLiteral("token-dari-environment"));
+
+    // API key: key milik aplikasi yang dipakai, dan token yang akan mengalahkannya dibuang
+    const QJsonObject keyed = processCredentials(
+        fixedAccess(AgentAccess::Method::ApiKey, QStringLiteral("sk-ant-dari-aplikasi")));
+    QCOMPARE(keyed.value(QStringLiteral("ANTHROPIC_API_KEY")).toString(), QStringLiteral("sk-ant-dari-aplikasi"));
+    QVERIFY(!keyed.contains(QStringLiteral("ANTHROPIC_AUTH_TOKEN")));
+
+    // API key dipilih tapi kosong: run ditolak, tidak diam-diam memakai login Claude Code
+    ClaudeCodeRuntime runtime(QCoreApplication::applicationFilePath(), fixedAccess(AgentAccess::Method::ApiKey));
+    SessionRecorder recorder;
+    std::unique_ptr<AgentSession> session(runtime.createSession(fakeLaunch(dir.path()), nullptr));
+    recorder.attach(session.get());
+    session->start();
+    QCOMPARE(int(recorder.results.size()), 1);   // langsung di dalam start()
+    QCOMPARE(recorder.results.first().outcome, QStringLiteral("no_api_key"));
+    QVERIFY(!session->isRunning());
+    QCOMPARE(runtime.diagnose(recorder.results.first()).status, RuntimeCheck::Status::BadApiKey);
+}
+
+void TestSwarm::parserRecognizesAuthRejection() {
+    QVERIFY(StreamJsonParser::isAuthRejection(
+        R"({"type":"system","subtype":"api_retry","attempt":1,"max_retries":10,"retry_delay_ms":505,"error_status":401,"error":"authentication_failed"})"));
+    // Gangguan sementara memang perlu diulang
+    QVERIFY(!StreamJsonParser::isAuthRejection(
+        R"({"type":"system","subtype":"api_retry","attempt":1,"error_status":529,"error":"overloaded"})"));
+    // Jawaban agent yang menyebut api_retry bukan event sistem
+    QVERIFY(!StreamJsonParser::isAuthRejection(
+        R"({"type":"assistant","error_status":401,"message":{"content":[{"type":"text","text":"subtype \"api_retry\""}]},"subtype":"api_retry"})"));
+    QVERIFY(!StreamJsonParser::isAuthRejection(R"({"type":"system","subtype":"init"})"));
+    QVERIFY(!StreamJsonParser::isAuthRejection("bukan json"));
+    QVERIFY(!StreamJsonParser::isAuthRejection(QByteArray()));
+}
+
+void TestSwarm::claudeSessionStopsWhenApiKeyRejected() {
+    const FakeClaudeMode mode(QStringLiteral("reject401"));
+    QTemporaryDir dir;
+    {
+        // API key yang ditolak tidak akan diterima pada percobaan berikutnya: run langsung dihentikan
+        ClaudeCodeRuntime runtime(QCoreApplication::applicationFilePath(),
+                                  fixedAccess(AgentAccess::Method::ApiKey, QStringLiteral("sk-ant-ditolak")));
+        SessionRecorder recorder;
+        std::unique_ptr<AgentSession> session(runtime.createSession(fakeLaunch(dir.path()), nullptr));
+        recorder.attach(session.get());
+        session->start();
+
+        QTRY_COMPARE_WITH_TIMEOUT(int(recorder.results.size()), 1, 10000);
+        QCOMPARE(recorder.results.first().outcome, QStringLiteral("api_key_rejected"));
+        QVERIFY(!recorder.results.first().success);
+        QCOMPARE(runtime.diagnose(recorder.results.first()).status, RuntimeCheck::Status::BadApiKey);
+        QTest::qWait(200);
+        QCOMPARE(int(recorder.results.size()), 1);
+    }
+    {
+        // Dengan login Claude Code, CLI dibiarkan mengulang: token OAuth bisa diperbarui sendiri
+        ClaudeCodeRuntime runtime(QCoreApplication::applicationFilePath(), fixedAccess(AgentAccess::Method::Login));
+        SessionRecorder recorder;
+        std::unique_ptr<AgentSession> session(runtime.createSession(fakeLaunch(dir.path(), 1500), nullptr));
+        recorder.attach(session.get());
+        session->start();
+
+        QTRY_COMPARE_WITH_TIMEOUT(int(recorder.results.size()), 1, 10000);
+        QCOMPARE(recorder.results.first().outcome, QStringLiteral("timeout"));
+    }
+}
+
+void TestSwarm::claudeLoginReportsStatusAndLogsIn() {
+    QTemporaryDir dir;
+    const FakeClaudeMode mode(QStringLiteral("login:") + dir.filePath(QStringLiteral("sudah-login")));
+
+    ClaudeCodeLogin login(QCoreApplication::applicationFilePath());
+    QList<AccountStatus> statuses;
+    QStringList sequence;   // urutan sinyal
+    connect(&login, &AccountLogin::statusChanged, this, [&](const AccountStatus &status) {
+        statuses.append(status);
+        sequence.append(QStringLiteral("status"));
+    });
+    connect(&login, &AccountLogin::finished, this, [&](bool success, const QString &message) {
+        sequence.append(QStringLiteral("finished:%1:%2").arg(success).arg(message));
+    });
+
+    login.refresh();
+    QTRY_COMPARE_WITH_TIMEOUT(int(statuses.size()), 1, 15000);
+    QCOMPARE(statuses.last().state, AccountStatus::State::LoggedOut);
+    QVERIFY(!login.isRunning());
+
+    login.start();
+    QVERIFY(login.isRunning());
+    login.start();   // panggilan kedua selagi berjalan diabaikan
+
+    QTRY_COMPARE_WITH_TIMEOUT(int(statuses.size()), 2, 15000);
+    QVERIFY(!login.isRunning());
+    QCOMPARE(statuses.last().state, AccountStatus::State::LoggedIn);
+    QCOMPARE(statuses.last().account, QStringLiteral("dev@example.test"));
+    QCOMPARE(statuses.last().plan, QStringLiteral("Pro"));
+
+    // Login selesai dulu (tanpa pesan gagal), baru status barunya; masing-masing tepat sekali
+    QTest::qWait(200);
+    QCOMPARE(sequence, (QStringList{QStringLiteral("status"), QStringLiteral("finished:1:"), QStringLiteral("status")}));
+}
+
+void TestSwarm::claudeLoginReportsFailureAndCancel() {
+    QList<AccountStatus> statuses;
+    QList<bool> outcomes;
+    QStringList messages;
+    auto record = [&](ClaudeCodeLogin &login) {
+        connect(&login, &AccountLogin::statusChanged, this, [&](const AccountStatus &status) { statuses.append(status); });
+        connect(&login, &AccountLogin::finished, this, [&](bool success, const QString &message) {
+            outcomes.append(success);
+            messages.append(message);
+        });
+    };
+
+    {
+        // Claude Code tidak terpasang: status langsung di dalam refresh(), tanpa proses
+        ClaudeCodeLogin login{QString()};
+        record(login);
+        login.refresh();
+        QCOMPARE(int(statuses.size()), 1);
+        QCOMPARE(statuses.last().state, AccountStatus::State::Unavailable);
+    }
+    {
+        // Login ditolak: alasan dari stderr CLI diteruskan
+        const FakeClaudeMode mode(QStringLiteral("loginfail"));
+        ClaudeCodeLogin login(QCoreApplication::applicationFilePath());
+        record(login);
+        login.start();
+        QTRY_COMPARE_WITH_TIMEOUT(int(outcomes.size()), 1, 15000);
+        QVERIFY(!outcomes.last());
+        QCOMPARE(messages.last(), QStringLiteral("Login failed: akun tidak diizinkan"));
+        QTRY_COMPARE_WITH_TIMEOUT(int(statuses.size()), 2, 15000);
+        QCOMPARE(statuses.last().state, AccountStatus::State::LoggedOut);
+    }
+    {
+        // Dibatalkan selagi menunggu browser: proses dihentikan, tanpa pesan gagal
+        const FakeClaudeMode mode(QStringLiteral("hang"));
+        ClaudeCodeLogin login(QCoreApplication::applicationFilePath());
+        record(login);
+        login.start();
+        QVERIFY(login.isRunning());
+        QTest::qWait(300);
+
+        QElapsedTimer timer;
+        timer.start();
+        login.cancel();
+        QTRY_COMPARE_WITH_TIMEOUT(int(outcomes.size()), 2, 5000);
+        QVERIFY(timer.elapsed() < 2000);
+        QVERIFY(!outcomes.last());
+        QVERIFY(messages.last().isEmpty());
+        QVERIFY(!login.isRunning());
+        // Pembacaan status sesudahnya masih berjalan saat login dibuang: dimatikan tanpa sinyal
+    }
+    QTest::qWait(200);
+    QCOMPARE(int(outcomes.size()), 2);
+    QCOMPARE(int(statuses.size()), 2);
 }
 
 void TestSwarm::taskReportsCompletedStage() {
@@ -1186,6 +1570,48 @@ void TestSwarm::taskReportsCompletedStage() {
     // Sampai DONE: selalu selesai, walau tanpa riwayat run
     TaskItem done = makeTask(QStringLiteral("t2"), QStringLiteral("DONE"));
     QCOMPARE(done.completedStage(), QStringLiteral("DONE"));
+}
+
+void TestSwarm::realClaudeUsesApiKeyAndReportsLogin() {
+    if (qEnvironmentVariableIsEmpty("LASSOMOIR_REAL_CLAUDE")) {
+        QSKIP("Set LASSOMOIR_REAL_CLAUDE=1 untuk menjalankan claude sungguhan (tanpa token: API key-nya sengaja salah)");
+    }
+    const QString program = ClaudeCli::findExecutable();
+    QVERIFY2(!program.isEmpty(), "claude tidak ditemukan");
+
+    // Akses API key: CLI memakai key dari aplikasi, bukan login langganan di komputer ini. Key yang
+    // salah ditolak server dan run langsung berhenti; kalau key-nya tidak dipakai, run ini berhasil.
+    QTemporaryDir dir;
+    ClaudeCodeRuntime runtime(program, fixedAccess(AgentAccess::Method::ApiKey,
+                                                   QStringLiteral("sk-ant-api03-sengaja-salah")));
+    AgentLaunch launch = fakeLaunch(dir.path(), 120000);
+    launch.agent.model = QStringLiteral("haiku");
+    launch.agent.effort = QStringLiteral("low");
+    launch.prompt = QStringLiteral("Jawab satu kata: ok");
+
+    SessionRecorder recorder;
+    std::unique_ptr<AgentSession> session(runtime.createSession(launch, nullptr));
+    recorder.attach(session.get());
+    QElapsedTimer timer;
+    timer.start();
+    session->start();
+    QTRY_COMPARE_WITH_TIMEOUT(int(recorder.results.size()), 1, 120000);
+    const AgentResult result = recorder.results.first();
+    qInfo().noquote() << "API key salah:" << result.outcome << "-" << result.message << "dalam" << timer.elapsed() << "ms";
+    QCOMPARE(result.outcome, QStringLiteral("api_key_rejected"));
+    QCOMPARE(runtime.diagnose(result).status, RuntimeCheck::Status::BadApiKey);
+
+    // Status login CLI terbaca (sudah atau belum login), apa pun isinya di komputer ini
+    ClaudeCodeLogin login(program);
+    QList<AccountStatus> statuses;
+    connect(&login, &AccountLogin::statusChanged, this, [&](const AccountStatus &status) { statuses.append(status); });
+    login.refresh();
+    QTRY_COMPARE_WITH_TIMEOUT(int(statuses.size()), 1, 30000);
+    const AccountStatus status = statuses.first();
+    qInfo().noquote() << "Status login:" << (status.state == AccountStatus::State::LoggedIn ? "sudah login" : "belum login")
+                      << "- akun terbaca:" << !status.account.isEmpty() << "- langganan:" << status.plan
+                      << "- sumber key:" << status.keySource;
+    QVERIFY(status.state == AccountStatus::State::LoggedIn || status.state == AccountStatus::State::LoggedOut);
 }
 
 void TestSwarm::realClaudeRunsCoderTask() {

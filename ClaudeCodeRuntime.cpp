@@ -1,4 +1,5 @@
 #include "ClaudeCodeRuntime.h"
+#include "ClaudeCodeLogin.h"
 #include "StreamJsonParser.h"
 
 #include <QFileInfo>
@@ -45,6 +46,8 @@ RuntimeCheck withHelp(RuntimeCheck check) {
     case RuntimeCheck::Status::LoggedOut:
         check.helpUrl = ClaudeCli::authUrl();
         break;
+    // BadApiKey diperbaiki di File > Integrations, bukan lewat halaman panduan
+    case RuntimeCheck::Status::BadApiKey:
     case RuntimeCheck::Status::Ok:
         break;
     }
@@ -53,8 +56,9 @@ RuntimeCheck withHelp(RuntimeCheck check) {
 
 }
 
-ClaudeCodeRuntime::ClaudeCodeRuntime(QString program)
-    : m_program(std::move(program)) {
+ClaudeCodeRuntime::ClaudeCodeRuntime(QString program, AccessSource access)
+    : m_program(std::move(program)),
+      m_access(std::move(access)) {
 }
 
 RuntimeCheck ClaudeCodeRuntime::check() const {
@@ -82,6 +86,15 @@ RuntimeCheck ClaudeCodeRuntime::probe() const {
                                 versionText);
     }
 
+    // Run memakai API key dari File > Integrations: login CLI tidak relevan. Key-nya sendiri baru
+    // teruji saat run pertama (diagnose()), di sini cukup dipastikan ada.
+    const AgentAccess::Settings access = m_access();
+    if (access.method == AgentAccess::Method::ApiKey) {
+        return access.apiKey.isEmpty()
+                   ? RuntimeCheck::of(Status::BadApiKey, QStringLiteral("API key Anthropic belum diisi."), versionText)
+                   : RuntimeCheck::of(Status::Ok, QString(), versionText);
+    }
+
     // Status login yang tidak terbaca (mis. versi tanpa subcommand auth) tidak dilaporkan sebagai
     // masalah; run yang gagal karena belum login tetap ditangkap diagnose()
     // Kredensial lewat environment (API key, Bedrock, Vertex, Foundry) tidak tercatat sebagai login
@@ -96,7 +109,7 @@ RuntimeCheck ClaudeCodeRuntime::probe() const {
         }
     }
     const CommandOutput authOutput = runCommand(m_program, {QStringLiteral("auth"), QStringLiteral("status")});
-    if (ClaudeCli::parseLoggedIn(authOutput.stdoutData) == std::optional<bool>(false)) {
+    if (ClaudeCli::parseAccountStatus(authOutput.stdoutData).state == AccountStatus::State::LoggedOut) {
         return RuntimeCheck::of(Status::LoggedOut, QStringLiteral("Claude Code belum login."), versionText);
     }
     return RuntimeCheck::of(Status::Ok, QString(), versionText);
@@ -110,8 +123,14 @@ RuntimeCheck ClaudeCodeRuntime::classify(const AgentResult &result) const {
     if (result.outcome == QLatin1String("failed_to_start")) {
         return RuntimeCheck::of(Status::Missing, result.message);
     }
+    if (result.outcome == QLatin1String("no_api_key") || result.outcome == QLatin1String("api_key_rejected")) {
+        return RuntimeCheck::of(Status::BadApiKey, result.message);
+    }
     if (ClaudeCli::looksLikeAuthError(result.message)) {
-        return RuntimeCheck::of(Status::LoggedOut, result.message);
+        // Dengan API key, login ulang Claude Code tidak memperbaiki apa pun: key-nya yang ditolak
+        return RuntimeCheck::of(m_access().method == AgentAccess::Method::ApiKey ? Status::BadApiKey
+                                                                                 : Status::LoggedOut,
+                                result.message);
     }
     return RuntimeCheck();
 }
@@ -127,13 +146,19 @@ bool ClaudeCodeRuntime::isAvailable(QString *reason) const {
 }
 
 AgentSession *ClaudeCodeRuntime::createSession(const AgentLaunch &launch, QObject *parent) {
-    return new ClaudeCodeSession(m_program, launch, parent);
+    return new ClaudeCodeSession(m_program, launch, m_access(), parent);
 }
 
-ClaudeCodeSession::ClaudeCodeSession(QString program, AgentLaunch launch, QObject *parent)
+AccountLogin *ClaudeCodeRuntime::createAccountLogin(QObject *parent) {
+    return new ClaudeCodeLogin(m_program, parent);
+}
+
+ClaudeCodeSession::ClaudeCodeSession(QString program, AgentLaunch launch, AgentAccess::Settings access,
+                                     QObject *parent)
     : AgentSession(parent),
       m_program(std::move(program)),
-      m_launch(std::move(launch)) {
+      m_launch(std::move(launch)),
+      m_access(std::move(access)) {
     m_timeout.setSingleShot(true);
     connect(&m_timeout, &QTimer::timeout, this, &ClaudeCodeSession::onTimeout);
 }
@@ -156,11 +181,18 @@ void ClaudeCodeSession::start() {
                                     QStringLiteral("claude tidak ditemukan")));
         return;
     }
+    if (m_access.method == AgentAccess::Method::ApiKey && m_access.apiKey.isEmpty()) {
+        // Tanpa key, CLI diam-diam memakai login Claude Code: bukan itu yang dipilih pengguna
+        finish(AgentResult::failure(QStringLiteral("no_api_key"),
+                                    QStringLiteral("API key Anthropic belum diisi di File > Integrations")));
+        return;
+    }
 
     m_process = new QProcess(this);
     m_process->setProgram(m_program);
     m_process->setArguments(ClaudeCli::arguments(m_launch));
     m_process->setWorkingDirectory(m_launch.workingDirectory);
+    m_process->setProcessEnvironment(ClaudeCli::environment(m_access));
 
     connect(m_process, &QProcess::started, this, &ClaudeCodeSession::onStarted);
     connect(m_process, &QProcess::readyReadStandardOutput, this, &ClaudeCodeSession::onReadyReadStdout);
@@ -235,6 +267,9 @@ void ClaudeCodeSession::onProcessFinished(int exitCode, QProcess::ExitStatus sta
 
     if (m_cancelled) {
         finish(AgentResult::failure(QStringLiteral("cancelled"), QStringLiteral("dibatalkan")));
+    } else if (m_keyRejected) {
+        finish(AgentResult::failure(QStringLiteral("api_key_rejected"),
+                                    QStringLiteral("API key Anthropic ditolak server (401)")));
     } else if (m_timedOut) {
         const int timeoutMs = m_launch.agent.timeoutMs;
         const QString limit = timeoutMs >= 60000
@@ -269,6 +304,13 @@ void ClaudeCodeSession::onTimeout() {
 }
 
 void ClaudeCodeSession::handleLine(const QByteArray &line) {
+    // Hanya untuk API key: dengan login, 401 bisa pulih sendiri (CLI memperbarui token OAuth)
+    if (m_access.method == AgentAccess::Method::ApiKey && StreamJsonParser::isAuthRejection(line)) {
+        m_keyRejected = true;
+        m_process->kill();   // finished("api_key_rejected") menyusul dari onProcessFinished()
+        return;
+    }
+
     const QList<AgentEvent> events = StreamJsonParser::parseLine(line);
     for (const AgentEvent &event : events) {
         if (event.kind == AgentEvent::Kind::Result) {

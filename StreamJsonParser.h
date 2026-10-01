@@ -16,6 +16,10 @@ namespace StreamJsonParser {
 // blok thinking, dll.) menghasilkan list kosong.
 QList<AgentEvent> parseLine(const QByteArray &line);
 
+// Baris event system/api_retry berstatus 401: server menolak kredensial. CLI mengulang sampai
+// 10 kali (beberapa menit) sebelum menyerah, padahal API key yang ditolak tidak akan diterima.
+bool isAuthRejection(const QByteArray &line);
+
 }
 
 #endif // STREAMJSONPARSER_H
