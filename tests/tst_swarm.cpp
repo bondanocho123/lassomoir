@@ -170,6 +170,26 @@ int runFakeClaude(const QString &mode) {
         std::fputs("Error: belum login\n", stderr);
         return 3;
     }
+    // "preflight:<versi>:<true|false|rusak>": jawaban `claude --version` dan `claude auth status`
+    if (mode.startsWith(QLatin1String("preflight:"))) {
+        const QStringList parts = mode.split(QLatin1Char(':'));
+        const QStringList args = QCoreApplication::arguments().mid(1);
+        if (args == QStringList{QStringLiteral("--version")}) {
+            std::fputs(qPrintable(parts.value(1) + QStringLiteral(" (Claude Code)\n")), stdout);
+            return 0;
+        }
+        if (args == QStringList{QStringLiteral("auth"), QStringLiteral("status")}) {
+            const QString loggedIn = parts.value(2);
+            if (loggedIn != QLatin1String("true") && loggedIn != QLatin1String("false")) {
+                std::fputs("error: unknown command 'auth'\n", stderr);
+                return 1;
+            }
+            std::fputs(qPrintable(QStringLiteral("{\"loggedIn\": %1, \"authMethod\": \"claude.ai\"}\n").arg(loggedIn)),
+                       stdout);
+            return loggedIn == QLatin1String("true") ? 0 : 1;
+        }
+        return 2;
+    }
     return 1;
 }
 
@@ -377,6 +397,16 @@ private slots:
     void claudeSessionTimesOut();
     void claudeSessionReportsStderrWithoutResult();
     void claudeSessionWithoutProgramFinishesOnce();
+
+    // Pemeriksaan Claude Code: terpasang, versinya cukup, sudah login
+    void claudeCliParsesVersion();
+    void claudeCliParsesAuthStatus();
+    void claudeCliRecognizesAuthErrors();
+    void claudeRuntimeChecksInstallVersionAndLogin();
+    void claudeRuntimeDiagnosesFailedRuns();
+
+    // Penanda "Selesai" di kartu: stage terakhir yang run-nya berhasil
+    void taskReportsCompletedStage();
 
     // Review gate & serah-terima antar stage
     void taskManagerAdvancesAndGates();
@@ -1014,6 +1044,148 @@ void TestSwarm::claudeSessionWithoutProgramFinishesOnce() {
         QTest::qWait(200);
         QCOMPARE(int(recorder.results.size()), 1);
     }
+}
+
+void TestSwarm::claudeCliParsesVersion() {
+    QCOMPARE(ClaudeCli::parseVersion("2.1.283 (Claude Code)\n"), QVersionNumber(2, 1, 283));
+    QCOMPARE(ClaudeCli::parseVersion("claude 3.0.1\r\n"), QVersionNumber(3, 0, 1));
+    QVERIFY(ClaudeCli::parseVersion("").isNull());
+    QVERIFY(ClaudeCli::parseVersion("error: unknown option").isNull());
+
+    QVERIFY(ClaudeCli::minimumVersion() <= QVersionNumber(2, 1, 283));
+    QVERIFY(ClaudeCli::minimumVersion() > QVersionNumber(2, 0, 0));
+}
+
+void TestSwarm::claudeCliParsesAuthStatus() {
+    QCOMPARE(ClaudeCli::parseLoggedIn(R"({"loggedIn": true, "authMethod": "claude.ai"})"), std::optional<bool>(true));
+    QCOMPARE(ClaudeCli::parseLoggedIn(R"({"loggedIn": false})"), std::optional<bool>(false));
+    // Versi lama tanpa subcommand auth, atau keluaran yang bukan JSON: tidak diketahui
+    QCOMPARE(ClaudeCli::parseLoggedIn("error: unknown command 'auth'"), std::optional<bool>());
+    QCOMPARE(ClaudeCli::parseLoggedIn(R"({"authMethod": "claude.ai"})"), std::optional<bool>());
+}
+
+void TestSwarm::claudeCliRecognizesAuthErrors() {
+    QVERIFY(ClaudeCli::looksLikeAuthError(QStringLiteral("Invalid API key · Please run /login")));
+    QVERIFY(ClaudeCli::looksLikeAuthError(QStringLiteral("Not logged in. Please log in")));
+    QVERIFY(ClaudeCli::looksLikeAuthError(QStringLiteral("API Error: 401 {\"type\":\"authentication_error\"}")));
+    QVERIFY(ClaudeCli::looksLikeAuthError(QStringLiteral("OAuth token has expired")));
+    QVERIFY(!ClaudeCli::looksLikeAuthError(QStringLiteral("API Error: 529 Overloaded")));
+    QVERIFY(!ClaudeCli::looksLikeAuthError(QStringLiteral("claude berhenti dengan exit code 1")));
+    // Kata "login"/"authentication" di luar pesan auth CLI tidak dianggap belum login
+    QVERIFY(!ClaudeCli::looksLikeAuthError(QStringLiteral("Selesai: halaman login sudah dibuat")));
+    QVERIFY(!ClaudeCli::looksLikeAuthError(QStringLiteral("MCP server github requires authentication")));
+    QVERIFY(!ClaudeCli::looksLikeAuthError(QStringLiteral("Missing credentials file for git")));
+    QVERIFY(!ClaudeCli::looksLikeAuthError(QString()));
+}
+
+void TestSwarm::claudeRuntimeChecksInstallVersionAndLogin() {
+    {
+        ClaudeCodeRuntime runtime{QString()};
+        const RuntimeCheck check = runtime.check();
+        QCOMPARE(check.status, RuntimeCheck::Status::Missing);
+        QCOMPARE(check.helpUrl, ClaudeCli::installUrl());
+    }
+
+    ClaudeCodeRuntime runtime(QCoreApplication::applicationFilePath());
+    {
+        const FakeClaudeMode mode(QStringLiteral("preflight:2.1.300:true"));
+        const RuntimeCheck check = runtime.check();
+        QCOMPARE(check.status, RuntimeCheck::Status::Ok);
+        QCOMPARE(check.version, QStringLiteral("2.1.300"));
+    }
+    {
+        const FakeClaudeMode mode(QStringLiteral("preflight:2.0.1:true"));
+        const RuntimeCheck check = runtime.check();
+        QCOMPARE(check.status, RuntimeCheck::Status::Outdated);
+        QCOMPARE(check.version, QStringLiteral("2.0.1"));
+        QVERIFY(check.detail.contains(ClaudeCli::minimumVersion().toString()));
+    }
+    {
+        // Kredensial lewat environment di mesin penguji tidak boleh mengubah hasil
+        const QByteArray apiKey = qgetenv("ANTHROPIC_API_KEY");
+        qunsetenv("ANTHROPIC_API_KEY");
+        const auto restoreKey = qScopeGuard([apiKey]() {
+            if (!apiKey.isEmpty()) {
+                qputenv("ANTHROPIC_API_KEY", apiKey);
+            }
+        });
+        const FakeClaudeMode mode(QStringLiteral("preflight:2.1.300:false"));
+        QCOMPARE(runtime.check().status, RuntimeCheck::Status::LoggedOut);
+
+        // Memakai API key: status login CLI tidak relevan
+        qputenv("ANTHROPIC_API_KEY", "sk-test");
+        QCOMPARE(runtime.check().status, RuntimeCheck::Status::Ok);
+        qunsetenv("ANTHROPIC_API_KEY");
+    }
+    {
+        // Status login tidak terbaca: jangan menakut-nakuti pengguna, anggap siap
+        const FakeClaudeMode mode(QStringLiteral("preflight:2.1.300:rusak"));
+        QCOMPARE(runtime.check().status, RuntimeCheck::Status::Ok);
+    }
+}
+
+void TestSwarm::claudeRuntimeDiagnosesFailedRuns() {
+    const ClaudeCodeRuntime runtime(QCoreApplication::applicationFilePath());
+
+    QCOMPARE(runtime.diagnose(successResult()).status, RuntimeCheck::Status::Ok);
+    QCOMPARE(runtime.diagnose(AgentResult::failure(QStringLiteral("failed_to_start"),
+                                                   QStringLiteral("claude gagal dijalankan: not found"))).status,
+             RuntimeCheck::Status::Missing);
+    const RuntimeCheck loggedOut = runtime.diagnose(
+        AgentResult::failure(QStringLiteral("no_result"), QStringLiteral("Invalid API key · Please run /login")));
+    QCOMPARE(loggedOut.status, RuntimeCheck::Status::LoggedOut);
+    QCOMPARE(loggedOut.detail, QStringLiteral("Invalid API key · Please run /login"));
+    QCOMPARE(loggedOut.helpUrl, ClaudeCli::authUrl());
+    QCOMPARE(runtime.diagnose(AgentResult::failure(QStringLiteral("error_during_execution"),
+                                                   QStringLiteral("API Error: 529 Overloaded"))).status,
+             RuntimeCheck::Status::Ok);
+    QCOMPARE(runtime.diagnose(AgentResult::failure(QStringLiteral("cancelled"), QStringLiteral("dibatalkan"))).status,
+             RuntimeCheck::Status::Ok);
+}
+
+void TestSwarm::taskReportsCompletedStage() {
+    TaskItem task = makeTask(QStringLiteral("t1"), QStringLiteral("CODER"));
+    QCOMPARE(task.completedStage(), QString());   // belum pernah dijalankan
+
+    task.runs.append(stageRun(QStringLiteral("CODER"), true, QStringLiteral("ok")));
+    QCOMPARE(task.completedStage(), QStringLiteral("CODER"));
+
+    // Maju otomatis ke stage berikutnya: penanda menyebut stage yang baru saja selesai
+    task.stage = QStringLiteral("CLEANER");
+    QCOMPARE(task.completedStage(), QStringLiteral("CODER"));
+
+    // WAITING tidak pernah diberi penanda
+    task.stage = QStringLiteral("WAITING");
+    QCOMPARE(task.completedStage(), QString());
+
+    // Menunggu review atau gagal punya penanda sendiri
+    task.stage = QStringLiteral("SPECIFIER");
+    task.runs = {stageRun(QStringLiteral("SPECIFIER"), true, QStringLiteral("dok"))};
+    task.state = TaskState::AwaitingReview;
+    QCOMPARE(task.completedStage(), QString());
+    task.state = TaskState::Failed;
+    task.runs = {stageRun(QStringLiteral("SPECIFIER"), false, QStringLiteral("gagal"))};
+    QCOMPARE(task.completedStage(), QString());
+    task.state = TaskState::Idle;
+    QCOMPARE(task.completedStage(), QString());   // run terakhir gagal
+
+    // Dikembalikan dari gate: pekerjaan stage itu belum dianggap selesai
+    StageRun sentBack = stageRun(QStringLiteral("ARCHITECT"), true, QStringLiteral("dok"));
+    sentBack.decision = ReviewDecision::SentBack;
+    task.stage = QStringLiteral("CLEANER");
+    task.runs = {sentBack};
+    QCOMPARE(task.completedStage(), QString());
+
+    // Disetujui di gate lalu maju: stage gate itu selesai
+    StageRun approved = stageRun(QStringLiteral("ARCHITECT"), true, QStringLiteral("dok"));
+    approved.decision = ReviewDecision::Approved;
+    task.stage = QStringLiteral("HARDENER");
+    task.runs = {approved};
+    QCOMPARE(task.completedStage(), QStringLiteral("ARCHITECT"));
+
+    // Sampai DONE: selalu selesai, walau tanpa riwayat run
+    TaskItem done = makeTask(QStringLiteral("t2"), QStringLiteral("DONE"));
+    QCOMPARE(done.completedStage(), QStringLiteral("DONE"));
 }
 
 void TestSwarm::realClaudeRunsCoderTask() {

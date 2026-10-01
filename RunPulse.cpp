@@ -1,4 +1,5 @@
 #include "RunPulse.h"
+#include "Theme.h"
 
 #include <QColor>
 #include <QPainter>
@@ -51,9 +52,10 @@ void RunPulse::paint(QPainter &painter, const QRectF &rect, qreal radius) const 
         return;
     }
     const qreal level = this->level();
-    QColor fill = QColor::fromRgb(kColor);
+    // Di mode gelap garis navy menjadi periwinkle supaya kedipnya tetap terlihat
+    QColor fill = Theme::text(kColor);
     fill.setAlphaF(0.16 * level);
-    QColor line = QColor::fromRgb(kColor);
+    QColor line = Theme::text(kColor);
     line.setAlphaF(0.2 + 0.8 * level);
 
     painter.save();

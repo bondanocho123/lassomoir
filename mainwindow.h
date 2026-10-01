@@ -33,6 +33,7 @@ class StageCatalog;
 class SwarmCoordinator;
 class TaskManager;
 class QAction;
+class QDialog;
 class QListWidgetItem;
 class QSplitter;
 class QVariantAnimation;
@@ -59,6 +60,13 @@ public:
 
     // Tampilkan satu project di board dan sinkronkan seleksi sidebar
     void setActiveProject(const QString &projectId);
+
+    // Periksa Claude Code (terpasang, versi, login) di thread lain; masalahnya tampil sebagai notice
+    void checkRuntime();
+
+    // Notice "belum terpasang / perlu update / belum login"; Ok diabaikan, dan selama satu notice
+    // masih terbuka notice berikutnya tidak ditumpuk
+    void showRuntimeNotice(const RuntimeCheck &check);
 
 private slots:
     // Slot saat kartu dipindahkan antar-kolom di swimlane mana pun
@@ -116,6 +124,12 @@ private slots:
     // Drawer minta perubahan kode folder kerja task (stage peninjauan kode)
     void handleDiffRequested(const QString &taskId);
 
+    // Samakan lebar widget baris project dengan kotak item-nya (setelah lebar sidebar berubah)
+    void fitProjectRowsToList();
+
+    // File > Preferences: dialog pilih font antarmuka; pilihan langsung diterapkan dan disimpan
+    void showFontPicker();
+
     // Tombol × di popup folder referensi swimlane
     void removeReferenceDirectory(const QString &projectId, const QString &dir);
 
@@ -153,6 +167,8 @@ private:
     int m_savedSidebarWidth = 0;
     // Animasi geser lebar sidebar saat dibuka/ditutup
     QPointer<QVariantAnimation> m_sidebarAnimation;
+    // Notice runtime yang sedang terbuka (lihat showRuntimeNotice)
+    QPointer<QDialog> m_runtimeNotice;
     // Lebar minimum asli sidebarPanel (dari file .ui), disimpan karena
     // animasi sempat menurunkannya ke 0 agar splitter bisa menciutkannya penuh
     int m_sidebarMinWidth = 180;

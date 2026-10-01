@@ -13,6 +13,7 @@ INCLUDEPATH += ../.. ..
 # Semua sumber aplikasi kecuali main.cpp: MainWindow dirakit sendiri oleh test
 SOURCES += \
     tst_gui.cpp \
+    ../../AppFonts.cpp \
     ../../BranchViewer.cpp \
     ../../ClaudeCli.cpp \
     ../../CSharpMetrics.cpp \
@@ -21,10 +22,12 @@ SOURCES += \
     ../../CodeMetrics.cpp \
     ../../ConsolePanelWidget.cpp \
     ../../ConsoleTaskCard.cpp \
+    ../../ElidedLabel.cpp \
     ../../DiagramViewer.cpp \
     ../../DiffView.cpp \
     ../../DocumentText.cpp \
     ../../FileManager.cpp \
+    ../../FontPickerDialog.cpp \
     ../../GitHistory.cpp \
     ../../GitProcess.cpp \
     ../../HoverInfoPopup.cpp \
@@ -38,6 +41,7 @@ SOURCES += \
     ../../PromptEditor.cpp \
     ../../ResponseDrawer.cpp \
     ../../RunLogFormatter.cpp \
+    ../../RuntimeNoticeDialog.cpp \
     ../../RunPulse.cpp \
     ../../SourceTokens.cpp \
     ../../SplitterPaneAnimator.cpp \
@@ -51,6 +55,7 @@ SOURCES += \
     ../../TaskAttachments.cpp \
     ../../TaskGit.cpp \
     ../../TaskManager.cpp \
+    ../../Theme.cpp \
     ../../TransitionPolicy.cpp \
     ../../WorkspaceDiff.cpp \
     ../../WorkspaceGuard.cpp \
@@ -62,6 +67,7 @@ HEADERS += \
     ../../AgentDefinition.h \
     ../../AgentRuntime.h \
     ../../AgentTypes.h \
+    ../../AppFonts.h \
     ../../BranchViewer.h \
     ../../ClaudeCli.h \
     ../../CSharpMetrics.h \
@@ -70,10 +76,12 @@ HEADERS += \
     ../../CodeMetrics.h \
     ../../ConsolePanelWidget.h \
     ../../ConsoleTaskCard.h \
+    ../../ElidedLabel.h \
     ../../DiagramViewer.h \
     ../../DiffView.h \
     ../../DocumentText.h \
     ../../FileManager.h \
+    ../../FontPickerDialog.h \
     ../../GitHistory.h \
     ../../GitProcess.h \
     ../../HoverInfoPopup.h \
@@ -87,6 +95,7 @@ HEADERS += \
     ../../PromptEditor.h \
     ../../ResponseDrawer.h \
     ../../RunLogFormatter.h \
+    ../../RuntimeNoticeDialog.h \
     ../../RunPulse.h \
     ../../SourceTokens.h \
     ../../SplitterPaneAnimator.h \
@@ -101,6 +110,7 @@ HEADERS += \
     ../../TaskGit.h \
     ../../TaskItem.h \
     ../../TaskManager.h \
+    ../../Theme.h \
     ../../TaskMaterials.h \
     ../../TransitionPolicy.h \
     ../../WorkspaceDiff.h \

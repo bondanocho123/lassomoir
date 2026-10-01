@@ -1,4 +1,5 @@
 #include "SwarmCoordinator.h"
+#include "AgentRuntime.h"
 #include "PromptComposer.h"
 #include "StageCatalog.h"
 #include "StageSwarm.h"
@@ -90,6 +91,18 @@ RunState SwarmCoordinator::state(const QString &taskId) const {
         return swarm->state(taskId);
     }
     return RunState::Idle;
+}
+
+bool SwarmCoordinator::isRuntimeAvailable(QString *reason) const {
+    return m_runtime.isAvailable(reason);
+}
+
+RuntimeCheck SwarmCoordinator::checkRuntime() const {
+    return m_runtime.check();
+}
+
+RuntimeCheck SwarmCoordinator::diagnose(const AgentResult &result) const {
+    return m_runtime.diagnose(result);
 }
 
 StageSwarm *SwarmCoordinator::swarmFor(const QString &stageKey) const {

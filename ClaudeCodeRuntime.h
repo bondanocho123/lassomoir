@@ -20,7 +20,16 @@ public:
     bool isAvailable(QString *reason) const override;
     AgentSession *createSession(const AgentLaunch &launch, QObject *parent) override;
 
+    // Terpasang -> `claude --version` >= ClaudeCli::minimumVersion() -> `claude auth status`
+    RuntimeCheck check() const override;
+    // failed_to_start -> Missing; pesan gagal bernada auth -> LoggedOut
+    RuntimeCheck diagnose(const AgentResult &result) const override;
+
 private:
+    // check() / diagnose() tanpa URL panduan
+    RuntimeCheck probe() const;
+    RuntimeCheck classify(const AgentResult &result) const;
+
     QString m_program;
 };
 

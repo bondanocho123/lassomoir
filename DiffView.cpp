@@ -1,4 +1,5 @@
 #include "DiffView.h"
+#include "Theme.h"
 
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -84,13 +85,13 @@ QString expandTabs(const QString &text) {
 
 QTextBlockFormat blockWith(QRgb background) {
     QTextBlockFormat format;
-    format.setBackground(QColor(background));
+    format.setBackground(Theme::fill(background));
     return format;
 }
 
 QTextCharFormat textWith(QRgb color) {
     QTextCharFormat format;
-    format.setForeground(QColor(color));
+    format.setForeground(Theme::text(color));
     return format;
 }
 
@@ -333,17 +334,17 @@ void DiffView::fillFileList(const WorkspaceDiff &diff) {
     for (const FileDiff &file : diff.files) {
         auto *item = new QTreeWidgetItem();
         item->setText(StatusColumn, statusLetter(file));
-        item->setForeground(StatusColumn, QColor(statusColor(file)));
+        item->setForeground(StatusColumn, Theme::text(statusColor(file)));
         item->setToolTip(StatusColumn, statusDescription(file));
         item->setText(PathColumn, displayPath(file));
         item->setToolTip(PathColumn, QStringLiteral("%1\n%2").arg(file.path, statusDescription(file)));
         if (file.added > 0) {
             item->setText(AddedColumn, QStringLiteral("+%1").arg(file.added));
-            item->setForeground(AddedColumn, QColor(kAddedText));
+            item->setForeground(AddedColumn, Theme::text(kAddedText));
         }
         if (file.removed > 0) {
             item->setText(RemovedColumn, QStringLiteral("−%1").arg(file.removed));
-            item->setForeground(RemovedColumn, QColor(kRemovedText));
+            item->setForeground(RemovedColumn, Theme::text(kRemovedText));
         }
         item->setTextAlignment(AddedColumn, Qt::AlignRight | Qt::AlignVCenter);
         item->setTextAlignment(RemovedColumn, Qt::AlignRight | Qt::AlignVCenter);
@@ -483,9 +484,9 @@ void DiffView::renderSideBySide(const WorkspaceDiff &diff) {
     QTextCharFormat note = textWith(kNoteText);
     note.setFontItalic(true);
     QTextCharFormat removedWord;
-    removedWord.setBackground(QColor(kRemovedWordBackground));
+    removedWord.setBackground(Theme::fill(kRemovedWordBackground));
     QTextCharFormat addedWord;
-    addedWord.setBackground(QColor(kAddedWordBackground));
+    addedWord.setBackground(Theme::fill(kAddedWordBackground));
 
     const QTextBlockFormat plainBlock;
     const QTextBlockFormat headerBlock = blockWith(kHeaderBackground);

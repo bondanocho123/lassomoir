@@ -1,0 +1,8 @@
+/* Tambahan mode gelap, dipasang sesudah styles.qss yang warnanya sudah dipetakan (lihat Theme).
+   Hanya berisi yang tidak bisa diturunkan dari peta warna: gambar dengan warna tertanam. */
+
+QPushButton#taskFormBranch::menu-indicator,
+QComboBox#branchSelector::down-arrow,
+QComboBox#branchCompareSelector::down-arrow {
+    image: url(:/icons/dark/chevron-down.svg);
+}

@@ -30,6 +30,25 @@ struct AgentResult {
     }
 };
 
+// Kesiapan backend agent di komputer ini: hasil pemeriksaan saat aplikasi dibuka
+// (AgentRuntime::check) atau tafsiran run yang gagal (AgentRuntime::diagnose)
+struct RuntimeCheck {
+    enum class Status { Ok, Missing, Outdated, LoggedOut };
+
+    Status status = Status::Ok;
+    QString version;             // versi terpasang, bila terbaca
+    QString detail;              // penjelasan untuk pengguna, atau pesan asli dari CLI
+    QString helpUrl;             // panduan memperbaikinya (instalasi, update, login)
+
+    static RuntimeCheck of(Status status, const QString &detail, const QString &version = QString()) {
+        RuntimeCheck check;
+        check.status = status;
+        check.detail = detail;
+        check.version = version;
+        return check;
+    }
+};
+
 // Satu kejadian selama run
 struct AgentEvent {
     enum class Kind { Text, ToolUse, Stderr, Result };

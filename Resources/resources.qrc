@@ -2,6 +2,47 @@
 <RCC version="1.0">
     <qresource prefix="/">
         <file>styles.qss</file>
+        <file>styles-dark.qss</file>
+        <file>fonts/AtkinsonHyperlegible-Bold.ttf</file>
+        <file>fonts/AtkinsonHyperlegible-Regular.ttf</file>
+        <file>fonts/DMSans-Bold.ttf</file>
+        <file>fonts/DMSans-Regular.ttf</file>
+        <file>fonts/Figtree-Bold.ttf</file>
+        <file>fonts/Figtree-Regular.ttf</file>
+        <file>fonts/IBMPlexSans-Bold.ttf</file>
+        <file>fonts/IBMPlexSans-Regular.ttf</file>
+        <file>fonts/Inter-Bold.ttf</file>
+        <file>fonts/Inter-Regular.ttf</file>
+        <file>fonts/Lato-Bold.ttf</file>
+        <file>fonts/Lato-Regular.ttf</file>
+        <file>fonts/Lexend-Bold.ttf</file>
+        <file>fonts/Lexend-Regular.ttf</file>
+        <file>fonts/Manrope-Bold.ttf</file>
+        <file>fonts/Manrope-Regular.ttf</file>
+        <file>fonts/Mulish-Bold.ttf</file>
+        <file>fonts/Mulish-Regular.ttf</file>
+        <file>fonts/NotoSans-Bold.ttf</file>
+        <file>fonts/NotoSans-Regular.ttf</file>
+        <file>fonts/Nunito-Bold.ttf</file>
+        <file>fonts/Nunito-Regular.ttf</file>
+        <file>fonts/NunitoSans-Bold.ttf</file>
+        <file>fonts/NunitoSans-Regular.ttf</file>
+        <file>fonts/OpenSans-Bold.ttf</file>
+        <file>fonts/OpenSans-Regular.ttf</file>
+        <file>fonts/Outfit-Bold.ttf</file>
+        <file>fonts/Outfit-Regular.ttf</file>
+        <file>fonts/PlusJakartaSans-Bold.ttf</file>
+        <file>fonts/PlusJakartaSans-Regular.ttf</file>
+        <file>fonts/Poppins-Bold.ttf</file>
+        <file>fonts/Poppins-Regular.ttf</file>
+        <file>fonts/Roboto-Bold.ttf</file>
+        <file>fonts/Roboto-Regular.ttf</file>
+        <file>fonts/Rubik-Bold.ttf</file>
+        <file>fonts/Rubik-Regular.ttf</file>
+        <file>fonts/SourceSans3-Bold.ttf</file>
+        <file>fonts/SourceSans3-Regular.ttf</file>
+        <file>fonts/WorkSans-Bold.ttf</file>
+        <file>fonts/WorkSans-Regular.ttf</file>
         <file>app.ico</file>
         <file>icons/plus.svg</file>
         <file>icons/plus-white.svg</file>
@@ -22,6 +63,7 @@
         <file>icons/close-white.svg</file>
         <file>icons/chevron-right.svg</file>
         <file>icons/chevron-down.svg</file>
+        <file>icons/dark/chevron-down.svg</file>
         <file>icons/branch.svg</file>
         <file>icons/info.svg</file>
         <file>icons/signal.svg</file>

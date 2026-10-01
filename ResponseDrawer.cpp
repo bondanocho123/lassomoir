@@ -4,6 +4,7 @@
 #include "MarkdownView.h"
 #include "RunLogFormatter.h"
 #include "WorkspaceDiff.h"
+#include "Theme.h"
 
 #include <QComboBox>
 #include <QDir>
@@ -262,7 +263,7 @@ bool ResponseDrawer::showsCodeAnalysis(const QString &stageKey) {
 
 void ResponseDrawer::setExpanded(bool expanded) {
     m_expanded = expanded;
-    m_expand->setIcon(QIcon(expanded ? QStringLiteral(":/icons/collapse.svg") : QStringLiteral(":/icons/expand.svg")));
+    m_expand->setIcon(Theme::icon(expanded ? QStringLiteral(":/icons/collapse.svg") : QStringLiteral(":/icons/expand.svg")));
     m_expand->setToolTip(expanded ? QStringLiteral("Kembalikan ukuran") : QStringLiteral("Perluas"));
 }
 
