@@ -120,6 +120,24 @@ struct TaskItem {
         return count;
     }
 
+    // Stage yang pekerjaannya baru saja selesai, untuk penanda "✓ Selesai" di kartu:
+    // "DONE" di ujung pipeline, atau stage run terakhir bila run itu berhasil dan tidak dikembalikan.
+    // Kosong di WAITING, saat menunggu review / gagal (punya penanda sendiri), atau belum ada run.
+    QString completedStage() const {
+        if (stage == QLatin1String("DONE")) {
+            return stage;
+        }
+        if (stage == QLatin1String("WAITING") || state != TaskState::Idle || runs.isEmpty()) {
+            return QString();
+        }
+        const StageRun &last = runs.constLast();
+        if (!last.result.success || last.decision == ReviewDecision::SentBack
+            || last.decision == ReviewDecision::Revise) {
+            return QString();
+        }
+        return last.stage;
+    }
+
     // Berapa kali task dikembalikan dari gate ke stage sebelumnya: angka pada badge "↺ N"
     int sentBackCount() const {
         int count = 0;

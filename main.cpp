@@ -1,7 +1,6 @@
 #include <QApplication>
-#include <QFile>
-#include <QDebug>
 #include <QIcon>
+#include <QThreadPool>
 
 #include "mainwindow.h" // Gunakan "mainwindow.h" jika tanpa subfolder
 #include "ClaudeCodeRuntime.h"
@@ -10,6 +9,7 @@
 #include "StageCatalog.h"
 #include "SwarmCoordinator.h"
 #include "TaskManager.h"
+#include "Theme.h"
 
 int main(int argc, char *argv[])
 {
@@ -17,14 +17,8 @@ int main(int argc, char *argv[])
     QCoreApplication::setApplicationName("Lassomoir");
     a.setWindowIcon(QIcon(":/app.ico"));
 
-    // 1. Muat Stylesheet Global
-    QFile styleFile(":/styles.qss");
-    if (styleFile.open(QFile::ReadOnly | QFile::Text)) {
-        a.setStyleSheet(QString::fromUtf8(styleFile.readAll()));
-        styleFile.close();
-    } else {
-        qWarning() << "Peringatan: Gagal memuat :/styles.qss. Tampilan akan menggunakan default Qt.";
-    }
+    // 1. Muat stylesheet global; mode terang/gelap mengikuti Windows, juga saat aplikasi berjalan
+    Theme::install(a);
 
     // 2. Rakit dependensi. Urutan deklarasi penting: objek dihancurkan terbalik, jadi jendela
     //    tutup lebih dulu, lalu browser render diagram dan proses agent dimatikan, baru
@@ -49,5 +43,13 @@ int main(int argc, char *argv[])
     window.resize(1440, 850);
     window.show();
 
-    return QApplication::exec();
+    // Claude Code terpasang, cukup baru, dan sudah login? Diperiksa di belakang layar;
+    // bila tidak, notice berisi cara memperbaikinya muncul di atas jendela
+    window.checkRuntime();
+
+    const int exitCode = QApplication::exec();
+    // Pemeriksaan Claude Code (checkRuntime) yang masih berjalan memakai runtime & swarm di atas:
+    // tunggu sampai selesai sebelum keduanya dihancurkan
+    QThreadPool::globalInstance()->waitForDone();
+    return exitCode;
 }

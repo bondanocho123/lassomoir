@@ -1,4 +1,5 @@
 #include "HoverInfoPopup.h"
+#include "Theme.h"
 
 #include <QEvent>
 #include <QGuiApplication>
@@ -40,11 +41,13 @@ void HoverInfoPopup::addAnchor(QWidget *anchor) {
 }
 
 QString HoverInfoPopup::info() const {
-    return m_content->text();
+    return m_html;
 }
 
 void HoverInfoPopup::setInfo(const QString &html) {
-    m_content->setText(html);
+    m_html = html;
+    // Warna di HTML ditulis untuk mode terang; versi yang tampil mengikuti tema saat ini
+    m_content->setText(Theme::html(html));
     if (html.isEmpty()) {
         hide();
     } else if (isVisible()) {
@@ -77,6 +80,7 @@ void HoverInfoPopup::popup() {
         return;
     }
     if (!isVisible()) {
+        m_content->setText(Theme::html(m_html));   // tema bisa berganti sejak setInfo
         place();
         show();
     }

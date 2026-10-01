@@ -1,5 +1,6 @@
 #include "PromptEditor.h"
 #include "DocumentText.h"
+#include "Theme.h"
 
 #include <QDateTime>
 #include <QDialog>
@@ -141,12 +142,12 @@ PromptEditor::PromptEditor(QWidget *parent) : QFrame(parent) {
 
     auto *toolbar = new QFrame(this);
     toolbar->setObjectName("promptToolbar");
-    auto *addImage = new QPushButton(QIcon(":/icons/image.svg"), QStringLiteral("Foto"), toolbar);
+    auto *addImage = new QPushButton(Theme::icon(":/icons/image.svg"), QStringLiteral("Foto"), toolbar);
     addImage->setObjectName("btnPromptAddImage");
     addImage->setCursor(Qt::PointingHandCursor);
     addImage->setToolTip("Lampirkan foto. Bisa juga Ctrl+V atau seret gambar ke kotak ini.");
     connect(addImage, &QPushButton::clicked, this, &PromptEditor::chooseImages);
-    auto *addDocument = new QPushButton(QIcon(":/icons/paperclip.svg"), QStringLiteral("File"), toolbar);
+    auto *addDocument = new QPushButton(Theme::icon(":/icons/paperclip.svg"), QStringLiteral("File"), toolbar);
     addDocument->setObjectName("btnPromptAddDocument");
     addDocument->setCursor(Qt::PointingHandCursor);
     addDocument->setToolTip("Lampirkan file Excel (.xlsx), Word (.docx), atau CSV; isinya ikut dibaca agent");
@@ -493,7 +494,7 @@ void PromptEditor::rebuildImages() {
 
         auto *remove = new QToolButton(thumb);
         remove->setObjectName("btnThumbRemove");
-        remove->setIcon(QIcon(":/icons/close-white.svg"));
+        remove->setIcon(Theme::icon(":/icons/close-white.svg"));
         remove->setIconSize(QSize(8, 8));
         remove->setFixedSize(18, 18);
         remove->move(thumb->width() - remove->width() - 2, 2);
@@ -533,7 +534,7 @@ void PromptEditor::rebuildDocuments() {
 
         auto *remove = new QToolButton(row);
         remove->setObjectName("btnDocumentRemove");
-        remove->setIcon(QIcon(":/icons/close.svg"));
+        remove->setIcon(Theme::icon(":/icons/close.svg"));
         remove->setIconSize(QSize(10, 10));
         remove->setCursor(Qt::PointingHandCursor);
         remove->setToolTip(QStringLiteral("Hapus %1").arg(draft.fileName));

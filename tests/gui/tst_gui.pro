@@ -21,6 +21,7 @@ SOURCES += \
     ../../CodeMetrics.cpp \
     ../../ConsolePanelWidget.cpp \
     ../../ConsoleTaskCard.cpp \
+    ../../ElidedLabel.cpp \
     ../../DiagramViewer.cpp \
     ../../DiffView.cpp \
     ../../DocumentText.cpp \
@@ -38,6 +39,7 @@ SOURCES += \
     ../../PromptEditor.cpp \
     ../../ResponseDrawer.cpp \
     ../../RunLogFormatter.cpp \
+    ../../RuntimeNoticeDialog.cpp \
     ../../RunPulse.cpp \
     ../../SourceTokens.cpp \
     ../../SplitterPaneAnimator.cpp \
@@ -51,6 +53,7 @@ SOURCES += \
     ../../TaskAttachments.cpp \
     ../../TaskGit.cpp \
     ../../TaskManager.cpp \
+    ../../Theme.cpp \
     ../../TransitionPolicy.cpp \
     ../../WorkspaceDiff.cpp \
     ../../WorkspaceGuard.cpp \
@@ -70,6 +73,7 @@ HEADERS += \
     ../../CodeMetrics.h \
     ../../ConsolePanelWidget.h \
     ../../ConsoleTaskCard.h \
+    ../../ElidedLabel.h \
     ../../DiagramViewer.h \
     ../../DiffView.h \
     ../../DocumentText.h \
@@ -87,6 +91,7 @@ HEADERS += \
     ../../PromptEditor.h \
     ../../ResponseDrawer.h \
     ../../RunLogFormatter.h \
+    ../../RuntimeNoticeDialog.h \
     ../../RunPulse.h \
     ../../SourceTokens.h \
     ../../SplitterPaneAnimator.h \
@@ -101,6 +106,7 @@ HEADERS += \
     ../../TaskGit.h \
     ../../TaskItem.h \
     ../../TaskManager.h \
+    ../../Theme.h \
     ../../TaskMaterials.h \
     ../../TransitionPolicy.h \
     ../../WorkspaceDiff.h \

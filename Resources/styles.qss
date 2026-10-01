@@ -162,6 +162,65 @@ QLabel#labelAttachments {
     color: #33517a;
 }
 
+/* Penanda stage selesai (TaskItem::completedStage): pil hijau di bawah kartu */
+QLabel#labelDone {
+    background-color: #e3f0e5;
+    color: #2f7d32;
+    font-size: 10px;
+    font-weight: bold;
+    border-radius: 4px;
+    padding: 2px 6px;
+}
+
+KanbanCardWidget[done="true"][state="idle"] {
+    border: 1px solid #9cc9a0;
+}
+
+/* Notice Claude Code (belum terpasang / perlu update / belum login) */
+QDialog#runtimeNoticeDialog {
+    background-color: #fbf8f3;
+}
+
+QLabel#runtimeNoticeTitle {
+    font-size: 15px;
+    font-weight: bold;
+    color: #33517a;
+}
+
+QLabel#runtimeNoticeMessage {
+    font-size: 12px;
+    color: #3d3730;
+}
+
+QPushButton#btnRuntimeNoticeOpen {
+    background-color: #a9743f;
+    color: #ffffff;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-weight: bold;
+}
+
+QPushButton#btnRuntimeNoticeOpen:hover {
+    background-color: #8a5a2f;
+}
+
+QPushButton#btnRuntimeNoticeOpen:disabled {
+    background-color: #d9c6ac;
+}
+
+QPushButton#btnRuntimeNoticeCancel {
+    background-color: #ffffff;
+    color: #3d3730;
+    border: 1px solid #e2d5c1;
+    border-radius: 6px;
+    padding: 6px 14px;
+}
+
+QPushButton#btnRuntimeNoticeCancel:hover {
+    background-color: #f2e3d1;
+}
+
 /* Scrollbar ramping selaras palet */
 QScrollBar:vertical {
     background: transparent;

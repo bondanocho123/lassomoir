@@ -1,4 +1,5 @@
 #include "MaintainabilityView.h"
+#include "Theme.h"
 #include "WorkspaceDiff.h"
 
 #include <QHBoxLayout>
@@ -77,7 +78,7 @@ void fillIndex(QTreeWidgetItem *item, std::optional<int> before, std::optional<i
     item->setText(BeforeColumn, before ? QString::number(*before) : QStringLiteral("—"));
     item->setText(AfterColumn, after ? QString::number(*after) : QStringLiteral("—"));
     if (after) {
-        item->setForeground(AfterColumn, QColor(ratingColor(*after)));
+        item->setForeground(AfterColumn, Theme::text(ratingColor(*after)));
     }
     QRgb changeColor = kMutedText;
     if (before && after) {
@@ -88,7 +89,7 @@ void fillIndex(QTreeWidgetItem *item, std::optional<int> before, std::optional<i
     } else {
         item->setText(ChangeColumn, missing);
     }
-    item->setForeground(ChangeColumn, QColor(changeColor));
+    item->setForeground(ChangeColumn, Theme::text(changeColor));
 }
 
 void alignNumbers(QTreeWidgetItem *item, const QString &tooltip) {
@@ -125,7 +126,7 @@ void addTypeRows(QTreeWidgetItem *fileItem, const CodeMetrics &after, const std:
     for (const TypeMetrics &type : after.types) {
         auto *typeItem = new QTreeWidgetItem(fileItem);
         typeItem->setText(NameColumn, type.name);
-        typeItem->setForeground(NameColumn, QColor(kTypeText));
+        typeItem->setForeground(NameColumn, Theme::text(kTypeText));
         const TypeMetrics *old = previousTypes.value(type.fullName());
         fillIndex(typeItem, old ? std::optional<int>(old->maintainability) : std::nullopt, type.maintainability,
                   QStringLiteral("baru"));

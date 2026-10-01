@@ -1,6 +1,7 @@
 #include "KanbanCardWidget.h"
 #include "ui_KanbanCardWidget.h"
 #include "RunPulse.h"
+#include "Theme.h"
 
 #include <QApplication>
 #include <QContextMenuEvent>
@@ -60,6 +61,10 @@ KanbanCardWidget::KanbanCardWidget(QWidget *parent)
     connect(ui->btnCardRun, &QPushButton::clicked, this, &KanbanCardWidget::onRunButtonClicked);
     refreshRunButton();
     setAttachments(0, 0);
+    setProperty("done", false);
+    // Pil "✓ Selesai" selebar isinya, bukan selebar kartu
+    ui->gridLayout->setAlignment(ui->labelDone, Qt::AlignLeft);
+    refreshDoneMarker();
 }
 
 void KanbanCardWidget::setRunEnabled(bool enabled) {
@@ -75,6 +80,27 @@ void KanbanCardWidget::setRunState(RunState state) {
     m_pulse->setActive(state == RunState::Running);
     refreshStateProperty();
     refreshRunButton();
+    refreshDoneMarker();
+}
+
+void KanbanCardWidget::setCompletedStage(const QString &stage) {
+    m_completedStage = stage;
+    refreshDoneMarker();
+}
+
+void KanbanCardWidget::refreshDoneMarker() {
+    const bool done = !m_completedStage.isEmpty() && m_runState == RunState::Idle;
+    // Di ujung pipeline cukup "Selesai"; di stage lain sebut stage yang baru saja selesai
+    ui->labelDone->setText(m_completedStage == QLatin1String("DONE")
+                               ? QStringLiteral("✓ Selesai")
+                               : QStringLiteral("✓ %1 selesai").arg(m_completedStage));
+    ui->labelDone->setVisible(done);
+    if (property("done").toBool() == done) {
+        return;
+    }
+    setProperty("done", done);
+    style()->unpolish(this);
+    style()->polish(this);
 }
 
 void KanbanCardWidget::setTaskState(TaskState state, const QString &detail) {
@@ -118,20 +144,20 @@ void KanbanCardWidget::onRunButtonClicked() {
 void KanbanCardWidget::refreshRunButton() {
     if (m_runState != RunState::Idle) {
         // Run yang antre/berjalan selalu bisa dihentikan
-        ui->btnCardRun->setIcon(QIcon(":/icons/stop.svg"));
+        ui->btnCardRun->setIcon(Theme::icon(":/icons/stop.svg"));
         ui->btnCardRun->setEnabled(true);
         ui->btnCardRun->setToolTip(m_runState == RunState::Queued ? "Batalkan antrean" : "Hentikan agent");
         return;
     }
 
     if (m_taskState == TaskState::AwaitingReview) {
-        ui->btnCardRun->setIcon(QIcon(":/icons/review.svg"));
+        ui->btnCardRun->setIcon(Theme::icon(":/icons/review.svg"));
         ui->btnCardRun->setEnabled(true);
         ui->btnCardRun->setToolTip("Review hasil agent: setujui, minta revisi, atau kembalikan");
         return;
     }
 
-    ui->btnCardRun->setIcon(QIcon(":/icons/run.svg"));
+    ui->btnCardRun->setIcon(Theme::icon(":/icons/run.svg"));
     ui->btnCardRun->setEnabled(m_runEnabled);
     if (!m_runEnabled) {
         ui->btnCardRun->setToolTip("Stage ini tidak menjalankan agent. Pindahkan kartu ke SPECIFIER–QA dulu.");
@@ -258,7 +284,7 @@ void KanbanCardWidget::contextMenuEvent(QContextMenuEvent *event){
     }
 
     menu->addSeparator();
-    QAction *remove = menu->addAction(QIcon(":/icons/trash.svg"), QStringLiteral("Hapus task…"));
+    QAction *remove = menu->addAction(Theme::icon(":/icons/trash.svg"), QStringLiteral("Hapus task…"));
     remove->setObjectName("actionDeleteTask");
     connect(remove, &QAction::triggered, this, [this]() { emit deleteRequested(m_id); });
 

@@ -3,8 +3,117 @@
 
 #include <QFileInfo>
 
+namespace {
+
+constexpr int kCheckTimeoutMs = 10000;
+
+struct CommandOutput {
+    bool finished = false;   // berjalan dan keluar sendiri sebelum batas waktu
+    int exitCode = -1;
+    QByteArray stdoutData;
+};
+
+// Satu perintah singkat (`claude --version`, `claude auth status`) secara sinkron
+CommandOutput runCommand(const QString &program, const QStringList &arguments) {
+    QProcess process;
+    process.start(program, arguments);
+    CommandOutput output;
+    if (!process.waitForStarted(kCheckTimeoutMs)) {
+        return output;
+    }
+    process.closeWriteChannel();   // tidak ada input; jangan biarkan proses menunggu stdin
+    if (!process.waitForFinished(kCheckTimeoutMs)) {
+        process.kill();
+        process.waitForFinished(2000);
+        return output;
+    }
+    output.finished = process.exitStatus() == QProcess::NormalExit;
+    output.exitCode = process.exitCode();
+    output.stdoutData = process.readAllStandardOutput();
+    return output;
+}
+
+// Panduan yang sesuai dengan masalahnya
+RuntimeCheck withHelp(RuntimeCheck check) {
+    switch (check.status) {
+    case RuntimeCheck::Status::Missing:
+        check.helpUrl = ClaudeCli::installUrl();
+        break;
+    case RuntimeCheck::Status::Outdated:
+        check.helpUrl = ClaudeCli::installUrl() + QStringLiteral("#update-claude-code");
+        break;
+    case RuntimeCheck::Status::LoggedOut:
+        check.helpUrl = ClaudeCli::authUrl();
+        break;
+    case RuntimeCheck::Status::Ok:
+        break;
+    }
+    return check;
+}
+
+}
+
 ClaudeCodeRuntime::ClaudeCodeRuntime(QString program)
     : m_program(std::move(program)) {
+}
+
+RuntimeCheck ClaudeCodeRuntime::check() const {
+    return withHelp(probe());
+}
+
+RuntimeCheck ClaudeCodeRuntime::diagnose(const AgentResult &result) const {
+    return withHelp(classify(result));
+}
+
+RuntimeCheck ClaudeCodeRuntime::probe() const {
+    using Status = RuntimeCheck::Status;
+    QString reason;
+    if (!isAvailable(&reason)) {
+        return RuntimeCheck::of(Status::Missing, reason);
+    }
+
+    const CommandOutput versionOutput = runCommand(m_program, {QStringLiteral("--version")});
+    const QVersionNumber version = ClaudeCli::parseVersion(versionOutput.stdoutData);
+    const QString versionText = version.isNull() ? QString() : version.toString();
+    if (!version.isNull() && version < ClaudeCli::minimumVersion()) {
+        return RuntimeCheck::of(Status::Outdated,
+                                QStringLiteral("Versi terpasang %1, butuh minimal %2.")
+                                    .arg(versionText, ClaudeCli::minimumVersion().toString()),
+                                versionText);
+    }
+
+    // Status login yang tidak terbaca (mis. versi tanpa subcommand auth) tidak dilaporkan sebagai
+    // masalah; run yang gagal karena belum login tetap ditangkap diagnose()
+    // Kredensial lewat environment (API key, Bedrock, Vertex, Foundry) tidak tercatat sebagai login
+    // CLI; status auth-nya tidak dipakai supaya pengguna seperti itu tidak diminta login tiap kali buka
+    static const char *const kEnvCredentials[] = {
+        "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
+    };
+    for (const char *name : kEnvCredentials) {
+        if (!qEnvironmentVariableIsEmpty(name)) {
+            return RuntimeCheck::of(Status::Ok, QString(), versionText);
+        }
+    }
+    const CommandOutput authOutput = runCommand(m_program, {QStringLiteral("auth"), QStringLiteral("status")});
+    if (ClaudeCli::parseLoggedIn(authOutput.stdoutData) == std::optional<bool>(false)) {
+        return RuntimeCheck::of(Status::LoggedOut, QStringLiteral("Claude Code belum login."), versionText);
+    }
+    return RuntimeCheck::of(Status::Ok, QString(), versionText);
+}
+
+RuntimeCheck ClaudeCodeRuntime::classify(const AgentResult &result) const {
+    using Status = RuntimeCheck::Status;
+    if (result.success || result.outcome == QLatin1String("cancelled") || result.outcome == QLatin1String("timeout")) {
+        return RuntimeCheck();
+    }
+    if (result.outcome == QLatin1String("failed_to_start")) {
+        return RuntimeCheck::of(Status::Missing, result.message);
+    }
+    if (ClaudeCli::looksLikeAuthError(result.message)) {
+        return RuntimeCheck::of(Status::LoggedOut, result.message);
+    }
+    return RuntimeCheck();
 }
 
 bool ClaudeCodeRuntime::isAvailable(QString *reason) const {

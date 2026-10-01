@@ -2,6 +2,7 @@
 #include "HoverInfoPopup.h"
 #include "KanbanCardWidget.h"
 #include "ui_KanbanColumnWidget.h"
+#include "Theme.h"
 
 
 #include <QDragEnterEvent>
@@ -23,7 +24,7 @@ KanbanColumnWidget::KanbanColumnWidget(QWidget *parent) : QWidget(parent), ui(ne
 
     setAttribute(Qt::WA_StyledBackground, true);
 
-    ui->labelStageInfo->setPixmap(QIcon(":/icons/info.svg").pixmap(QSize(kInfoIconSide, kInfoIconSide)));
+    ui->labelStageInfo->setPixmap(Theme::icon(":/icons/info.svg").pixmap(QSize(kInfoIconSide, kInfoIconSide)));
     ui->labelStageInfo->setAccessibleName(QStringLiteral("Info stage"));   // ikon tanpa teks
     ui->labelStageInfo->hide();   // tampil begitu stage punya penjelasan (setStageInfo)
 

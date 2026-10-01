@@ -2,6 +2,7 @@
 <RCC version="1.0">
     <qresource prefix="/">
         <file>styles.qss</file>
+        <file>styles-dark.qss</file>
         <file>app.ico</file>
         <file>icons/plus.svg</file>
         <file>icons/plus-white.svg</file>
@@ -22,6 +23,7 @@
         <file>icons/close-white.svg</file>
         <file>icons/chevron-right.svg</file>
         <file>icons/chevron-down.svg</file>
+        <file>icons/dark/chevron-down.svg</file>
         <file>icons/branch.svg</file>
         <file>icons/info.svg</file>
         <file>icons/signal.svg</file>
