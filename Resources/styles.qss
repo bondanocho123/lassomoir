@@ -177,11 +177,13 @@ KanbanCardWidget[done="true"][state="idle"] {
 }
 
 /* Notice Claude Code (belum terpasang / perlu update / belum login) */
-QDialog#runtimeNoticeDialog {
+QDialog#runtimeNoticeDialog,
+QDialog#fontPickerDialog {
     background-color: #fbf8f3;
 }
 
-QLabel#runtimeNoticeTitle {
+QLabel#runtimeNoticeTitle,
+QLabel#fontPickerTitle {
     font-size: 15px;
     font-weight: bold;
     color: #33517a;
@@ -192,7 +194,8 @@ QLabel#runtimeNoticeMessage {
     color: #3d3730;
 }
 
-QPushButton#btnRuntimeNoticeOpen {
+QPushButton#btnRuntimeNoticeOpen,
+QPushButton#btnFontApply {
     background-color: #a9743f;
     color: #ffffff;
     border: none;
@@ -201,7 +204,8 @@ QPushButton#btnRuntimeNoticeOpen {
     font-weight: bold;
 }
 
-QPushButton#btnRuntimeNoticeOpen:hover {
+QPushButton#btnRuntimeNoticeOpen:hover,
+QPushButton#btnFontApply:hover {
     background-color: #8a5a2f;
 }
 
@@ -209,7 +213,8 @@ QPushButton#btnRuntimeNoticeOpen:disabled {
     background-color: #d9c6ac;
 }
 
-QPushButton#btnRuntimeNoticeCancel {
+QPushButton#btnRuntimeNoticeCancel,
+QPushButton#btnFontCancel {
     background-color: #ffffff;
     color: #3d3730;
     border: 1px solid #e2d5c1;
@@ -217,7 +222,8 @@ QPushButton#btnRuntimeNoticeCancel {
     padding: 6px 14px;
 }
 
-QPushButton#btnRuntimeNoticeCancel:hover {
+QPushButton#btnRuntimeNoticeCancel:hover,
+QPushButton#btnFontCancel:hover {
     background-color: #f2e3d1;
 }
 

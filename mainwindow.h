@@ -115,6 +115,14 @@ private slots:
     // Drawer minta perubahan kode folder kerja task (stage peninjauan kode)
     void handleDiffRequested(const QString &taskId);
 
+    // Samakan lebar widget baris project dengan kotak item-nya (setelah lebar sidebar berubah)
+    void fitProjectRowsToList();
+
+    // Gerigi di top bar: menu pengaturan (sementara hanya Ganti font)
+    void showSettingsMenu(QWidget *anchor);
+    // Dialog pilih font antarmuka; pilihan langsung diterapkan dan disimpan
+    void showFontPicker();
+
     // Tombol × di popup folder referensi swimlane
     void removeReferenceDirectory(const QString &projectId, const QString &dir);
 

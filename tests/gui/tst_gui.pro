@@ -13,6 +13,7 @@ INCLUDEPATH += ../.. ..
 # Semua sumber aplikasi kecuali main.cpp: MainWindow dirakit sendiri oleh test
 SOURCES += \
     tst_gui.cpp \
+    ../../AppFonts.cpp \
     ../../BranchViewer.cpp \
     ../../ClaudeCli.cpp \
     ../../CSharpMetrics.cpp \
@@ -26,6 +27,7 @@ SOURCES += \
     ../../DiffView.cpp \
     ../../DocumentText.cpp \
     ../../FileManager.cpp \
+    ../../FontPickerDialog.cpp \
     ../../GitHistory.cpp \
     ../../GitProcess.cpp \
     ../../HoverInfoPopup.cpp \
@@ -65,6 +67,7 @@ HEADERS += \
     ../../AgentDefinition.h \
     ../../AgentRuntime.h \
     ../../AgentTypes.h \
+    ../../AppFonts.h \
     ../../BranchViewer.h \
     ../../ClaudeCli.h \
     ../../CSharpMetrics.h \
@@ -78,6 +81,7 @@ HEADERS += \
     ../../DiffView.h \
     ../../DocumentText.h \
     ../../FileManager.h \
+    ../../FontPickerDialog.h \
     ../../GitHistory.h \
     ../../GitProcess.h \
     ../../HoverInfoPopup.h \

@@ -7,8 +7,10 @@
 #include "KanbanCardWidget.h"
 #include "TaskItem.h"
 #include "ConsolePanelWidget.h"
+#include "AppFonts.h"
 #include "ElidedLabel.h"
 #include "FileManager.h"
+#include "FontPickerDialog.h"
 #include "NewTaskDialog.h"
 #include "ResponseDrawer.h"
 #include "RunLogFormatter.h"
@@ -39,6 +41,8 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QListWidgetItem>
+#include <QApplication>
+#include <QMenu>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSize>
@@ -169,6 +173,10 @@ MainWindow::MainWindow(const StageCatalog &catalog, TaskManager &tasks, SwarmCoo
     // Jarak antar baris project di sidebar (spacing murni, bukan margin item,
     // supaya kotak hover/selected tetap pas dengan tinggi widget-nya)
     ui->projectList->setSpacing(4);
+    // Baris mengikuti lebar daftar. Saat sidebar menyempit setelah tampil pertama (ukuran splitter
+    // awal), QListView menghitung ulang kotak item tapi widget baris tetap selebar semula, sehingga
+    // tombol hapus dan "+" baru terlihat setelah daftar digeser (lihat eventFilter).
+    ui->projectList->viewport()->installEventFilter(this);
 
     // Pemilihan project di sidebar menentukan apa yang tampil di board
     connect(ui->projectList, &QListWidget::currentItemChanged,
@@ -178,6 +186,16 @@ MainWindow::MainWindow(const StageCatalog &catalog, TaskManager &tasks, SwarmCoo
     ui->btnToggleSidebar->setIcon(Theme::icon(":/icons/sidebar.svg"));
     connect(ui->btnToggleSidebar, &QPushButton::clicked,
             this, &MainWindow::toggleSidebar);
+
+    // Gerigi pengaturan tepat di samping New Project (sementara berisi Ganti font)
+    auto *btnSettings = new QPushButton(ui->btnGlobalNewProject->parentWidget());
+    btnSettings->setObjectName("btnSettings");
+    btnSettings->setIcon(Theme::icon(":/icons/settings.svg"));
+    btnSettings->setIconSize(QSize(16, 16));
+    btnSettings->setCursor(Qt::PointingHandCursor);
+    btnSettings->setToolTip("Pengaturan");
+    ui->navLayout->insertWidget(ui->navLayout->indexOf(ui->btnGlobalNewProject) + 1, btnSettings);
+    connect(btnSettings, &QPushButton::clicked, this, [this, btnSettings]() { showSettingsMenu(btnSettings); });
 
     // Tombol global New Project di top bar
     connect(ui->btnGlobalNewProject, &QPushButton::clicked, this, [this]() {
@@ -345,6 +363,11 @@ QWidget *MainWindow::createProjectRowWidget(const QString &projectId) {
 }
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
+    if (watched == ui->projectList->viewport() && event->type() == QEvent::Resize) {
+        // Dijadwalkan sesudah QListView selesai menata ulang kotak item untuk lebar yang baru
+        QTimer::singleShot(0, this, [this]() { fitProjectRowsToList(); });
+    }
+
     auto *btn = qobject_cast<QPushButton*>(watched);
     if (btn) {
         const QString name = btn->objectName();
@@ -361,6 +384,17 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
     }
 
     return QMainWindow::eventFilter(watched, event);
+}
+
+void MainWindow::fitProjectRowsToList() {
+    for (int row = 0; row < ui->projectList->count(); ++row) {
+        QListWidgetItem *item = ui->projectList->item(row);
+        QWidget *rowWidget = ui->projectList->itemWidget(item);
+        const QRect rect = ui->projectList->visualItemRect(item);
+        if (rowWidget && rect.isValid() && rowWidget->geometry() != rect) {
+            rowWidget->setGeometry(rect);
+        }
+    }
 }
 
 void MainWindow::changeEvent(QEvent *event) {
@@ -1313,6 +1347,28 @@ void MainWindow::handleRunFinished(const TaskItem &task, const AgentResult &resu
     logTask(task, RunLogFormatter::finishLine(task, result));
     // Gagal karena Claude Code-nya sendiri (hilang, belum login): beri tahu cara memperbaikinya
     showRuntimeNotice(m_swarm.diagnose(result));
+}
+
+void MainWindow::showSettingsMenu(QWidget *anchor) {
+    auto *menu = new QMenu(this);
+    menu->setObjectName("settingsMenu");
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+    QAction *changeFont = menu->addAction(QStringLiteral("Ganti font…"));
+    changeFont->setObjectName("actionChangeFont");
+    connect(changeFont, &QAction::triggered, this, &MainWindow::showFontPicker);
+    // Menggantung di bawah gerigi, rata kanan dengan tombolnya
+    menu->popup(anchor->mapToGlobal(QPoint(anchor->width() - menu->sizeHint().width(), anchor->height() + 4)));
+}
+
+void MainWindow::showFontPicker() {
+    auto *dialog = new FontPickerDialog(AppFonts::registerBundled(), AppFonts::saved(), this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dialog, &FontPickerDialog::fontChosen, this, [](const QString &family) {
+        AppFonts::save(family);
+        Theme::setUiFontFamily(family);
+        Theme::apply(*qApp);
+    });
+    dialog->open();
 }
 
 void MainWindow::checkRuntime() {

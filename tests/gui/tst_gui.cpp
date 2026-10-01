@@ -1,3 +1,4 @@
+#include "AppFonts.h"
 #include "BranchViewer.h"
 #include "CodeMetrics.h"
 #include "ConsolePanelWidget.h"
@@ -36,6 +37,7 @@
 #include <QEnterEvent>
 #include <QFile>
 #include <QFileDialog>
+#include <QFontDatabase>
 #include <QGraphicsView>
 #include <QImage>
 #include <QJsonArray>
@@ -225,6 +227,8 @@ private slots:
 
     // Nama project panjang dipotong "…" supaya tombol hapus dan "+" di barisnya tetap terlihat
     void longProjectNameKeepsRowButtonsVisible();
+    // Sidebar menyempit setelah tampil pertama (ukuran splitter awal): baris ikut menyempit tanpa digeser
+    void rowButtonsFollowSidebarWidth();
 
     // Notice Claude Code: belum terpasang / perlu update / belum login, dengan tombol buka link atau batal
     void runtimeCheckShowsNotice_data();
@@ -244,6 +248,11 @@ private slots:
     // Stylesheet milik widget (dari .ui / setStyleSheet) ikut dipetakan, dan kembali saat mode terang
     void themeAdaptsWidgetStyleSheets();
 
+    // Font open-source tertanam; bawaan tetap font yang sekarang
+    void bundledFontsAreRegistered();
+    // Gerigi di samping New Project -> Ganti font -> pilih -> diterapkan dan diingat
+    void settingsButtonChangesFont();
+
 private:
     // Dialog notice runtime yang sedang tampil; nullptr bila tidak ada
     QDialog *runtimeNotice() const;
@@ -255,8 +264,9 @@ private:
     void driveNextModalDialog(std::function<void(QDialog *)> action);
     bool m_dialogSeen = false;
 
-    // Rakit TaskManager + MainWindow seperti main.cpp (termasuk runFinished -> recordRun)
-    void createWindow();
+    // Rakit TaskManager + MainWindow seperti main.cpp (termasuk runFinished -> recordRun);
+    // size valid = ukuran jendela dipasang sebelum tampil, seperti main.cpp
+    void createWindow(const QSize &size = QSize());
     // Jalankan SPECIFIER task t3 dengan runtime palsu sampai menunggu review
     void finishSpecifierRun(const QString &document);
 
@@ -307,7 +317,7 @@ void TestGui::init() {
     createWindow();
 }
 
-void TestGui::createWindow() {
+void TestGui::createWindow(const QSize &size) {
     m_tasks = std::make_unique<TaskManager>(m_catalog);
     TaskManager *tasks = m_tasks.get();
     connect(m_swarm.get(), &SwarmCoordinator::runFinished, tasks,
@@ -315,6 +325,9 @@ void TestGui::createWindow() {
         tasks->recordRun(task.id, StageRun::finished(task.stage, result));
     });
     m_window = std::make_unique<MainWindow>(m_catalog, *m_tasks, *m_swarm, m_mermaid);
+    if (size.isValid()) {
+        m_window->resize(size);
+    }
     m_window->show();
 }
 
@@ -2708,6 +2721,51 @@ void TestGui::longProjectNameKeepsRowButtonsVisible() {
     QCOMPARE(label->toolTip(), longName);
 }
 
+void TestGui::rowButtonsFollowSidebarWidth() {
+    auto *list = m_window->findChild<QListWidget *>(QStringLiteral("projectList"));
+    auto *splitter = m_window->findChild<QSplitter *>(QStringLiteral("mainSplitter"));
+    QVERIFY(list && splitter && list->count() > 0);
+
+    auto buttonsInside = [&list]() {
+        const QRect viewport = list->viewport()->rect();
+        for (int i = 0; i < list->count(); ++i) {
+            QWidget *row = list->itemWidget(list->item(i));
+            for (const QString &name : {QStringLiteral("btnProjectDelete"), QStringLiteral("btnProjectNewTask")}) {
+                auto *button = row->findChild<QPushButton *>(name);
+                if (!button || !viewport.contains(QRect(button->mapTo(list->viewport(), QPoint(0, 0)), button->size()))) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
+
+    // Lebar dulu (seperti sebelum ukuran splitter awal diterapkan), lalu menyempit tanpa event lain
+    QList<int> sizes = splitter->sizes();
+    sizes[0] = 240;
+    splitter->setSizes(sizes);
+    QTRY_VERIFY(buttonsInside());
+    sizes = splitter->sizes();
+    sizes[0] = 160;
+    splitter->setSizes(sizes);
+    QTRY_VERIFY(buttonsInside());
+
+    // Persis seperti main.cpp: ukuran jendela dipasang sebelum tampil pertama, lalu konstruktor
+    // menerapkan ukuran splitter awal di siklus event berikutnya
+    m_window.reset();
+    m_tasks.reset();
+    createWindow(QSize(1440, 850));
+    list = m_window->findChild<QListWidget *>(QStringLiteral("projectList"));
+    splitter = m_window->findChild<QSplitter *>(QStringLiteral("mainSplitter"));
+    QTest::qWait(50);   // ukuran splitter awal (QTimer::singleShot 0 di konstruktor) sudah diterapkan
+    QTRY_VERIFY2_WITH_TIMEOUT(buttonsInside(), qPrintable(QStringLiteral("viewport %1, baris %2, visualRect %3, sidebar %4")
+                                                              .arg(list->viewport()->width())
+                                                              .arg(list->itemWidget(list->item(0))->width())
+                                                              .arg(list->visualItemRect(list->item(0)).width())
+                                                              .arg(splitter->sizes().value(0))),
+                              1000);
+}
+
 QDialog *TestGui::runtimeNotice() const {
     const QList<QDialog *> dialogs = m_window->findChildren<QDialog *>(QStringLiteral("runtimeNoticeDialog"));
     for (QDialog *dialog : dialogs) {
@@ -2947,6 +3005,101 @@ void TestGui::themeAdaptsWidgetStyleSheets() {
     QVERIFY(Theme::apply(*qApp));
     QCOMPARE(widget.styleSheet(), QStringLiteral("color: #a9743f;"));
     QVERIFY(topBar->styleSheet().contains(QStringLiteral("#f7f9f8")));
+}
+
+void TestGui::bundledFontsAreRegistered() {
+    const QStringList families = AppFonts::registerBundled();
+    QVERIFY2(families.size() >= 20, qPrintable(families.join(QStringLiteral(", "))));
+    for (const QString &family : {QStringLiteral("Inter"), QStringLiteral("Nunito"), QStringLiteral("Lexend"),
+                                  QStringLiteral("Atkinson Hyperlegible")}) {
+        QVERIFY2(families.contains(family), qPrintable(family));
+        QVERIFY(QFontDatabase::families().contains(family));
+    }
+    // Dipanggil lagi tidak menambah duplikat
+    QCOMPARE(AppFonts::registerBundled(), families);
+}
+
+void TestGui::settingsButtonChangesFont() {
+    const auto restore = qScopeGuard([]() {
+        AppFonts::save(QString());
+        Theme::setUiFontFamily(QString());
+        qApp->setStyleSheet(QString());
+    });
+    AppFonts::save(QString());
+
+    // Gerigi tepat di samping New Project, di top bar yang sama
+    auto *newProject = m_window->findChild<QPushButton *>(QStringLiteral("btnGlobalNewProject"));
+    auto *settings = m_window->findChild<QPushButton *>(QStringLiteral("btnSettings"));
+    QVERIFY(newProject && settings);
+    QCOMPARE(settings->parentWidget(), newProject->parentWidget());
+    QVERIFY(settings->isVisible());
+    QVERIFY(!settings->toolTip().isEmpty());
+
+    auto openPicker = [&]() -> QDialog * {
+        settings->click();
+        QMenu *menu = nullptr;
+        if (!QTest::qWaitFor([&]() {
+                const QList<QMenu *> menus = shownChildren<QMenu>(m_window.get(), QStringLiteral("settingsMenu"));
+                menu = menus.isEmpty() ? nullptr : menus.last();
+                return menu != nullptr;
+            })) {
+            qWarning("settings menu tidak muncul");
+            return nullptr;
+        }
+        QAction *changeFont = menu->findChild<QAction *>(QStringLiteral("actionChangeFont"));
+        if (!changeFont) {
+            qWarning("aksi Ganti font tidak ada");
+            return nullptr;
+        }
+        changeFont->trigger();
+        menu->close();
+        QDialog *dialog = nullptr;
+        QTest::qWaitFor([&]() {
+            dialog = nullptr;
+            for (QDialog *candidate : m_window->findChildren<QDialog *>(QStringLiteral("fontPickerDialog"))) {
+                if (candidate->isVisible()) {
+                    dialog = candidate;
+                }
+            }
+            return dialog != nullptr;
+        });
+        return dialog;
+    };
+
+    QDialog *dialog = openPicker();
+    QVERIFY(dialog);
+    auto *list = dialog->findChild<QListWidget *>(QStringLiteral("fontList"));
+    QVERIFY(list);
+    QVERIFY(list->count() >= 21);
+    // Pilihan pertama: font yang sekarang, dan itu yang terpilih
+    QVERIFY(list->item(0)->text().contains(QStringLiteral("Garamond")));
+    QCOMPARE(list->currentRow(), 0);
+
+    // Pilih Inter: pratinjau ikut berubah, lalu Terapkan
+    QList<QListWidgetItem *> inter = list->findItems(QStringLiteral("Inter"), Qt::MatchExactly);
+    QCOMPARE(inter.size(), 1);
+    list->setCurrentItem(inter.first());
+    auto *preview = dialog->findChild<QLabel *>(QStringLiteral("fontPreview"));
+    QVERIFY(preview);
+    QCOMPARE(preview->font().family(), QStringLiteral("Inter"));
+    const QPointer<QDialog> first = dialog;
+    dialog->findChild<QPushButton *>(QStringLiteral("btnFontApply"))->click();
+    QTRY_VERIFY(!first || !first->isVisible());
+
+    QCOMPARE(AppFonts::saved(), QStringLiteral("Inter"));
+    QVERIFY2(qApp->styleSheet().contains(QStringLiteral("font-family: \"Inter\"")), "font override missing");
+    // Wordmark tetap Garamond
+    QVERIFY(qApp->styleSheet().contains(QStringLiteral("QLabel#labelAppName")));
+
+    // Dibuka lagi: Inter yang terpilih; kembali ke bawaan menghapus override
+    dialog = openPicker();
+    QVERIFY(dialog);
+    list = dialog->findChild<QListWidget *>(QStringLiteral("fontList"));
+    QCOMPARE(list->currentItem()->text(), QStringLiteral("Inter"));
+    list->setCurrentRow(0);
+    dialog->findChild<QPushButton *>(QStringLiteral("btnFontApply"))->click();
+    QTRY_COMPARE(AppFonts::saved(), QString());
+    QVERIFY(!qApp->styleSheet().contains(QStringLiteral("font-family: \"Inter\"")));
 }
 
 int main(int argc, char *argv[]) {
