@@ -9,6 +9,9 @@
 #include <QByteArray>
 #include <QString>
 #include <QStringList>
+#include <QVersionNumber>
+
+#include <optional>
 
 // Kontrak pemanggilan Claude Code CLI: lokasi executable dan flag-nya.
 // Flag dicocokkan dengan `claude --help` versi 2.1.266.
@@ -16,6 +19,23 @@ namespace ClaudeCli {
 
 // Cari claude di PATH, lalu di ~/.local/bin (lokasi installer native). Kosong bila tidak ada.
 QString findExecutable();
+
+// Versi terendah yang flag-nya cocok dengan arguments() di bawah
+QVersionNumber minimumVersion();
+
+// Keluaran `claude --version` ("2.1.283 (Claude Code)") -> 2.1.283; null bila tidak terbaca
+QVersionNumber parseVersion(const QByteArray &output);
+
+// Keluaran JSON `claude auth status` -> nilai "loggedIn"; kosong bila tidak terbaca
+// (mis. versi lama yang belum punya subcommand auth)
+std::optional<bool> parseLoggedIn(const QByteArray &output);
+
+// Pesan gagal dari CLI yang menandakan belum login / kredensial tidak berlaku
+bool looksLikeAuthError(const QString &text);
+
+// Halaman panduan untuk notice ke pengguna
+QString installUrl();
+QString authUrl();
 
 // Argumen `claude -p` untuk satu run. Isi task tidak pernah ikut di sini: dikirim lewat stdin.
 QStringList arguments(const AgentDefinition &agent);

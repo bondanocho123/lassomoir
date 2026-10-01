@@ -60,6 +60,8 @@ KanbanCardWidget::KanbanCardWidget(QWidget *parent)
     connect(ui->btnCardRun, &QPushButton::clicked, this, &KanbanCardWidget::onRunButtonClicked);
     refreshRunButton();
     setAttachments(0, 0);
+    setProperty("done", false);
+    refreshDoneMarker();
 }
 
 void KanbanCardWidget::setRunEnabled(bool enabled) {
@@ -75,6 +77,27 @@ void KanbanCardWidget::setRunState(RunState state) {
     m_pulse->setActive(state == RunState::Running);
     refreshStateProperty();
     refreshRunButton();
+    refreshDoneMarker();
+}
+
+void KanbanCardWidget::setCompletedStage(const QString &stage) {
+    m_completedStage = stage;
+    refreshDoneMarker();
+}
+
+void KanbanCardWidget::refreshDoneMarker() {
+    const bool done = !m_completedStage.isEmpty() && m_runState == RunState::Idle;
+    // Di ujung pipeline cukup "Selesai"; di stage lain sebut stage yang baru saja selesai
+    ui->labelDone->setText(m_completedStage == QLatin1String("DONE")
+                               ? QStringLiteral("✓ Selesai")
+                               : QStringLiteral("✓ %1 selesai").arg(m_completedStage));
+    ui->labelDone->setVisible(done);
+    if (property("done").toBool() == done) {
+        return;
+    }
+    setProperty("done", done);
+    style()->unpolish(this);
+    style()->polish(this);
 }
 
 void KanbanCardWidget::setTaskState(TaskState state, const QString &detail) {

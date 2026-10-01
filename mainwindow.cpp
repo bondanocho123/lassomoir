@@ -12,6 +12,7 @@
 #include "NewTaskDialog.h"
 #include "ResponseDrawer.h"
 #include "RunLogFormatter.h"
+#include "RuntimeNoticeDialog.h"
 #include "SplitterPaneAnimator.h"
 #include "StageCatalog.h"
 #include "SwarmCoordinator.h"
@@ -794,6 +795,7 @@ KanbanCardWidget *MainWindow::createCard(SwimlaneWidget *swimlane, const TaskIte
 void MainWindow::applyTaskToCard(KanbanCardWidget *card, const TaskItem &task) {
     card->setCardData(task.id, task.category, task.title, task.subtext, badgeText(task));
     card->setTaskState(task.state, failureDetail(task));
+    card->setCompletedStage(task.completedStage());
     const int images = int(std::count_if(task.attachments.cbegin(), task.attachments.cend(), TaskAttachments::isImage));
     card->setAttachments(images, int(task.attachments.size()) - images, task.attachments);
 }
@@ -1083,6 +1085,10 @@ bool MainWindow::startAgentRun(const TaskItem &task, const QString &workingDirec
     QString reason;
     if (!m_swarm.run(task, workingDirectory, materials, &reason)) {
         logTask(task, RunLogFormatter::rejectedLine(task, reason));
+        QString missing;
+        if (!m_swarm.isRuntimeAvailable(&missing)) {
+            showRuntimeNotice(m_swarm.diagnose(AgentResult::failure(QStringLiteral("failed_to_start"), missing)));
+        }
         return false;
     }
     return true;
@@ -1303,4 +1309,27 @@ void MainWindow::handleRunFinished(const TaskItem &task, const AgentResult &resu
     // sambungan di main.cpp; di sini tinggal status run kartu dan notifikasi konsol
     showRunState(task, RunState::Idle);
     logTask(task, RunLogFormatter::finishLine(task, result));
+    // Gagal karena Claude Code-nya sendiri (hilang, belum login): beri tahu cara memperbaikinya
+    showRuntimeNotice(m_swarm.diagnose(result));
+}
+
+void MainWindow::checkRuntime() {
+    auto *watcher = new QFutureWatcher<RuntimeCheck>(this);
+    connect(watcher, &QFutureWatcher<RuntimeCheck>::finished, this, [this, watcher]() {
+        watcher->deleteLater();
+        showRuntimeNotice(watcher->result());
+    });
+    SwarmCoordinator *swarm = &m_swarm;
+    watcher->setFuture(QtConcurrent::run([swarm]() { return swarm->checkRuntime(); }));
+}
+
+void MainWindow::showRuntimeNotice(const RuntimeCheck &check) {
+    if (check.status == RuntimeCheck::Status::Ok || m_runtimeNotice) {
+        return;
+    }
+    auto *dialog = new RuntimeNoticeDialog(check, this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    m_runtimeNotice = dialog;
+    // open(): modal ke jendela ini tanpa menahan event loop pemanggilnya
+    dialog->open();
 }

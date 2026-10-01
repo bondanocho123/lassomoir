@@ -39,6 +39,7 @@ SOURCES += \
     ../../PromptEditor.cpp \
     ../../ResponseDrawer.cpp \
     ../../RunLogFormatter.cpp \
+    ../../RuntimeNoticeDialog.cpp \
     ../../RunPulse.cpp \
     ../../SourceTokens.cpp \
     ../../SplitterPaneAnimator.cpp \
@@ -89,6 +90,7 @@ HEADERS += \
     ../../PromptEditor.h \
     ../../ResponseDrawer.h \
     ../../RunLogFormatter.h \
+    ../../RuntimeNoticeDialog.h \
     ../../RunPulse.h \
     ../../SourceTokens.h \
     ../../SplitterPaneAnimator.h \

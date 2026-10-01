@@ -49,5 +49,9 @@ int main(int argc, char *argv[])
     window.resize(1440, 850);
     window.show();
 
+    // Claude Code terpasang, cukup baru, dan sudah login? Diperiksa di belakang layar;
+    // bila tidak, notice berisi cara memperbaikinya muncul di atas jendela
+    window.checkRuntime();
+
     return QApplication::exec();
 }

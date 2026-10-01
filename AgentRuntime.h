@@ -40,6 +40,16 @@ public:
 
     // Session baru yang belum di-start; dimiliki parent
     virtual AgentSession *createSession(const AgentLaunch &launch, QObject *parent) = 0;
+
+    // Pemeriksaan lengkap (terpasang, versi, login). Boleh memblokir beberapa detik karena
+    // menjalankan proses, jadi panggil dari thread lain. Bawaan: dianggap siap.
+    virtual RuntimeCheck check() const { return RuntimeCheck(); }
+
+    // Run yang gagal karena backend-nya (belum terpasang, belum login)? Selain itu Ok.
+    virtual RuntimeCheck diagnose(const AgentResult &result) const {
+        Q_UNUSED(result);
+        return RuntimeCheck();
+    }
 };
 
 #endif // AGENTRUNTIME_H

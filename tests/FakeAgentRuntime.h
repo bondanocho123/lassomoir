@@ -73,6 +73,18 @@ public:
         return session;
     }
 
+    RuntimeCheck check() const override { return checkResult; }
+
+    // Run gagal (selain dibatalkan) ditafsirkan sebagai failureDiagnosis
+    RuntimeCheck diagnose(const AgentResult &result) const override {
+        if (result.success || result.outcome == QLatin1String("cancelled")) {
+            return RuntimeCheck();
+        }
+        return failureDiagnosis;
+    }
+
+    RuntimeCheck checkResult;                     // jawaban pemeriksaan saat aplikasi dibuka
+    RuntimeCheck failureDiagnosis;                // tafsiran run yang gagal
     bool available = true;                        // uji penolakan "runtime tidak tersedia"
     bool finishOnStart = false;                   // uji session yang selesai di dalam start()
     QList<QPointer<FakeAgentSession>> sessions;   // semua session yang pernah dibuat

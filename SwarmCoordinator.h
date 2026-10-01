@@ -42,6 +42,11 @@ public:
 
     RunState state(const QString &taskId) const;
 
+    // Diteruskan ke runtime (lihat AgentRuntime): check() boleh memblokir, panggil dari thread lain
+    bool isRuntimeAvailable(QString *reason = nullptr) const;
+    RuntimeCheck checkRuntime() const;
+    RuntimeCheck diagnose(const AgentResult &result) const;
+
 signals:
     // Diteruskan dari semua gerombolan
     void runQueued(const TaskItem &task);

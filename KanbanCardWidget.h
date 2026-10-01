@@ -53,6 +53,10 @@ public:
     void setTaskState(TaskState state, const QString &detail = QString());
     TaskState taskState() const { return m_taskState; }
 
+    // Stage yang pekerjaannya baru selesai (TaskItem::completedStage), kosong = tanpa penanda.
+    // Penanda "✓ Selesai" disembunyikan selama run antre/berjalan; property "done" untuk styles.qss.
+    void setCompletedStage(const QString &stage);
+
     // Stage tempat kartu sekarang berada; diatur kolom saat kartu masuk ke dalamnya
     void setStage(const QString &stage) { m_stage = stage; }
     QString stage() const { return m_stage; }
@@ -111,6 +115,7 @@ private :
     RunState m_runState = RunState::Idle;
     TaskState m_taskState = TaskState::Idle;
     QString m_taskStateDetail;
+    QString m_completedStage;
 
     void updateUI();
     void onRunButtonClicked();
@@ -118,6 +123,8 @@ private :
     void refreshRunButton();
     // Property "state" untuk styles.qss: queued/running mengalahkan review/failed
     void refreshStateProperty();
+    // Penanda "✓ Selesai" mengikuti m_completedStage + m_runState
+    void refreshDoneMarker();
 };
 
 #endif // KANBANCARDWIDGET_H

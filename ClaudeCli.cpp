@@ -6,6 +6,8 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonValue>
+#include <QRegularExpression>
 #include <QStandardPaths>
 
 namespace {
@@ -34,6 +36,44 @@ QString ClaudeCli::findExecutable() {
     }
     return QStandardPaths::findExecutable(QStringLiteral("claude"),
                                           {QDir::home().filePath(QStringLiteral(".local/bin"))});
+}
+
+QVersionNumber ClaudeCli::minimumVersion() {
+    return QVersionNumber(2, 1, 266);
+}
+
+QVersionNumber ClaudeCli::parseVersion(const QByteArray &output) {
+    static const QRegularExpression pattern(QStringLiteral(R"((\d+)\.(\d+)\.(\d+))"));
+    const QRegularExpressionMatch match = pattern.match(QString::fromUtf8(output));
+    if (!match.hasMatch()) {
+        return QVersionNumber();
+    }
+    return QVersionNumber(match.captured(1).toInt(), match.captured(2).toInt(), match.captured(3).toInt());
+}
+
+std::optional<bool> ClaudeCli::parseLoggedIn(const QByteArray &output) {
+    const QJsonDocument document = QJsonDocument::fromJson(output.trimmed());
+    const QJsonValue loggedIn = document.object().value(QStringLiteral("loggedIn"));
+    if (!loggedIn.isBool()) {
+        return std::nullopt;
+    }
+    return loggedIn.toBool();
+}
+
+bool ClaudeCli::looksLikeAuthError(const QString &text) {
+    // Pesan CLI saat token/API key tidak ada, kedaluwarsa, atau ditolak server (401)
+    static const QRegularExpression pattern(
+        QStringLiteral(R"(\blog ?in\b|/login|not logged|api key|unauthori[sz]ed|authenticat|\b401\b|oauth token|credential)"),
+        QRegularExpression::CaseInsensitiveOption);
+    return !text.isEmpty() && pattern.match(text).hasMatch();
+}
+
+QString ClaudeCli::installUrl() {
+    return QStringLiteral("https://code.claude.com/docs/en/setup");
+}
+
+QString ClaudeCli::authUrl() {
+    return QStringLiteral("https://code.claude.com/docs/en/authentication");
 }
 
 QStringList ClaudeCli::arguments(const AgentDefinition &agent) {

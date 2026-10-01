@@ -224,7 +224,19 @@ private slots:
     // Nama project panjang dipotong "…" supaya tombol hapus dan "+" di barisnya tetap terlihat
     void longProjectNameKeepsRowButtonsVisible();
 
+    // Notice Claude Code: belum terpasang / perlu update / belum login, dengan tombol buka link atau batal
+    void runtimeCheckShowsNotice_data();
+    void runtimeCheckShowsNotice();
+    void readyRuntimeShowsNoNotice();
+    void failedRunShowsLoginNoticeOnce();
+    void unavailableRuntimeShowsInstallNotice();
+
+    // Kartu yang stage-nya selesai diberi penanda "✓ Selesai"
+    void finishedStageMarksCardDone();
+
 private:
+    // Dialog notice runtime yang sedang tampil; nullptr bila tidak ada
+    QDialog *runtimeNotice() const;
     // Dialog modal membuka event loop sendiri di dalam handler klik; timer ini jalan di loop itu
     // dan mengisi/menutup dialog. m_dialogSeen tetap false bila dialog tidak pernah muncul.
     void driveModalDialog(std::function<void(QDialog *)> action);
@@ -277,6 +289,9 @@ void TestGui::init() {
     file.close();
 
     m_runtime.sessions.clear();
+    m_runtime.available = true;
+    m_runtime.checkResult = RuntimeCheck();
+    m_runtime.failureDiagnosis = RuntimeCheck();
     m_mermaid.requests.clear();
     m_swarm = std::make_unique<SwarmCoordinator>(m_catalog, m_runtime, m_composer);
     createWindow();
@@ -2681,6 +2696,118 @@ void TestGui::longProjectNameKeepsRowButtonsVisible() {
     QVERIFY(label);
     QTRY_VERIFY(label->text().endsWith(QChar(0x2026)));
     QCOMPARE(label->toolTip(), longName);
+}
+
+QDialog *TestGui::runtimeNotice() const {
+    const QList<QDialog *> dialogs = m_window->findChildren<QDialog *>(QStringLiteral("runtimeNoticeDialog"));
+    for (QDialog *dialog : dialogs) {
+        if (dialog->isVisible()) {
+            return dialog;
+        }
+    }
+    return nullptr;
+}
+
+void TestGui::runtimeCheckShowsNotice_data() {
+    QTest::addColumn<int>("status");
+    QTest::addColumn<QString>("title");
+    QTest::addColumn<QString>("url");
+    QTest::newRow("belum terpasang") << int(RuntimeCheck::Status::Missing) << QStringLiteral("belum terpasang")
+                                     << QStringLiteral("https://example.test/setup");
+    QTest::newRow("perlu update") << int(RuntimeCheck::Status::Outdated) << QStringLiteral("perlu diperbarui")
+                                  << QStringLiteral("https://example.test/update");
+    QTest::newRow("belum login") << int(RuntimeCheck::Status::LoggedOut) << QStringLiteral("belum login")
+                                 << QStringLiteral("https://example.test/auth");
+}
+
+void TestGui::runtimeCheckShowsNotice() {
+    QFETCH(int, status);
+    QFETCH(QString, title);
+    QFETCH(QString, url);
+
+    RuntimeCheck check = RuntimeCheck::of(RuntimeCheck::Status(status), QStringLiteral("detail dari CLI"),
+                                          QStringLiteral("2.0.1"));
+    check.helpUrl = url;
+    m_runtime.checkResult = check;
+    m_window->checkRuntime();
+
+    QTRY_VERIFY(runtimeNotice());
+    QDialog *dialog = runtimeNotice();
+    QVERIFY(dialog->findChild<QLabel *>(QStringLiteral("runtimeNoticeTitle"))->text().contains(title));
+    QVERIFY(dialog->findChild<QLabel *>(QStringLiteral("runtimeNoticeMessage"))->text().contains(
+        QStringLiteral("detail dari CLI")));
+    QCOMPARE(dialog->property("helpUrl").toString(), url);
+    QVERIFY(dialog->findChild<QPushButton *>(QStringLiteral("btnRuntimeNoticeOpen")));
+
+    // Batal menutup notice tanpa membuka apa pun
+    dialog->findChild<QPushButton *>(QStringLiteral("btnRuntimeNoticeCancel"))->click();
+    QTRY_VERIFY(!runtimeNotice());
+}
+
+void TestGui::readyRuntimeShowsNoNotice() {
+    m_window->checkRuntime();
+    QTest::qWait(200);
+    QVERIFY(!runtimeNotice());
+}
+
+void TestGui::failedRunShowsLoginNoticeOnce() {
+    m_runtime.failureDiagnosis = RuntimeCheck::of(RuntimeCheck::Status::LoggedOut,
+                                                  QStringLiteral("Invalid API key · Please run /login"));
+
+    runButton(QStringLiteral("t1"))->click();
+    m_runtime.sessions.last()->finishWith(
+        AgentResult::failure(QStringLiteral("no_result"), QStringLiteral("Invalid API key · Please run /login")));
+    QTRY_VERIFY(runtimeNotice());
+    QVERIFY(runtimeNotice()->findChild<QLabel *>(QStringLiteral("runtimeNoticeTitle"))->text().contains(
+        QStringLiteral("belum login")));
+
+    // Gagal lagi selagi notice masih terbuka: tidak menumpuk notice kedua
+    runButton(QStringLiteral("t1"))->click();
+    m_runtime.sessions.last()->finishWith(
+        AgentResult::failure(QStringLiteral("no_result"), QStringLiteral("Invalid API key · Please run /login")));
+    QTest::qWait(50);
+    int shown = 0;
+    for (QDialog *dialog : m_window->findChildren<QDialog *>(QStringLiteral("runtimeNoticeDialog"))) {
+        shown += dialog->isVisible() ? 1 : 0;
+    }
+    QCOMPARE(shown, 1);
+    runtimeNotice()->reject();
+}
+
+void TestGui::unavailableRuntimeShowsInstallNotice() {
+    m_runtime.available = false;
+    m_runtime.failureDiagnosis = RuntimeCheck::of(RuntimeCheck::Status::Missing, QStringLiteral("claude tidak ditemukan"));
+
+    runButton(QStringLiteral("t1"))->click();
+    QTRY_VERIFY(runtimeNotice());
+    QVERIFY(runtimeNotice()->findChild<QLabel *>(QStringLiteral("runtimeNoticeTitle"))->text().contains(
+        QStringLiteral("belum terpasang")));
+    runtimeNotice()->reject();
+}
+
+void TestGui::finishedStageMarksCardDone() {
+    auto doneLabel = [this](const QString &id) {
+        KanbanCardWidget *target = card(id);
+        return target ? target->findChild<QLabel *>(QStringLiteral("labelDone")) : nullptr;
+    };
+    QVERIFY(doneLabel(QStringLiteral("t1")));
+    QVERIFY(!doneLabel(QStringLiteral("t1"))->isVisibleTo(card(QStringLiteral("t1"))));
+
+    // CODER selesai -> kartu maju ke CLEANER dengan penanda stage yang baru selesai
+    runButton(QStringLiteral("t1"))->click();
+    m_runtime.sessions.last()->finishWith(successResult(QStringLiteral("Selesai")));
+    QTRY_COMPARE(card(QStringLiteral("t1"))->stage(), QStringLiteral("CLEANER"));
+    QTRY_VERIFY(doneLabel(QStringLiteral("t1"))->isVisibleTo(card(QStringLiteral("t1"))));
+    QVERIFY(doneLabel(QStringLiteral("t1"))->text().contains(QStringLiteral("CODER")));
+    QCOMPARE(card(QStringLiteral("t1"))->property("done").toBool(), true);
+
+    // Run berikutnya mulai: penanda hilang selama agent bekerja
+    runButton(QStringLiteral("t1"))->click();
+    QTRY_VERIFY(!doneLabel(QStringLiteral("t1"))->isVisibleTo(card(QStringLiteral("t1"))));
+    QCOMPARE(card(QStringLiteral("t1"))->property("done").toBool(), false);
+
+    // WAITING tidak pernah diberi penanda
+    QVERIFY(!doneLabel(QStringLiteral("t2"))->isVisibleTo(card(QStringLiteral("t2"))));
 }
 
 int main(int argc, char *argv[]) {
