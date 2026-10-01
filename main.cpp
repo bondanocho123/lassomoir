@@ -1,6 +1,4 @@
 #include <QApplication>
-#include <QFile>
-#include <QDebug>
 #include <QIcon>
 
 #include "mainwindow.h" // Gunakan "mainwindow.h" jika tanpa subfolder
@@ -10,6 +8,7 @@
 #include "StageCatalog.h"
 #include "SwarmCoordinator.h"
 #include "TaskManager.h"
+#include "Theme.h"
 
 int main(int argc, char *argv[])
 {
@@ -17,14 +16,8 @@ int main(int argc, char *argv[])
     QCoreApplication::setApplicationName("Lassomoir");
     a.setWindowIcon(QIcon(":/app.ico"));
 
-    // 1. Muat Stylesheet Global
-    QFile styleFile(":/styles.qss");
-    if (styleFile.open(QFile::ReadOnly | QFile::Text)) {
-        a.setStyleSheet(QString::fromUtf8(styleFile.readAll()));
-        styleFile.close();
-    } else {
-        qWarning() << "Peringatan: Gagal memuat :/styles.qss. Tampilan akan menggunakan default Qt.";
-    }
+    // 1. Muat stylesheet global; mode terang/gelap mengikuti Windows, juga saat aplikasi berjalan
+    Theme::install(a);
 
     // 2. Rakit dependensi. Urutan deklarasi penting: objek dihancurkan terbalik, jadi jendela
     //    tutup lebih dulu, lalu browser render diagram dan proses agent dimatikan, baru

@@ -20,6 +20,7 @@
 #include "TaskGit.h"
 #include "TaskManager.h"
 #include "WorkspaceDiff.h"
+#include "Theme.h"
 
 #include <QFileDialog>
 #include <QFileInfo>
@@ -173,7 +174,8 @@ MainWindow::MainWindow(const StageCatalog &catalog, TaskManager &tasks, SwarmCoo
     connect(ui->projectList, &QListWidget::currentItemChanged,
             this, &MainWindow::handleProjectSelected);
 
-    // Tombol hamburger untuk menciutkan / melebarkan sidebar
+    // Tombol hamburger untuk menciutkan / melebarkan sidebar; ikon dari .ui diganti versi yang ikut tema
+    ui->btnToggleSidebar->setIcon(Theme::icon(":/icons/sidebar.svg"));
     connect(ui->btnToggleSidebar, &QPushButton::clicked,
             this, &MainWindow::toggleSidebar);
 
@@ -306,7 +308,7 @@ QWidget *MainWindow::createProjectRowWidget(const QString &projectId) {
 
     auto *btnDelete = new QPushButton(row);
     btnDelete->setObjectName("btnProjectDelete");
-    btnDelete->setIcon(QIcon(":/icons/trash.svg"));
+    btnDelete->setIcon(Theme::icon(":/icons/trash.svg"));
     btnDelete->setIconSize(QSize(12, 12));
     btnDelete->setFixedSize(18, 18);
     btnDelete->setCursor(Qt::PointingHandCursor);
@@ -321,7 +323,7 @@ QWidget *MainWindow::createProjectRowWidget(const QString &projectId) {
 
     auto *btnNewTask = new QPushButton(row);
     btnNewTask->setObjectName("btnProjectNewTask");
-    btnNewTask->setIcon(QIcon(":/icons/plus.svg"));
+    btnNewTask->setIcon(Theme::icon(":/icons/plus.svg"));
     btnNewTask->setIconSize(QSize(12, 12));
     btnNewTask->setFixedSize(18, 18);
     btnNewTask->setCursor(Qt::PointingHandCursor);
@@ -350,7 +352,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
 
         if (isRowButton && event->type() == QEvent::Enter) {
             // Background hover-nya gelap, jadi icon versi putih yang dipakai
-            btn->setIcon(QIcon(name == "btnProjectDelete" ? ":/icons/trash-white.svg"
+            btn->setIcon(Theme::icon(name == "btnProjectDelete" ? ":/icons/trash-white.svg"
                                                           : ":/icons/plus-white.svg"));
         } else if (isRowButton && event->type() == QEvent::Leave) {
             // Kembalikan ke warna sesuai status seleksi barisnya
@@ -443,11 +445,11 @@ void MainWindow::refreshProjectRowStyles() {
         if (auto *btn = rowWidget->findChild<QPushButton*>("btnProjectNewTask")) {
             // Tombol yang sedang di-hover tetap putih: background hover-nya gelap
             const bool white = selected || btn->underMouse();
-            btn->setIcon(QIcon(white ? ":/icons/plus-white.svg" : ":/icons/plus.svg"));
+            btn->setIcon(Theme::icon(white ? ":/icons/plus-white.svg" : ":/icons/plus.svg"));
         }
         if (auto *btn = rowWidget->findChild<QPushButton*>("btnProjectDelete")) {
             const bool white = selected || btn->underMouse();
-            btn->setIcon(QIcon(white ? ":/icons/trash-white.svg" : ":/icons/trash.svg"));
+            btn->setIcon(Theme::icon(white ? ":/icons/trash-white.svg" : ":/icons/trash.svg"));
         }
     }
 }

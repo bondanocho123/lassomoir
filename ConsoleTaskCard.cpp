@@ -1,5 +1,6 @@
 #include "ConsoleTaskCard.h"
 #include "RunPulse.h"
+#include "Theme.h"
 
 #include <QApplication>
 #include <QEvent>
@@ -202,7 +203,7 @@ QString ConsoleTaskCard::logText() const {
 
 void ConsoleTaskCard::setLogVisible(bool visible) {
     m_log->setVisible(visible);
-    m_toggle->setIcon(QIcon(visible ? QStringLiteral(":/icons/chevron-down.svg")
+    m_toggle->setIcon(Theme::icon(visible ? QStringLiteral(":/icons/chevron-down.svg")
                                     : QStringLiteral(":/icons/chevron-right.svg")));
     m_toggle->setToolTip(visible ? QStringLiteral("Tutup log") : QStringLiteral("Lihat semua notifikasi"));
     if (visible) {

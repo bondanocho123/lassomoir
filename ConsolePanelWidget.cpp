@@ -1,6 +1,7 @@
 #include "ConsolePanelWidget.h"
 #include "ui_ConsolePanelWidget.h"
 #include "ConsoleTaskCard.h"
+#include "Theme.h"
 
 #include <QIcon>
 #include <QStringList>
@@ -17,7 +18,7 @@ ConsolePanelWidget::ConsolePanelWidget(QWidget *parent)
     ui->setupUi(this);
 
     // Penanda "Live" berupa ikon, jadi artinya dijelaskan lewat tooltip dan nama aksesibilitas
-    ui->labelLiveIndicator->setPixmap(QIcon(":/icons/signal.svg").pixmap(QSize(kLiveIconSide, kLiveIconSide)));
+    ui->labelLiveIndicator->setPixmap(Theme::icon(":/icons/signal.svg").pixmap(QSize(kLiveIconSide, kLiveIconSide)));
     ui->labelLiveIndicator->setToolTip(QStringLiteral("Live: notifikasi dan keluaran agent tampil di sini secara langsung"));
     ui->labelLiveIndicator->setAccessibleName(QStringLiteral("Live"));
 }

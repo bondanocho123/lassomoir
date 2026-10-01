@@ -22,6 +22,7 @@
 #include "SwimlaneWidget.h"
 #include "TaskAttachments.h"
 #include "TaskManager.h"
+#include "Theme.h"
 #include "WorkspaceDiff.h"
 #include "mainwindow.h"
 
@@ -49,6 +50,7 @@
 #include <QPointer>
 #include <QProcess>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QScopeGuard>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -233,6 +235,14 @@ private slots:
 
     // Kartu yang stage-nya selesai diberi penanda "✓ Selesai"
     void finishedStageMarksCardDone();
+
+    // Tema ikut mode sistem: gelap = "blue night" yang diturunkan dari styles.qss
+    void themeMapsTextAndFillSeparately();
+    void themeDarkStyleSheetHasNoLightBackgrounds();
+    void themeAppliesAndFollowsOverride();
+    void themedIconRecolorsInDarkMode();
+    // Stylesheet milik widget (dari .ui / setStyleSheet) ikut dipetakan, dan kembali saat mode terang
+    void themeAdaptsWidgetStyleSheets();
 
 private:
     // Dialog notice runtime yang sedang tampil; nullptr bila tidak ada
@@ -2808,6 +2818,135 @@ void TestGui::finishedStageMarksCardDone() {
 
     // WAITING tidak pernah diberi penanda
     QVERIFY(!doneLabel(QStringLiteral("t2"))->isVisibleTo(card(QStringLiteral("t2"))));
+}
+
+void TestGui::themeMapsTextAndFillSeparately() {
+    const QString light = QStringLiteral(
+        "QWidget#a { background-color: #ffffff; color: #3d3730; }\n"
+        "QPushButton:hover { color: #ffffff; border: 1px solid #E7DDCD; }\n");
+    QCOMPARE(Theme::styleSheetFor(light, Theme::Scheme::Light), light);
+
+    const QString dark = Theme::styleSheetFor(light, Theme::Scheme::Dark);
+    QVERIFY2(dark.contains(QStringLiteral("background-color: #222d40")), qPrintable(dark));
+    QVERIFY2(dark.contains(QStringLiteral("color: #dbe3ef")), qPrintable(dark));
+    // Putih sebagai teks (di atas tombol berwarna) tetap putih
+    QVERIFY2(dark.contains(QStringLiteral("hover { color: #ffffff")), qPrintable(dark));
+    QVERIFY2(dark.contains(QStringLiteral("1px solid #34435c")), qPrintable(dark));
+    QVERIFY(dark.contains(QStringLiteral("QPushButton:hover {")));
+
+    Theme::setSchemeOverride(Theme::Scheme::Dark);
+    QCOMPARE(Theme::text(0x33517a).name(), QStringLiteral("#9dbbe6"));
+    QCOMPARE(Theme::fill(0xffffff).name(), QStringLiteral("#222d40"));
+    Theme::setSchemeOverride(Theme::Scheme::Light);
+    QCOMPARE(Theme::text(0x33517a).name(), QStringLiteral("#33517a"));
+    Theme::setSchemeOverride(std::nullopt);
+}
+
+void TestGui::themeDarkStyleSheetHasNoLightBackgrounds() {
+    QFile file(QStringLiteral(":/styles.qss"));
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    const QString dark = Theme::styleSheetFor(QString::fromUtf8(file.readAll()), Theme::Scheme::Dark);
+
+    // Latar terang (kecerahan tinggi) yang tersisa di mode gelap berarti warna yang lupa dipetakan
+    static const QRegularExpression background(
+        QStringLiteral("background(?:-color)?\\s*:[^;]*#([0-9a-fA-F]{6})"));
+    QStringList leftovers;
+    QRegularExpressionMatchIterator it = background.globalMatch(dark);
+    while (it.hasNext()) {
+        const QString hex = it.next().captured(1);
+        if (QColor(QStringLiteral("#") + hex).lightness() > 170) {
+            leftovers.append(hex);
+        }
+    }
+    leftovers.removeDuplicates();
+    QVERIFY2(leftovers.isEmpty(), qPrintable(leftovers.join(QStringLiteral(", "))));
+}
+
+void TestGui::themeAppliesAndFollowsOverride() {
+    const auto restore = qScopeGuard([]() {
+        Theme::setSchemeOverride(std::nullopt);
+        qApp->setStyleSheet(QString());
+    });
+
+    int changes = 0;
+    const QMetaObject::Connection connection = connect(Theme::Notifier::instance(), &Theme::Notifier::changed,
+                                                       this, [&changes]() { ++changes; });
+    const auto disconnectGuard = qScopeGuard([connection]() { QObject::disconnect(connection); });
+
+    Theme::setSchemeOverride(Theme::Scheme::Dark);
+    QVERIFY(Theme::apply(*qApp));
+    QVERIFY(qApp->styleSheet().contains(QStringLiteral("#222d40")));
+    QCOMPARE(changes, 1);
+    // Bagian tanpa stylesheet (viewport, splitter) ikut gelap lewat palet, bukan palet bawaan Windows
+    QCOMPARE(QApplication::palette().color(QPalette::Base).name(), QStringLiteral("#222d40"));
+    QCOMPARE(QApplication::palette().color(QPalette::Window).name(), QStringLiteral("#1b2433"));
+
+    Theme::setSchemeOverride(Theme::Scheme::Light);
+    QVERIFY(Theme::apply(*qApp));
+    QVERIFY(!qApp->styleSheet().contains(QStringLiteral("#222d40")));
+    QCOMPARE(changes, 2);
+    QCOMPARE(QApplication::palette().color(QPalette::Base).name(), QStringLiteral("#ffffff"));
+    QCOMPARE(QApplication::palette().color(QPalette::ButtonText).name(), QStringLiteral("#3d3730"));
+}
+
+void TestGui::themedIconRecolorsInDarkMode() {
+    const auto restore = qScopeGuard([]() { Theme::setSchemeOverride(std::nullopt); });
+    const QIcon icon = Theme::icon(QStringLiteral(":/icons/plus.svg"));
+
+    Theme::setSchemeOverride(Theme::Scheme::Light);
+    const QImage light = icon.pixmap(QSize(32, 32)).toImage();
+    Theme::setSchemeOverride(Theme::Scheme::Dark);
+    const QImage dark = icon.pixmap(QSize(32, 32)).toImage();
+    QVERIFY(!light.isNull() && !dark.isNull());
+    QVERIFY(light != dark);
+
+    // Garis coklat ikon "+" menjadi amber di mode gelap
+    auto hasColor = [](const QImage &image, const QColor &color) {
+        for (int y = 0; y < image.height(); ++y) {
+            for (int x = 0; x < image.width(); ++x) {
+                const QColor pixel = image.pixelColor(x, y);
+                if (pixel.alpha() == 255 && pixel.rgb() == color.rgb()) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+    QVERIFY(hasColor(light, QColor(0xa9, 0x74, 0x3f)));
+    QVERIFY(hasColor(dark, QColor(0xe0, 0xb0, 0x7a)));
+}
+
+void TestGui::themeAdaptsWidgetStyleSheets() {
+    const auto restore = qScopeGuard([]() {
+        Theme::setSchemeOverride(Theme::Scheme::Light);
+        Theme::apply(*qApp);
+        Theme::setSchemeOverride(std::nullopt);
+        qApp->setStyleSheet(QString());
+    });
+    Theme::setSchemeOverride(Theme::Scheme::Dark);
+    QVERIFY(Theme::install(*qApp));
+
+    // Widget yang dibuat sesudah tema terpasang
+    QWidget widget;
+    widget.setStyleSheet(QStringLiteral("background-color: #f7f9f8; color: #111827;"));
+    widget.show();
+    QTRY_VERIFY2(widget.styleSheet().contains(QStringLiteral("#1e2839")), qPrintable(widget.styleSheet()));
+    QVERIFY(widget.styleSheet().contains(QStringLiteral("color: #dbe3ef")));
+
+    // setStyleSheet berikutnya dari kode juga dipetakan
+    widget.setStyleSheet(QStringLiteral("color: #a9743f;"));
+    QCOMPARE(widget.styleSheet(), QStringLiteral("color: #e0b07a;"));
+
+    // Jendela yang sudah ada: mis. top bar dari mainwindow.ui
+    auto *topBar = m_window->findChild<QWidget *>(QStringLiteral("topNavBar"));
+    QVERIFY(topBar);
+    QVERIFY2(!topBar->styleSheet().contains(QStringLiteral("#f7f9f8")), qPrintable(topBar->styleSheet()));
+
+    // Kembali ke terang: stylesheet asli dipulihkan
+    Theme::setSchemeOverride(Theme::Scheme::Light);
+    QVERIFY(Theme::apply(*qApp));
+    QCOMPARE(widget.styleSheet(), QStringLiteral("color: #a9743f;"));
+    QVERIFY(topBar->styleSheet().contains(QStringLiteral("#f7f9f8")));
 }
 
 int main(int argc, char *argv[]) {

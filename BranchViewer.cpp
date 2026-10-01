@@ -1,5 +1,6 @@
 #include "BranchViewer.h"
 #include "DiffView.h"
+#include "Theme.h"
 #include "WorkspaceDiff.h"
 
 #include <QComboBox>
@@ -79,13 +80,13 @@ public:
         const QRect rect = option.rect;
         const bool selected = option.state & QStyle::State_Selected;
         const bool hovered = option.state & QStyle::State_MouseOver;
-        painter->fillRect(rect, QColor(selected ? kSelectedBackground : hovered ? kHoverBackground : kRowBackground));
-        painter->setPen(QColor(kRule));
+        painter->fillRect(rect, Theme::fill(selected ? kSelectedBackground : hovered ? kHoverBackground : kRowBackground));
+        painter->setPen(Theme::fill(kRule));
         painter->drawLine(rect.bottomLeft(), rect.bottomRight());
 
         const bool all = index.data(KindRole).toInt() == AllChangesItem;
         if (all) {
-            painter->fillRect(QRect(rect.left(), rect.top(), 3, rect.height()), QColor(kAccent));
+            painter->fillRect(QRect(rect.left(), rect.top(), 3, rect.height()), Theme::fill(kAccent));
         }
 
         const QRect content = rect.adjusted(10, kRowPadding, -10, -kRowPadding);
@@ -115,21 +116,21 @@ public:
             const int height = metaMetrics.height() + 2;
             const QRect badge(x, content.top() + (titleHeight - height) / 2, width, height);
             painter->setPen(Qt::NoPen);
-            painter->setBrush(QColor(tag ? kTagBadge : kBranchBadge));
+            painter->setBrush(Theme::fill(tag ? kTagBadge : kBranchBadge));
             painter->drawRoundedRect(badge, 3, 3);
-            painter->setPen(QColor(tag ? kTagText : kNavy));
+            painter->setPen(Theme::text(tag ? kTagText : kNavy));
             painter->drawText(badge, Qt::AlignCenter, text);
             x += width + 4;
         }
 
         painter->setFont(titleFont);
-        painter->setPen(QColor(all ? kNavy : kText));
+        painter->setPen(Theme::text(all ? kNavy : kText));
         const int titleWidth = qMax(0, content.right() - x);
         painter->drawText(QRect(x, content.top(), titleWidth, titleHeight), Qt::AlignLeft | Qt::AlignVCenter,
                           titleMetrics.elidedText(index.data(Qt::DisplayRole).toString(), Qt::ElideRight, titleWidth));
 
         painter->setFont(metaFont);
-        painter->setPen(QColor(kMetaText));
+        painter->setPen(Theme::text(kMetaText));
         const QRect meta(content.left(), content.top() + titleHeight + kLineGap, content.width(), metaMetrics.height());
         painter->drawText(meta, Qt::AlignLeft | Qt::AlignVCenter,
                           metaMetrics.elidedText(index.data(MetaRole).toString(), Qt::ElideRight, meta.width()));

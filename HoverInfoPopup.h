@@ -39,6 +39,7 @@ private:
     void popup();
 
     QLabel *m_content;   // kartu bergaya skin; jendela ini sendiri transparan
+    QString m_html;      // isi asli (warna mode terang), lihat Theme::html
     QList<QPointer<QWidget>> m_anchors;
     QTimer m_hideTimer;   // jeda singkat saat kursor keluar, supaya pindah ke jangkar lain tidak berkedip
 };

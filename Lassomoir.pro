@@ -54,6 +54,7 @@ SOURCES += \
     TaskAttachments.cpp \
     TaskGit.cpp \
     TaskManager.cpp \
+    Theme.cpp \
     TransitionPolicy.cpp \
     WorkspaceDiff.cpp \
     WorkspaceGuard.cpp \
@@ -106,6 +107,7 @@ HEADERS += \
     TaskGit.h \
     TaskItem.h \
     TaskManager.h \
+    Theme.h \
     TaskMaterials.h \
     TransitionPolicy.h \
     WorkspaceDiff.h \

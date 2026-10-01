@@ -5,6 +5,7 @@
 #include "StageCatalog.h"
 #include "StageInfo.h"
 #include "ui_SwimlaneWidget.h"
+#include "Theme.h"
 
 #include <QDir>
 #include <QFrame>
@@ -36,11 +37,11 @@ SwimlaneWidget::SwimlaneWidget(const QString &projectId, const StageCatalog &cat
         emit workingDirectoryChangeRequested(m_projectId);
     });
     ui->btnReferenceDirs->setIconSize(QSize(iconSide, iconSide));
-    ui->btnReferenceDirs->setIcon(QIcon(":/icons/folders.svg"));
+    ui->btnReferenceDirs->setIcon(Theme::icon(":/icons/folders.svg"));
     connect(ui->btnReferenceDirs, &QPushButton::clicked, this, &SwimlaneWidget::showReferencePopup);
     ui->btnBranch->ensurePolished();
     ui->btnBranch->setIconSize(QSize(iconSide, iconSide));
-    ui->btnBranch->setIcon(QIcon(":/icons/branch.svg"));
+    ui->btnBranch->setIcon(Theme::icon(":/icons/branch.svg"));
     connect(ui->btnBranch, &QPushButton::clicked, this, [this]() {
         emit branchViewRequested(m_projectId);
     });
@@ -64,14 +65,14 @@ void SwimlaneWidget::setProjectTitle(const QString &title) {
 
 void SwimlaneWidget::setWorkingDirectory(const QString &path) {
     if (path.isEmpty()) {
-        ui->btnWorkingDir->setIcon(QIcon(":/icons/folder-add.svg"));
+        ui->btnWorkingDir->setIcon(Theme::icon(":/icons/folder-add.svg"));
         ui->btnWorkingDir->setText("Select");
         ui->btnWorkingDir->setToolTip("Folder tempat agent Claude Code bekerja untuk project ini");
         return;
     }
 
     const QString name = QDir(path).dirName();
-    ui->btnWorkingDir->setIcon(QIcon(":/icons/folder.svg"));
+    ui->btnWorkingDir->setIcon(Theme::icon(":/icons/folder.svg"));
     ui->btnWorkingDir->setText(name.isEmpty() ? path : name);
     ui->btnWorkingDir->setToolTip(QString("Folder kerja agent: %1\nKlik untuk mengganti")
                                       .arg(QDir::toNativeSeparators(path)));
@@ -183,7 +184,7 @@ void SwimlaneWidget::fillReferencePopup(QFrame *popup) {
         row->setObjectName("referenceRow");
 
         auto *icon = new QLabel(row);
-        icon->setPixmap(QIcon(":/icons/folder.svg").pixmap(QSize(14, 14)));
+        icon->setPixmap(Theme::icon(":/icons/folder.svg").pixmap(QSize(14, 14)));
         const QString name = QDir(dir).dirName();
         auto *label = new QLabel(name.isEmpty() ? QDir::toNativeSeparators(dir) : name, row);
         label->setObjectName("referenceRowName");
@@ -195,7 +196,7 @@ void SwimlaneWidget::fillReferencePopup(QFrame *popup) {
 
         auto *remove = new QToolButton(row);
         remove->setObjectName("btnReferenceRemove");
-        remove->setIcon(QIcon(":/icons/close.svg"));
+        remove->setIcon(Theme::icon(":/icons/close.svg"));
         remove->setIconSize(QSize(10, 10));
         remove->setCursor(Qt::PointingHandCursor);
         remove->setToolTip(QStringLiteral("Hapus dari folder referensi"));
@@ -216,7 +217,7 @@ void SwimlaneWidget::fillReferencePopup(QFrame *popup) {
         layout->addWidget(row);
     }
 
-    auto *add = new QPushButton(QIcon(":/icons/folder-add.svg"), QStringLiteral("Tambah folder…"), content);
+    auto *add = new QPushButton(Theme::icon(":/icons/folder-add.svg"), QStringLiteral("Tambah folder…"), content);
     add->setObjectName("btnReferenceAdd");
     add->setCursor(Qt::PointingHandCursor);
     connect(add, &QPushButton::clicked, this, [this, popup]() {
