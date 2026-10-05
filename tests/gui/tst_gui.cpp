@@ -20,6 +20,7 @@
 #include "ResponseDrawer.h"
 #include "RunPulse.h"
 #include "SecretStore.h"
+#include "SidePanelDock.h"
 #include "StageCatalog.h"
 #include "StageInfo.h"
 #include "SwarmCoordinator.h"
@@ -27,6 +28,7 @@
 #include "TaskAttachments.h"
 #include "TaskManager.h"
 #include "Theme.h"
+#include "VerticalTabButton.h"
 #include "WorkspaceDiff.h"
 #include "mainwindow.h"
 
@@ -55,6 +57,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QMimeData>
+#include <QPainter>
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QProcess>
@@ -75,6 +78,7 @@
 #include <QThreadPool>
 #include <QTimer>
 #include <QToolButton>
+#include <QTransform>
 #include <QTreeWidget>
 #include <QUrl>
 #include <QWheelEvent>
@@ -266,6 +270,18 @@ private slots:
     // tanpa menggesernya, klik memasangnya kembali
     void hiddenSidebarKeepsButtonAndPeeksOnHover();
 
+    // Panel Lieutenant: tombol × menyembunyikannya, View > Lieutenant memunculkannya lagi
+    void lieutenantPanelClosesAndReturnsFromViewMenu();
+    // Pin dilepas: tinggal tab tegak "Lieutenant" di rel kanan, caption diputar 90° ke kiri. Hover tab
+    // menampilkan panel menimpa board tanpa menggesernya; tombol pin memasangnya kembali
+    void lieutenantPanelUnpinsToSideTab();
+    // Tab diklik tanpa kursor di atasnya (keyboard): panel bertahan sampai diklik lagi. Panel yang
+    // disembunyikan selagi berupa tab muncul lagi sebagai tab
+    void lieutenantTabTogglesOnClickAndSurvivesHiding();
+    // Panel yang tampil sementara bertahan selama seretan yang berawal di atasnya (seleksi teks,
+    // scrollbar), tetapi tidak ditahan seretan yang berawal di luar (kartu kanban)
+    void lieutenantFlyoutSurvivesDragStartedInside();
+
     // Notice Claude Code: belum terpasang / perlu update / belum login, dengan tombol buka link atau batal
     void runtimeCheckShowsNotice_data();
     void runtimeCheckShowsNotice();
@@ -379,7 +395,7 @@ void TestGui::createWindow(const QSize &size) {
             [tasks](const TaskItem &task, const AgentResult &result) {
         tasks->recordRun(task.id, StageRun::finished(task.stage, result));
     });
-    m_window = std::make_unique<MainWindow>(m_catalog, *m_tasks, *m_swarm, m_mermaid);
+    m_window = std::make_unique<MainWindow>(m_catalog, *m_tasks, *m_swarm, m_runtime, m_mermaid);
     if (size.isValid()) {
         m_window->resize(size);
     }
@@ -737,7 +753,8 @@ void TestGui::menuBarSitsTopLeft() {
                           QStringLiteral("---"), QStringLiteral("Exit")}));
     QCOMPARE(menus.at(1)->text(), QStringLiteral("&View"));
     QCOMPARE(entries(menus.at(1)->menu()),
-             (QStringList{QStringLiteral("Source Control"), QStringLiteral("Show in Explorer"),
+             (QStringList{QStringLiteral("Kanvas Brainstorm"), QStringLiteral("Lieutenant"), QStringLiteral("---"),
+                          QStringLiteral("Source Control"), QStringLiteral("Show in Explorer"),
                           QStringLiteral("Show in Terminal"), QStringLiteral("---"),
                           QStringLiteral("Change Folder…")}));
     QCOMPARE(menus.at(2)->text(), QStringLiteral("&Help"));
@@ -3342,6 +3359,337 @@ void TestGui::hiddenSidebarKeepsButtonAndPeeksOnHover() {
     leave();
     QTest::qWait(500);
     QVERIFY(panel->isVisible());
+}
+
+void TestGui::lieutenantPanelClosesAndReturnsFromViewMenu() {
+    auto *splitter = m_window->findChild<QSplitter *>(QStringLiteral("mainSplitter"));
+    auto *rail = m_window->findChild<QWidget *>(QStringLiteral("consoleRail"));
+    auto *pin = m_window->findChild<QPushButton *>(QStringLiteral("btnConsolePin"));
+    auto *close = m_window->findChild<QPushButton *>(QStringLiteral("btnConsoleClose"));
+    QAction *view = fileAction(QStringLiteral("actionLieutenant"));
+    ConsolePanelWidget *console = consolePanel();
+    QVERIFY(splitter && rail && pin && close && view && console);
+    auto railRect = [rail, console]() {
+        return QRect(rail->mapTo(console->parentWidget(), QPoint(0, 0)), rail->size());
+    };
+
+    QTest::qWait(50);   // ukuran splitter awal sudah diterapkan
+    QTRY_VERIFY(console->isVisible());
+    QVERIFY(view->isCheckable() && view->isChecked());
+    QTRY_COMPARE(console->geometry(), railRect());
+    const QList<int> shownSizes = splitter->sizes();
+
+    // Tombol pin dan × di kepala panel, menempel tepi kanannya; × paling kanan
+    QVERIFY(console->isAncestorOf(pin) && console->isAncestorOf(close));
+    QTRY_VERIFY(pin->isVisible() && close->isVisible());
+    auto inConsole = [console](const QWidget *widget) {
+        return QRect(widget->mapTo(console, QPoint(0, 0)), widget->size());
+    };
+    QVERIFY(inConsole(close).left() > inConsole(pin).right());
+    QVERIFY2(console->width() - inConsole(close).right() <= 24,
+             qPrintable(QStringLiteral("panel %1, × sampai %2").arg(console->width()).arg(inConsole(close).right())));
+    QVERIFY(!pin->toolTip().isEmpty() && close->toolTip().contains(QStringLiteral("View > Lieutenant")));
+
+    // ×: panel hilang berikut relnya; lebarnya (dan handle-nya) jatuh ke board, sidebar tidak berubah
+    close->click();
+    QVERIFY(!view->isChecked());
+    QVERIFY(!console->isVisible());
+    QTRY_VERIFY(!rail->isVisible());
+    QTRY_COMPARE(splitter->sizes(), (QList<int>{shownSizes.at(0),
+                                                shownSizes.at(1) + shownSizes.at(2) + splitter->handleWidth(), 0}));
+
+    // Notifikasi tetap tercatat selama panel disembunyikan
+    console->appendLog(QStringLiteral("[SYSTEM] selagi tersembunyi"));
+    QVERIFY(consoleText().contains(QStringLiteral("[SYSTEM] selagi tersembunyi")));
+
+    // View > Lieutenant: panel terpasang kembali selebar semula
+    view->trigger();
+    QVERIFY(view->isChecked());
+    QVERIFY(console->isVisible());
+    QVERIFY(console->isPinned());
+    QTRY_COMPARE(splitter->sizes(), shownSizes);
+    QTRY_COMPARE(console->geometry(), railRect());
+
+    // Item yang sama juga menyembunyikan panel yang sedang tampil
+    view->trigger();
+    QVERIFY(!view->isChecked());
+    QVERIFY(!console->isVisible());
+    QTRY_VERIFY(!rail->isVisible());
+    view->trigger();
+    QTRY_COMPARE(splitter->sizes(), shownSizes);
+    QVERIFY(console->isVisible());
+}
+
+void TestGui::lieutenantPanelUnpinsToSideTab() {
+    auto *splitter = m_window->findChild<QSplitter *>(QStringLiteral("mainSplitter"));
+    auto *board = m_window->findChild<QSplitter *>(QStringLiteral("boardSplitter"));
+    auto *rail = m_window->findChild<QWidget *>(QStringLiteral("consoleRail"));
+    auto *tab = m_window->findChild<VerticalTabButton *>(QStringLiteral("consoleTab"));
+    auto *pin = m_window->findChild<QPushButton *>(QStringLiteral("btnConsolePin"));
+    QAction *view = fileAction(QStringLiteral("actionLieutenant"));
+    ConsolePanelWidget *console = consolePanel();
+    QVERIFY(splitter && board && rail && tab && pin && view && console);
+
+    const QPoint cursorBefore = QCursor::pos();
+    const auto restoreCursor = qScopeGuard([cursorBefore]() { QCursor::setPos(cursorBefore); });
+    auto hover = [](QWidget *widget) {
+        const QPoint local = widget->rect().center();
+        const QPoint global = widget->mapToGlobal(local);
+        QCursor::setPos(global);
+        QEnterEvent enter(local, widget->window()->mapFromGlobal(global), global);
+        QApplication::sendEvent(widget, &enter);
+    };
+    // Pojok kiri bawah board: jauh dari rel maupun dari panel yang tampil sementara
+    auto leave = [board]() { QCursor::setPos(board->mapToGlobal(QPoint(40, board->height() - 40))); };
+    auto railRect = [rail, console]() {
+        return QRect(rail->mapTo(console->parentWidget(), QPoint(0, 0)), rail->size());
+    };
+    // Rel selesai menciut: lebarnya dipatok selebar tab
+    auto settledAsTab = [rail]() {
+        return rail->minimumWidth() > 0 && rail->minimumWidth() == rail->maximumWidth()
+               && rail->width() == rail->minimumWidth();
+    };
+
+    QTest::qWait(50);   // ukuran splitter awal sudah diterapkan
+    leave();
+    QTRY_VERIFY(console->isVisible());
+    QVERIFY(console->isPinned());
+    QVERIFY(!tab->isVisible());
+    QTRY_COMPARE(console->geometry(), railRect());
+    const QList<int> pinnedSizes = splitter->sizes();
+    const int pinnedWidth = pinnedSizes.at(2);
+    const QString pinnedToolTip = pin->toolTip();
+
+    // Pin dilepas: panel hilang, tinggal rel sempit berisi tab. Lebar yang dilepas jatuh ke board.
+    pin->click();
+    QVERIFY(!console->isVisible());
+    QVERIFY(!console->isPinned());
+    QVERIFY(pin->toolTip() != pinnedToolTip);
+    QVERIFY(view->isChecked());
+    QTRY_VERIFY(settledAsTab());
+    QVERIFY(tab->isVisible());
+    const QList<int> tabSizes = splitter->sizes();
+    QVERIFY2(tabSizes.at(2) < 60, qPrintable(QString::number(tabSizes.at(2))));
+    QCOMPARE(tabSizes.at(0), pinnedSizes.at(0));
+    QCOMPARE(tabSizes.at(1) + tabSizes.at(2), pinnedSizes.at(1) + pinnedSizes.at(2));
+
+    // Tab tegak di dalam rel, ber-caption "Lieutenant"
+    QCOMPARE(tab->text(), QStringLiteral("Lieutenant"));
+    QVERIFY2(tab->height() > 2 * tab->width(),
+             qPrintable(QStringLiteral("%1 x %2").arg(tab->width()).arg(tab->height())));
+    QVERIFY(rail->rect().contains(tab->geometry()));
+
+    // Caption diputar 90° ke kiri (dibaca dari bawah ke atas): gambar tab jauh lebih mirip teks
+    // mendatar yang diputar ke kiri daripada yang diputar ke kanan
+    const QImage shown = tab->grab().toImage().convertToFormat(QImage::Format_RGB32);
+    const QColor background = shown.pixelColor(0, 0);
+    QImage flat(shown.height(), shown.width(), QImage::Format_RGB32);
+    flat.fill(background);
+    {
+        QPainter painter(&flat);
+        painter.setFont(tab->font());
+        painter.setPen(tab->palette().color(tab->foregroundRole()));
+        painter.drawText(flat.rect(), Qt::AlignCenter, tab->text());
+    }
+    auto isInk = [&background](const QImage &image, int x, int y) {
+        return image.rect().contains(x, y)
+               && qAbs(image.pixelColor(x, y).lightness() - background.lightness()) > 40;
+    };
+    // Piksel tinta `image` yang tidak punya tinta di piksel yang sama maupun tetangganya pada
+    // `other`. Toleransi 1 px: teks yang dilukis terputar tidak di-hint seperti teks mendatar.
+    auto strayInk = [&isInk](const QImage &image, const QImage &other) {
+        int stray = 0;
+        for (int y = 0; y < image.height(); ++y) {
+            for (int x = 0; x < image.width(); ++x) {
+                if (!isInk(image, x, y)) continue;
+                bool matched = false;
+                for (int dy = -1; dy <= 1 && !matched; ++dy) {
+                    for (int dx = -1; dx <= 1 && !matched; ++dx) {
+                        matched = isInk(other, x + dx, y + dy);
+                    }
+                }
+                stray += !matched;
+            }
+        }
+        return stray;
+    };
+    const QImage turnedLeft = flat.transformed(QTransform().rotate(-90));
+    const QImage turnedRight = flat.transformed(QTransform().rotate(90));
+    QCOMPARE(turnedLeft.size(), shown.size());
+    // Terhadap gambar kosong semua tinta "meleset": jumlah piksel tinta tab
+    const int ink = strayInk(shown, QImage());
+    const int strayLeft = strayInk(shown, turnedLeft) + strayInk(turnedLeft, shown);
+    const int strayRight = strayInk(shown, turnedRight) + strayInk(turnedRight, shown);
+    const QString inkReport = QStringLiteral("tinta %1, meleset: kiri %2, kanan %3").arg(ink).arg(strayLeft).arg(strayRight);
+    QVERIFY2(ink > 40, qPrintable(inkReport));
+    QVERIFY2(strayLeft * 10 < ink, qPrintable(inkReport));
+    QVERIFY2(strayRight > 4 * strayLeft && strayRight * 4 > ink, qPrintable(inkReport));
+
+    // Hover tab: panel tampil di kiri rel, menimpa board tanpa menggeser pane mana pun
+    hover(tab);
+    QTRY_VERIFY(console->isVisible());
+    QVERIFY(tab->isVisible());
+    QVERIFY(tab->isActive());
+    QVERIFY(console->geometry().right() < railRect().left());
+    QCOMPARE(console->width(), pinnedWidth);
+    QCOMPARE(console->height(), rail->height());
+    QCOMPARE(splitter->sizes(), tabSizes);
+
+    // Selama kursor di atas panel ia bertahan; begitu kursor pergi, hilang lagi
+    QCursor::setPos(console->mapToGlobal(console->rect().center()));
+    QTest::qWait(500);
+    QVERIFY(console->isVisible());
+    leave();
+    QTRY_VERIFY(!console->isVisible());
+    QVERIFY(tab->isVisible());
+    QVERIFY(!tab->isActive());
+    QCOMPARE(splitter->sizes(), tabSizes);
+
+    // Tombol pin di panel yang tampil sementara: terpasang kembali selebar semula
+    hover(tab);
+    QTRY_VERIFY(console->isVisible());
+    pin->click();
+    QVERIFY(console->isPinned());
+    QCOMPARE(pin->toolTip(), pinnedToolTip);
+    QVERIFY(console->isVisible());
+    QVERIFY(!tab->isVisible());
+    QTRY_COMPARE(splitter->sizes(), pinnedSizes);
+    QTRY_COMPARE(console->geometry(), railRect());
+    leave();
+    QTest::qWait(500);
+    QVERIFY(console->isVisible());
+}
+
+void TestGui::lieutenantTabTogglesOnClickAndSurvivesHiding() {
+    auto *splitter = m_window->findChild<QSplitter *>(QStringLiteral("mainSplitter"));
+    auto *board = m_window->findChild<QSplitter *>(QStringLiteral("boardSplitter"));
+    auto *rail = m_window->findChild<QWidget *>(QStringLiteral("consoleRail"));
+    auto *tab = m_window->findChild<VerticalTabButton *>(QStringLiteral("consoleTab"));
+    auto *pin = m_window->findChild<QPushButton *>(QStringLiteral("btnConsolePin"));
+    auto *close = m_window->findChild<QPushButton *>(QStringLiteral("btnConsoleClose"));
+    auto *dock = m_window->findChild<SidePanelDock *>();
+    QAction *view = fileAction(QStringLiteral("actionLieutenant"));
+    ConsolePanelWidget *console = consolePanel();
+    QVERIFY(splitter && board && rail && tab && pin && close && dock && view && console);
+
+    const QPoint cursorBefore = QCursor::pos();
+    const auto restoreCursor = qScopeGuard([cursorBefore]() { QCursor::setPos(cursorBefore); });
+    auto settledAsTab = [rail]() {
+        return rail->minimumWidth() > 0 && rail->minimumWidth() == rail->maximumWidth()
+               && rail->width() == rail->minimumWidth();
+    };
+
+    QTest::qWait(50);   // ukuran splitter awal sudah diterapkan
+    // Kursor jauh dari rel dan panel selama test ini: tab diaktifkan tanpa hover
+    QCursor::setPos(board->mapToGlobal(QPoint(40, board->height() - 40)));
+    QTRY_VERIFY(console->isVisible());
+    QVERIFY(dock->mode() == SidePanelDock::Mode::Pinned);
+
+    pin->click();
+    QVERIFY(dock->mode() == SidePanelDock::Mode::Tab);
+    // Selama rel masih menciut, tab belum membuka panel
+    tab->click();
+    QVERIFY(!console->isVisible());
+    QTRY_VERIFY(settledAsTab());
+    const QList<int> tabSizes = splitter->sizes();
+
+    // Klik tab tanpa kursor di atasnya: panel tampil dan bertahan, klik berikutnya menutupnya
+    tab->click();
+    QVERIFY(console->isVisible());
+    QVERIFY(dock->isFlyoutOpen());
+    QTest::qWait(500);
+    QVERIFY(console->isVisible());
+    QCOMPARE(splitter->sizes(), tabSizes);
+    tab->click();
+    QVERIFY(!console->isVisible());
+    QVERIFY(!dock->isFlyoutOpen());
+
+    // Disembunyikan dari View selagi berupa tab: relnya ikut hilang
+    view->trigger();
+    QVERIFY(!view->isChecked());
+    QVERIFY(dock->mode() == SidePanelDock::Mode::Hidden);
+    QTRY_VERIFY(!rail->isVisible());
+    QVERIFY(!console->isVisible());
+    QTRY_COMPARE(splitter->sizes(), (QList<int>{tabSizes.at(0),
+                                                tabSizes.at(1) + tabSizes.at(2) + splitter->handleWidth(), 0}));
+
+    // Dimunculkan lagi: kembali sebagai tab, bukan terpasang
+    view->trigger();
+    QVERIFY(view->isChecked());
+    QVERIFY(dock->mode() == SidePanelDock::Mode::Tab);
+    QTRY_VERIFY(settledAsTab());
+    QVERIFY(tab->isVisible());
+    QVERIFY(!console->isVisible());
+    QVERIFY(!console->isPinned());
+    QCOMPARE(splitter->sizes(), tabSizes);
+
+    // × di panel yang tampil sementara: panel berikut relnya disembunyikan
+    tab->click();
+    QVERIFY(console->isVisible());
+    close->click();
+    QVERIFY(!console->isVisible());
+    QVERIFY(!dock->isFlyoutOpen());
+    QVERIFY(!view->isChecked());
+    QTRY_VERIFY(!rail->isVisible());
+}
+
+void TestGui::lieutenantFlyoutSurvivesDragStartedInside() {
+    auto *board = m_window->findChild<QSplitter *>(QStringLiteral("boardSplitter"));
+    auto *rail = m_window->findChild<QWidget *>(QStringLiteral("consoleRail"));
+    auto *tab = m_window->findChild<VerticalTabButton *>(QStringLiteral("consoleTab"));
+    auto *pin = m_window->findChild<QPushButton *>(QStringLiteral("btnConsolePin"));
+    // Dua label yang tidak bereaksi terhadap klik: satu di luar panel, satu di kepala panel
+    auto *outside = m_window->findChild<QLabel *>(QStringLiteral("labelSidebarTitle"));
+    ConsolePanelWidget *console = consolePanel();
+    QVERIFY(board && rail && tab && pin && outside && console);
+    auto *inside = console->findChild<QLabel *>(QStringLiteral("label"));
+    QVERIFY(inside);
+
+    const QPoint cursorBefore = QCursor::pos();
+    const auto restoreCursor = qScopeGuard([cursorBefore]() { QCursor::setPos(cursorBefore); });
+    auto hover = [](QWidget *widget) {
+        const QPoint local = widget->rect().center();
+        const QPoint global = widget->mapToGlobal(local);
+        QCursor::setPos(global);
+        QEnterEvent enter(local, widget->window()->mapFromGlobal(global), global);
+        QApplication::sendEvent(widget, &enter);
+    };
+    auto leave = [board]() { QCursor::setPos(board->mapToGlobal(QPoint(40, board->height() - 40))); };
+    auto settledAsTab = [rail]() {
+        return rail->minimumWidth() > 0 && rail->minimumWidth() == rail->maximumWidth()
+               && rail->width() == rail->minimumWidth();
+    };
+
+    QTest::qWait(50);   // ukuran splitter awal sudah diterapkan
+    leave();
+    // Keadaan tombol mouse milik aplikasi bisa tersisa "tertekan" dari test sebelumnya (klik ganda
+    // yang membuka dialog modal); satu klik biasa menormalkannya
+    QTest::mouseClick(outside, Qt::LeftButton);
+    QVERIFY(QGuiApplication::mouseButtons() == Qt::NoButton);
+    pin->click();
+    QTRY_VERIFY(settledAsTab());
+
+    // Tombol mouse ditekan di atas panel lalu kursor diseret keluar: panel bertahan sampai dilepas
+    hover(tab);
+    QTRY_VERIFY(console->isVisible());
+    QCursor::setPos(inside->mapToGlobal(inside->rect().center()));
+    QTest::qWait(300);
+    QTest::mousePress(inside, Qt::LeftButton);
+    QTest::qWait(300);
+    leave();
+    QTest::qWait(700);
+    QVERIFY(console->isVisible());
+    QTest::mouseRelease(inside, Qt::LeftButton);
+    QTRY_VERIFY(!console->isVisible());
+
+    // Tombol mouse ditekan di luar panel selagi panel masih tampil: panel tetap menutup
+    hover(tab);
+    QTRY_VERIFY(console->isVisible());
+    leave();
+    QTest::mousePress(outside, Qt::LeftButton);
+    QTRY_VERIFY(!console->isVisible());
+    QTest::mouseRelease(outside, Qt::LeftButton);
+    QVERIFY(QGuiApplication::mouseButtons() == Qt::NoButton);
 }
 
 QDialog *TestGui::runtimeNotice() const {

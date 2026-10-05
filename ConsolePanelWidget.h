@@ -15,9 +15,10 @@ class ConsolePanelWidget;
 
 class ConsoleTaskCard;
 
-// Panel kanan: notifikasi aplikasi sebagai daftar kartu, satu kartu per task (ConsoleTaskCard)
-// ditambah satu kartu "Sistem" untuk notifikasi di luar task. Kartu yang terakhir mendapat kabar
-// naik ke paling atas. Di bawah daftar ada kotak perintah.
+// Panel kanan (Lieutenant): notifikasi aplikasi sebagai daftar kartu, satu kartu per task
+// (ConsoleTaskCard) ditambah satu kartu "Sistem" untuk notifikasi di luar task. Kartu yang terakhir
+// mendapat kabar naik ke paling atas. Kepala panel memuat tombol pin dan tutup; yang memasang,
+// menciutkan, dan menyembunyikan panelnya adalah SidePanelDock.
 class ConsolePanelWidget : public QWidget
 {
     Q_OBJECT
@@ -49,9 +50,18 @@ public:
     // Isi log semua kartu, mulai dari kartu teratas
     QString logText() const;
 
+    // Ikon dan tooltip tombol pin mengikuti keadaan panel: terpasang tetap, atau tampil sementara
+    // dari tab di samping
+    void setPinned(bool pinned);
+    bool isPinned() const { return m_pinned; }
+
 signals:
     // Kartu task diklik: pengguna ingin melihat task itu
     void taskActivated(const QString &taskId);
+    // Tombol pin diklik: pasang panel tetap (true), atau lepas jadi tab di samping (false)
+    void pinRequested(bool pinned);
+    // Tombol × diklik: sembunyikan panel
+    void closeRequested();
 
 private:
     // Kartu task; bila belum ada, dibuat di paling atas daftar
@@ -62,6 +72,7 @@ private:
     Ui::ConsolePanelWidget *ui;
     QHash<QString, ConsoleTaskCard *> m_cards;   // key: taskId
     ConsoleTaskCard *m_systemCard = nullptr;
+    bool m_pinned = true;
 };
 
 #endif // CONSOLEPANELWIDGET_H

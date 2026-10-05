@@ -31,6 +31,7 @@ class KanbanCardWidget;
 class FileManager;
 class MermaidRenderer;
 class ResponseDrawer;
+class SidePanelDock;
 class SplitterPaneAnimator;
 class StageCatalog;
 class SwarmCoordinator;
@@ -220,6 +221,11 @@ private:
     // Batas maksimum asli sidebarPanel; maximumWidth dipakai untuk menggiring
     // lebar selama animasi sehingga nilainya harus disimpan dulu
     int m_sidebarMaxWidth = 240;
+    // Panel Lieutenant (konsol) di pane 2 mainSplitter: terpasang tetap (pin), tinggal tab tegak
+    // di rel tepi kanan, atau disembunyikan. Tombol pin dan × ada di kepala panelnya.
+    SidePanelDock *m_consoleDock = nullptr;
+    // View > Lieutenant: tampilkan / sembunyikan panel itu
+    QAction *m_actionLieutenant = nullptr;
 
     // Menu File / View / Help di baris paling atas jendela. Yang tersambung baru File > New /
     // Close / Remove Project / Integrations / Preferences dan semua item View; item lainnya
@@ -249,6 +255,8 @@ private:
     int findProjectRow(const QString &projectId) const;
     // Pasang rel di pane 0 mainSplitter dan lepaskan sidebarPanel ke atas contentWidget
     void setupSidebarRail();
+    // Serahkan panel Lieutenant ke SidePanelDock dan sambungkan tombol pin dan × di kepalanya
+    void setupConsoleDock();
     // Jalankan animasi geser: opening=true melebarkan sidebar, false menciutkannya jadi rel
     void animateSidebar(bool opening);
     // Tempatkan sidebarPanel: menutupi rel (terpasang) atau di samping rel (tampil sementara)

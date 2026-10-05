@@ -53,3 +53,5 @@ Kalau tetap pakai akun gratis, catat sumber tiap ikon di sini supaya nggak lupa 
 | `spark.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
 | `undo.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
 | `redo.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
+| `pinned.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
+| `unpinned.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |

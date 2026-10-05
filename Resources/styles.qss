@@ -364,7 +364,9 @@ QScrollBar::sub-page:horizontal {
 
 /* Panel samping kiri dan kanan berlatar sama: krem latar yang sedikit lebih tua, dengan kilau
    tipis di bagian atas dan garis pembatas 1px.
-   sidebarRail: rel sempit yang tersisa (berisi tombol sidebar) saat sidebar disembunyikan */
+   sidebarRail: rel sempit yang tersisa (berisi tombol sidebar) saat sidebar disembunyikan.
+   consoleRail (tempat tab "Lieutenant" saat pin panel dilepas) sengaja tanpa latar: yang
+   terlihat hanya tabnya, seperti penanda buku. */
 QWidget#sidebarPanel,
 QWidget#sidebarRail,
 ConsolePanelWidget {
@@ -612,9 +614,12 @@ QPushButton#btnDeleteConfirmCancel:pressed {
 }
 
 /* Tombol sidebar: di pojok kanan atas sidebar (sejajar judul PROJECTS), dan kembarannya di rel
-   selama sidebar disembunyikan */
+   selama sidebar disembunyikan.
+   Tombol pin dan tutup di kepala panel Lieutenant bergaya sama. */
 QPushButton#btnToggleSidebar,
-QPushButton#btnShowSidebar {
+QPushButton#btnShowSidebar,
+QPushButton#btnConsolePin,
+QPushButton#btnConsoleClose {
     background: transparent;
     border: none;
     border-radius: 5px;
@@ -622,7 +627,32 @@ QPushButton#btnShowSidebar {
 }
 
 QPushButton#btnToggleSidebar:hover,
-QPushButton#btnShowSidebar:hover {
+QPushButton#btnShowSidebar:hover,
+QPushButton#btnConsolePin:hover,
+QPushButton#btnConsoleClose:hover {
+    background-color: #e6d3ba;
+}
+
+/* Tab tegak di rel kanan saat pin panel Lieutenant dilepas (VerticalTabButton: caption diputar
+   90 derajat ke kiri). Bentuknya penanda buku seukuran caption-nya: berlatar seperti panel,
+   menempel tepi kanan, sudut kirinya membulat. Latarnya menyala selama kursor di atasnya atau
+   panelnya sedang tampil sementara (property "active"). */
+VerticalTabButton#consoleTab {
+    background-color: #f1eadf;
+    border: 1px solid #d9cdbb;
+    border-right: none;
+    border-top-left-radius: 6px;
+    border-bottom-left-radius: 6px;
+    border-top-right-radius: 0px;
+    border-bottom-right-radius: 0px;
+    color: #a9743f;
+    font-size: 11px;
+    font-weight: bold;
+    letter-spacing: 0.5px;
+}
+
+VerticalTabButton#consoleTab:hover,
+VerticalTabButton#consoleTab[active="true"] {
     background-color: #e6d3ba;
 }
 

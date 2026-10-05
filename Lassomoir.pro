@@ -62,6 +62,7 @@ SOURCES += \
     RuntimeNoticeDialog.cpp \
     RunPulse.cpp \
     SecretStore.cpp \
+    SidePanelDock.cpp \
     SourceTokens.cpp \
     SplitterPaneAnimator.cpp \
     StageCatalog.cpp \
@@ -76,6 +77,7 @@ SOURCES += \
     TaskManager.cpp \
     Theme.cpp \
     TransitionPolicy.cpp \
+    VerticalTabButton.cpp \
     WorkspaceDiff.cpp \
     WorkspaceGuard.cpp \
     main.cpp \
@@ -132,6 +134,7 @@ HEADERS += \
     RuntimeNoticeDialog.h \
     RunPulse.h \
     SecretStore.h \
+    SidePanelDock.h \
     SourceTokens.h \
     SplitterPaneAnimator.h \
     StageCatalog.h \
@@ -148,6 +151,7 @@ HEADERS += \
     Theme.h \
     TaskMaterials.h \
     TransitionPolicy.h \
+    VerticalTabButton.h \
     WorkspaceDiff.h \
     WorkspaceGuard.h \
     mainwindow.h

@@ -73,6 +73,8 @@
         <file>icons/spark.svg</file>
         <file>icons/undo.svg</file>
         <file>icons/redo.svg</file>
+        <file>icons/pinned.svg</file>
+        <file>icons/unpinned.svg</file>
         <file>prompts/SPECIFIER.md</file>
         <file>prompts/CODER.md</file>
         <file>prompts/CLEANER.md</file>

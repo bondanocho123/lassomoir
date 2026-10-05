@@ -19,6 +19,16 @@ SOURCES += \
     ../../AgentAccess.cpp \
     ../../AppFonts.cpp \
     ../../BranchViewer.cpp \
+    ../../CanvasAutomation.cpp \
+    ../../CanvasBoard.cpp \
+    ../../CanvasInspector.cpp \
+    ../../CanvasItems.cpp \
+    ../../CanvasLibrary.cpp \
+    ../../CanvasModel.cpp \
+    ../../CanvasPage.cpp \
+    ../../CanvasView.cpp \
+    ../../CanvasWorkflow.cpp \
+    ../../CanvasWorkspace.cpp \
     ../../ClaudeCli.cpp \
     ../../CSharpMetrics.cpp \
     ../../ClassDiagram.cpp \
@@ -51,6 +61,7 @@ SOURCES += \
     ../../RuntimeNoticeDialog.cpp \
     ../../RunPulse.cpp \
     ../../SecretStore.cpp \
+    ../../SidePanelDock.cpp \
     ../../SourceTokens.cpp \
     ../../SplitterPaneAnimator.cpp \
     ../../StageCatalog.cpp \
@@ -65,6 +76,7 @@ SOURCES += \
     ../../TaskManager.cpp \
     ../../Theme.cpp \
     ../../TransitionPolicy.cpp \
+    ../../VerticalTabButton.cpp \
     ../../WorkspaceDiff.cpp \
     ../../WorkspaceGuard.cpp \
     ../../mainwindow.cpp
@@ -79,6 +91,16 @@ HEADERS += \
     ../../AppFonts.h \
     ../../AppSettings.h \
     ../../BranchViewer.h \
+    ../../CanvasAutomation.h \
+    ../../CanvasBoard.h \
+    ../../CanvasInspector.h \
+    ../../CanvasItems.h \
+    ../../CanvasLibrary.h \
+    ../../CanvasModel.h \
+    ../../CanvasPage.h \
+    ../../CanvasView.h \
+    ../../CanvasWorkflow.h \
+    ../../CanvasWorkspace.h \
     ../../ClaudeCli.h \
     ../../CSharpMetrics.h \
     ../../ClassDiagram.h \
@@ -111,6 +133,7 @@ HEADERS += \
     ../../RuntimeNoticeDialog.h \
     ../../RunPulse.h \
     ../../SecretStore.h \
+    ../../SidePanelDock.h \
     ../../SourceTokens.h \
     ../../SplitterPaneAnimator.h \
     ../../StageCatalog.h \
@@ -127,6 +150,7 @@ HEADERS += \
     ../../Theme.h \
     ../../TaskMaterials.h \
     ../../TransitionPolicy.h \
+    ../../VerticalTabButton.h \
     ../../WorkspaceDiff.h \
     ../../WorkspaceGuard.h \
     ../../mainwindow.h
