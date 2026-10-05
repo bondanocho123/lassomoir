@@ -18,6 +18,7 @@ SOURCES += \
     ../AgentAccess.cpp \
     ../CanvasAutomation.cpp \
     ../CanvasBoard.cpp \
+    ../CanvasChat.cpp \
     ../CanvasModel.cpp \
     ../CanvasWorkflow.cpp \
     ../ClaudeCli.cpp \
@@ -58,6 +59,7 @@ HEADERS += \
     ../AgentTypes.h \
     ../CanvasAutomation.h \
     ../CanvasBoard.h \
+    ../CanvasChat.h \
     ../CanvasModel.h \
     ../CanvasWorkflow.h \
     ../AppSettings.h \

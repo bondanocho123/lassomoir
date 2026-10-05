@@ -2,6 +2,7 @@
 #include "AppSettings.h"
 #include "CanvasAutomation.h"
 #include "CanvasBoard.h"
+#include "CanvasChat.h"
 #include "CanvasModel.h"
 #include "CanvasWorkflow.h"
 #include "ClassDiagram.h"
@@ -577,6 +578,9 @@ private slots:
     void canvasAutomationRunsStepsInDependencyOrder();
     void canvasAutomationSkipsDependentsAndKeepsResults();
     void canvasAutomationStopsRemovedSteps();
+    void canvasWorkflowComposesChatPrompt();
+    void canvasChatAsksWithHistory();
+    void canvasChatCancelsRejectsAndPersists();
     void fileManagerRoundTripsCanvas();
 
     // Claude Code sungguhan; hanya jalan bila LASSOMOIR_REAL_CLAUDE=1 (memakai token)
@@ -5285,6 +5289,239 @@ void TestSwarm::canvasAutomationStopsRemovedSteps() {
     QVERIFY(!model.node(added));
     QVERIFY(!automation.isBusy());
     QVERIFY(automation.state(added) == RunState::Idle);
+}
+
+void TestSwarm::canvasWorkflowComposesChatPrompt() {
+    CanvasModel model(QStringLiteral("P"));
+    const QString note = model.addNote(QPointF(400, 0), QStringLiteral("## Ide utama\nLogin tanpa password"));
+    const QString spec = model.addReference({QStringLiteral("TTT"), QStringLiteral("t1"), QStringLiteral("SPECIFIER"), QString()},
+                                            QPointF(0, 0), QStringLiteral("Spesifikasi · Login"),
+                                            QStringLiteral("SPECIFIER · disetujui"), QStringLiteral("# Spek\nToken 15 menit"));
+    const QString empty = model.addNote(QPointF(0, 300));
+    const CanvasBoard &board = model.board();
+
+    // Urut posisi: atas ke bawah, lalu kiri ke kanan; kartu yang hilang dibuang
+    QCOMPARE(CanvasWorkflow::chatContext(board, {}), QStringList({spec, note, empty}));
+    QCOMPARE(CanvasWorkflow::chatContext(board, {note, QStringLiteral("hilang"), spec}), QStringList({spec, note}));
+    QCOMPARE(CanvasWorkflow::chatContextLabel(board, {}), QStringLiteral("seluruh kanvas · 3 kartu"));
+    QCOMPARE(CanvasWorkflow::chatContextLabel(board, {note, spec}),
+             QStringLiteral("2 kartu: Spesifikasi · Login, Ide utama"));
+    QCOMPARE(CanvasWorkflow::chatContextLabel(board, {empty}), QStringLiteral("1 kartu: Catatan kosong"));
+    QCOMPARE(CanvasWorkflow::chatContextLabel(board, {QStringLiteral("hilang")}),
+             QStringLiteral("kartu bahannya sudah tidak ada"));
+    QCOMPARE(CanvasWorkflow::chatContextLabel(CanvasBoard(), {}), QStringLiteral("kanvas masih kosong"));
+
+    // Bahan hanya kartu terpilih; pertanyaan paling akhir
+    QString prompt = CanvasWorkflow::chatPrompt(board, {spec}, {}, QStringLiteral("  Apa risikonya?  "));
+    QVERIFY(prompt.startsWith(QStringLiteral("# Bahan dari kanvas\n1 kartu yang dipilih pengguna")));
+    QVERIFY(prompt.contains(QStringLiteral("## 1. Spesifikasi · Login")));
+    QVERIFY(prompt.contains(QStringLiteral("Token 15 menit")));
+    QVERIFY(!prompt.contains(QStringLiteral("Login tanpa password")));
+    QVERIFY(!prompt.contains(QStringLiteral("# Percakapan sebelumnya")));
+    QVERIFY(prompt.endsWith(QStringLiteral("# Pertanyaan\nApa risikonya?\n")));
+
+    // Seluruh kanvas + riwayat: pesan terbaru didahulukan sampai batasnya, ditulis urut waktu
+    QList<CanvasWorkflow::ChatTurn> history;
+    for (int i = 1; i <= 20; ++i) {
+        history.append({i % 2 == 1, QStringLiteral("pesan-%1").arg(i)});
+    }
+    history.append({false, QString(4100, QLatin1Char('x'))});
+    prompt = CanvasWorkflow::chatPrompt(board, {}, history, QStringLiteral("Lalu?"));
+    QVERIFY(prompt.contains(QStringLiteral("Seluruh kartu di kanvas (3 kartu)")));
+    QVERIFY(prompt.contains(QStringLiteral("Login tanpa password")));
+    QVERIFY(prompt.contains(QStringLiteral("# Percakapan sebelumnya\n(5 pesan yang lebih lama tidak disertakan.)")));
+    QVERIFY(!prompt.contains(QStringLiteral("pesan-5\n")));
+    QVERIFY(prompt.contains(QStringLiteral("**Kamu:** pesan-6")));
+    QVERIFY(prompt.contains(QStringLiteral("**Pengguna:** pesan-7")));
+    QVERIFY(prompt.indexOf(QStringLiteral("pesan-7")) < prompt.indexOf(QStringLiteral("pesan-20")));
+    QVERIFY(prompt.contains(QStringLiteral("(dipotong)")));
+    QVERIFY(prompt.indexOf(QStringLiteral("# Percakapan sebelumnya")) < prompt.indexOf(QStringLiteral("# Pertanyaan")));
+}
+
+namespace {
+
+// Lingkungan run chat seperti di aplikasi, tanpa folder kerja sungguhan
+CanvasChat::LaunchBuilder chatLauncher(QStringList *contexts, bool *reject = nullptr) {
+    return [contexts, reject](const QStringList &contextIds, QString *reason) -> std::optional<AgentLaunch> {
+        if (reject && *reject) {
+            *reason = QStringLiteral("folder kerja belum dipilih");
+            return std::nullopt;
+        }
+        contexts->append(contextIds.join(QLatin1Char(',')));
+        AgentLaunch launch;
+        launch.workingDirectory = QDir::currentPath();
+        return launch;
+    };
+}
+
+AgentEvent textEvent(const QString &text) {
+    AgentEvent event;
+    event.kind = AgentEvent::Kind::Text;
+    event.text = text;
+    return event;
+}
+
+}
+
+void TestSwarm::canvasChatAsksWithHistory() {
+    CanvasModel model(QStringLiteral("P"));
+    const QString note = model.addNote(QPointF(0, 0), QStringLiteral("Ide: login tanpa password"));
+    FakeAgentRuntime runtime;
+    QStringList contexts;
+    CanvasChat chat(model, runtime, chatLauncher(&contexts));
+    QSignalSpy added(&chat, &CanvasChat::messageAdded);
+    QSignalSpy busy(&chat, &CanvasChat::busyChanged);
+    QSignalSpy live(&chat, &CanvasChat::liveChanged);
+    QSignalSpy finished(&chat, &CanvasChat::finished);
+    QSignalSpy changed(&chat, &CanvasChat::changed);
+
+    QString reason;
+    QVERIFY(!chat.ask(QStringLiteral("   "), {}, QString(), &reason));
+    QCOMPARE(reason, QStringLiteral("tulis pertanyaannya dulu"));
+    QCOMPARE(added.count(), 0);
+
+    QVERIFY(chat.ask(QStringLiteral(" Apa intinya? "), {note}, QStringLiteral("opus"), &reason));
+    QVERIFY(chat.isBusy());
+    QCOMPARE(busy.count(), 1);
+    QCOMPARE(contexts, QStringList({note}));
+    QCOMPARE(chat.messages().size(), 1);
+    const CanvasChatMessage question = chat.messages().first();
+    QVERIFY(question.isUser());
+    QCOMPARE(question.text, QStringLiteral("Apa intinya?"));
+    QCOMPARE(question.contextIds, QStringList({note}));
+    QCOMPARE(question.contextLabel, QStringLiteral("1 kartu: Ide: login tanpa password"));
+    QCOMPARE(runtime.sessions.size(), 1);
+    const AgentLaunch launch = runtime.sessions.first()->launch();
+    QCOMPARE(launch.agent.tools, QStringList({"Read", "Grep", "Glob"}));
+    QCOMPARE(launch.agent.model, QStringLiteral("opus"));
+    QVERIFY(launch.agent.rolePrompt.contains(QStringLiteral("tanya jawab")));
+    QVERIFY(launch.prompt.contains(QStringLiteral("Ide: login tanpa password")));
+    QVERIFY(launch.prompt.endsWith(QStringLiteral("# Pertanyaan\nApa intinya?\n")));
+
+    // Satu pertanyaan pada satu waktu
+    QVERIFY(!chat.ask(QStringLiteral("Lagi?"), {}, QString(), &reason));
+    QCOMPARE(reason, QStringLiteral("agent masih menjawab pertanyaan sebelumnya"));
+
+    // Keluaran live: teks agent dan tool terakhir
+    runtime.sessions.first()->emitEvent(textEvent(QStringLiteral("Saya cek kodenya dulu.")));
+    AgentEvent tool;
+    tool.kind = AgentEvent::Kind::ToolUse;
+    tool.toolName = QStringLiteral("Read");
+    tool.toolDetail = QDir::current().filePath(QStringLiteral("src/auth.cpp"));
+    runtime.sessions.first()->emitEvent(tool);
+    QCOMPARE(live.count(), 2);
+    QCOMPARE(chat.liveText(), QStringLiteral("Saya cek kodenya dulu."));
+    QVERIFY2(chat.activity().contains(QStringLiteral("Read")), qPrintable(chat.activity()));
+
+    runtime.sessions.first()->finishWith(answer(QStringLiteral("Intinya: login lewat tautan email.")));
+    QVERIFY(!chat.isBusy());
+    QCOMPARE(busy.count(), 2);
+    QVERIFY(!busy.last().at(0).toBool());
+    QCOMPARE(chat.liveText(), QString());
+    QCOMPARE(chat.messages().size(), 2);
+    const CanvasChatMessage reply = chat.messages().last();
+    QVERIFY(reply.succeeded());
+    QCOMPARE(reply.text, QStringLiteral("Intinya: login lewat tautan email."));
+    QCOMPARE(reply.replyTo, question.id);
+    QCOMPARE(reply.model, QStringLiteral("opus"));
+    QCOMPARE(chat.message(reply.id)->text, reply.text);
+    QCOMPARE(finished.count(), 1);
+    QCOMPARE(added.count(), 2);
+    QVERIFY(changed.count() >= 2);
+
+    // Pertanyaan lanjutan tentang seluruh kanvas membawa percakapan sebelumnya
+    QVERIFY(chat.ask(QStringLiteral("Lalu risikonya?"), {}, QString(), &reason));
+    QCOMPARE(chat.messages().last().contextIds, QStringList());
+    QCOMPARE(chat.messages().last().contextLabel, QStringLiteral("seluruh kanvas · 1 kartu"));
+    const QString followUp = runtime.sessions.last()->launch().prompt;
+    QVERIFY(followUp.contains(QStringLiteral("**Pengguna:** Apa intinya?")));
+    QVERIFY(followUp.contains(QStringLiteral("**Kamu:** Intinya: login lewat tautan email.")));
+    QCOMPARE(runtime.sessions.last()->launch().agent.model, CanvasWorkflow::chatAgent().model);
+    runtime.sessions.last()->finishWith(answer(QString()));
+    QCOMPARE(chat.messages().last().text, QStringLiteral("_Agent selesai tanpa menulis jawaban._"));
+}
+
+void TestSwarm::canvasChatCancelsRejectsAndPersists() {
+    CanvasModel model(QStringLiteral("P"));
+    const QString note = model.addNote(QPointF(0, 0), QStringLiteral("Catatan"));
+    FakeAgentRuntime runtime;
+    QStringList contexts;
+    bool reject = false;
+    CanvasChat chat(model, runtime, chatLauncher(&contexts, &reject));
+    QString reason;
+
+    // Dihentikan: potongan jawaban disimpan, tapi tidak ikut riwayat pertanyaan berikutnya
+    QVERIFY(chat.ask(QStringLiteral("Pertama"), {note}, QString(), &reason));
+    runtime.sessions.last()->emitEvent(textEvent(QStringLiteral("potongan jawaban")));
+    chat.cancel();
+    QVERIFY(!chat.isBusy());
+    QCOMPARE(chat.messages().last().outcome, QStringLiteral("cancelled"));
+    QCOMPARE(chat.messages().last().text, QStringLiteral("potongan jawaban"));
+    QVERIFY(!chat.messages().last().succeeded());
+
+    QVERIFY(chat.ask(QStringLiteral("Kedua"), {}, QString(), &reason));
+    QVERIFY(!runtime.sessions.last()->launch().prompt.contains(QStringLiteral("potongan jawaban")));
+    QVERIFY(runtime.sessions.last()->launch().prompt.contains(QStringLiteral("**Pengguna:** Pertama")));
+    // Gagal: alasannya jadi isi jawaban
+    runtime.sessions.last()->finishWith(AgentResult::failure(QStringLiteral("timeout"), QStringLiteral("melewati batas waktu")));
+    QCOMPARE(chat.messages().last().outcome, QStringLiteral("timeout"));
+    QCOMPARE(chat.messages().last().text, QStringLiteral("melewati batas waktu"));
+
+    // Ditolak tanpa menambah pesan
+    const qsizetype count = chat.messages().size();
+    QVERIFY(!chat.ask(QStringLiteral("Tentang kartu hilang"), {QStringLiteral("hilang")}, QString(), &reason));
+    QCOMPARE(reason, QStringLiteral("kartu bahannya sudah tidak ada di kanvas"));
+    reject = true;
+    QVERIFY(!chat.ask(QStringLiteral("Tanpa folder"), {}, QString(), &reason));
+    QCOMPARE(reason, QStringLiteral("folder kerja belum dipilih"));
+    reject = false;
+    runtime.available = false;
+    QVERIFY(!chat.ask(QStringLiteral("Tanpa runtime"), {}, QString(), &reason));
+    QCOMPARE(reason, QStringLiteral("runtime palsu dimatikan"));
+    runtime.available = true;
+    QCOMPARE(chat.messages().size(), count);
+
+    // Selesai langsung di dalam start()
+    runtime.finishOnStart = true;
+    QVERIFY(chat.ask(QStringLiteral("Cepat"), {}, QString(), &reason));
+    QVERIFY(!chat.isBusy());
+    QVERIFY(chat.messages().last().succeeded());
+    runtime.finishOnStart = false;
+
+    // canvas.json: tersimpan dan terbaca kembali utuh; isi dari disk tidak dianggap perubahan
+    const QJsonArray json = chat.toJson();
+    QCOMPARE(json.size(), chat.messages().size());
+    const QList<CanvasChatMessage> restored = CanvasChat::fromJson(json);
+    QCOMPARE(restored.size(), chat.messages().size());
+    for (qsizetype i = 0; i < restored.size(); ++i) {
+        const CanvasChatMessage &a = restored.at(i);
+        const CanvasChatMessage &b = chat.messages().at(i);
+        QCOMPARE(a.id, b.id);
+        QCOMPARE(a.role, b.role);
+        QCOMPARE(a.text, b.text);
+        QCOMPARE(a.contextIds, b.contextIds);
+        QCOMPARE(a.contextLabel, b.contextLabel);
+        QCOMPARE(a.replyTo, b.replyTo);
+        QCOMPARE(a.outcome, b.outcome);
+        QCOMPARE(a.at.toSecsSinceEpoch(), b.at.toSecsSinceEpoch());
+    }
+    QVERIFY(!CanvasChatMessage::fromJson(QJsonObject{{QStringLiteral("role"), QStringLiteral("sistem")}}).has_value());
+
+    CanvasChat reopened(model, runtime, chatLauncher(&contexts));
+    QSignalSpy reset(&reopened, &CanvasChat::messagesReset);
+    QSignalSpy changed(&reopened, &CanvasChat::changed);
+    reopened.load(restored);
+    QCOMPARE(reset.count(), 1);
+    QCOMPARE(changed.count(), 0);
+    QCOMPARE(reopened.messages().size(), restored.size());
+
+    // Mulai ulang tidak berlaku selagi agent menjawab
+    QVERIFY(reopened.ask(QStringLiteral("Sibuk"), {}, QString(), &reason));
+    QVERIFY(!reopened.clear());
+    reopened.cancel();
+    QVERIFY(reopened.clear());
+    QVERIFY(reopened.messages().isEmpty());
+    QCOMPARE(changed.count(), 3);   // pertanyaan, jawaban yang dihentikan, lalu clear
 }
 
 void TestSwarm::fileManagerRoundTripsCanvas() {

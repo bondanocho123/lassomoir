@@ -742,6 +742,13 @@ void CanvasView::keyPressEvent(QKeyEvent *event) {
         event->accept();
         return;
     }
+    case Qt::Key_C:
+        if (!ctrl) {
+            emit chatRequested(selectedNodeIds());
+            event->accept();
+            return;
+        }
+        break;
     case Qt::Key_F2: {
         const QStringList ids = selectedNodeIds();
         if (ids.size() == 1) {
@@ -845,6 +852,9 @@ void CanvasView::contextMenuEvent(QContextMenuEvent *event) {
         }
         menu->addAction(ids.size() > 1 ? QStringLiteral("Jadikan satu task…") : QStringLiteral("Jadikan task…"), this,
                         [this, ids]() { emit createTaskRequested(ids); });
+        menu->addAction(ids.size() > 1 ? QStringLiteral("Tanyakan kartu-kartu ini di chat\tC")
+                                       : QStringLiteral("Tanyakan kartu ini di chat\tC"),
+                        this, [this, ids]() { emit chatRequested(ids); });
         menu->addSeparator();
         menu->addAction(QStringLiteral("Duplikat\tCtrl+D"), this, &CanvasView::duplicateSelection);
         menu->addAction(Theme::icon(":/icons/trash.svg"), QStringLiteral("Hapus\tDel"), this, &CanvasView::deleteSelection);
@@ -872,6 +882,10 @@ void CanvasView::contextMenuEvent(QContextMenuEvent *event) {
         });
         selectAll->setEnabled(!m_nodes.isEmpty());
         menu->addAction(QStringLiteral("Tampilkan semua kartu\tCtrl+0"), this, &CanvasView::fitAll);
+        menu->addAction(QStringLiteral("Tanya tentang seluruh kanvas di chat\tC"), this, [this]() {
+            m_scene->clearSelection();
+            emit chatRequested({});
+        });
     }
     menu->popup(event->globalPos());
     event->accept();

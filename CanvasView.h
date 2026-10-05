@@ -70,6 +70,8 @@ signals:
     void runRequested(const QStringList &stepIds, bool withUpstream);
     void createTaskRequested(const QStringList &ids);
     void openTaskRequested(const QString &taskId);
+    // Tanya di chat dengan kartu-kartu ini sebagai bahan; kosong = seluruh kanvas
+    void chatRequested(const QStringList &ids);
 
 protected:
     void drawBackground(QPainter *painter, const QRectF &rect) override;

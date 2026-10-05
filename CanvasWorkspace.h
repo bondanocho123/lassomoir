@@ -6,6 +6,7 @@
 
 #include <QHash>
 #include <QImage>
+#include <QJsonObject>
 #include <QObject>
 #include <QPointer>
 #include <QPointF>
@@ -18,6 +19,7 @@
 
 class AgentRuntime;
 class CanvasAutomation;
+class CanvasChat;
 class CanvasModel;
 class CanvasPage;
 class FileManager;
@@ -26,8 +28,8 @@ class StageCatalog;
 class TaskManager;
 
 // Kanvas brainstorm semua project: memuat dan menyimpan canvas.json, membuat halaman kanvas,
-// menjaga isi kartu referensi tetap sama dengan task asalnya, menjalankan langkah AI, dan membuat
-// task dari kanvas. TaskManager tetap satu-satunya pemilik data task: task baru masuk lewat addTask.
+// menjaga isi kartu referensi tetap sama dengan task asalnya, menjalankan langkah AI dan chat tanya
+// jawab, dan membuat task dari kanvas. TaskManager tetap satu-satunya pemilik data task: task baru masuk lewat addTask.
 class CanvasWorkspace : public QObject {
     Q_OBJECT
 
@@ -66,22 +68,30 @@ signals:
     void openTaskRequested(const QString &taskId);
     void logLine(const QString &line);
     void taskLogged(const TaskItem &task, const QString &line);
-    // Langkah AI gagal karena backend-nya (mis. belum login): MainWindow menampilkan notice
+    // Langkah AI atau chat gagal karena backend-nya (mis. belum login): MainWindow menampilkan notice
     void runFailed(const AgentResult &result);
 
 private:
     struct Canvas {
         CanvasModel *model = nullptr;
         CanvasAutomation *automation = nullptr;
+        CanvasChat *chat = nullptr;
         QPointer<CanvasPage> page;
         QHash<QString, QString> live;   // stepId -> keluaran agent yang sedang mengalir
     };
 
     Canvas *ensure(const QString &projectId);
     void wireAutomation(const QString &projectId, Canvas *canvas);
+    void wireChat(const QString &projectId, Canvas *canvas);
     void save(const QString &projectId);
+    // Isi canvas.json: kartu, garis, tampilan, dan percakapan chat
+    static QJsonObject snapshot(const Canvas *canvas);
     void refreshReferences(Canvas *canvas, const QString &taskId = QString());
     std::optional<AgentLaunch> launchFor(const QString &projectId, const QString &stepId, QString *reason) const;
+    // Folder kerja, folder baca, dan foto lampiran dari kartu-kartu itu; agent dan prompt belum diisi
+    std::optional<AgentLaunch> environmentFor(const QString &projectId, const QStringList &imageNodeIds,
+                                              QString *reason) const;
+    void askChat(const QString &projectId, const QString &question, const QStringList &contextIds, const QString &model);
     void addSources(const QString &projectId, const QList<CanvasSource> &sources, const QPointF &scenePos, bool exact);
     void runSteps(const QString &projectId, const QStringList &stepIds, bool withUpstream);
     void runAll(const QString &projectId);

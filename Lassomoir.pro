@@ -21,6 +21,8 @@ SOURCES += \
     BranchViewer.cpp \
     CanvasAutomation.cpp \
     CanvasBoard.cpp \
+    CanvasChat.cpp \
+    CanvasChatPanel.cpp \
     CanvasInspector.cpp \
     CanvasItems.cpp \
     CanvasLibrary.cpp \
@@ -93,6 +95,8 @@ HEADERS += \
     BranchViewer.h \
     CanvasAutomation.h \
     CanvasBoard.h \
+    CanvasChat.h \
+    CanvasChatPanel.h \
     CanvasInspector.h \
     CanvasItems.h \
     CanvasLibrary.h \
