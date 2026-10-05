@@ -24,6 +24,12 @@ ConsolePanelWidget::ConsolePanelWidget(QWidget *parent)
     ui->labelLiveIndicator->setPixmap(Theme::icon(":/icons/signal.svg").pixmap(QSize(kLiveIconSide, kLiveIconSide)));
     ui->labelLiveIndicator->setToolTip(QStringLiteral("Live: notifikasi dan keluaran agent tampil di sini secara langsung"));
     ui->labelLiveIndicator->setAccessibleName(QStringLiteral("Live"));
+
+    // Panel sendiri tidak berpindah keadaan: tombolnya hanya meminta, pemilik panel yang memutuskan
+    ui->btnConsoleClose->setIcon(Theme::icon(":/icons/close.svg"));
+    connect(ui->btnConsolePin, &QPushButton::clicked, this, [this]() { emit pinRequested(!m_pinned); });
+    connect(ui->btnConsoleClose, &QPushButton::clicked, this, &ConsolePanelWidget::closeRequested);
+    setPinned(true);
 }
 
 ConsolePanelWidget::~ConsolePanelWidget()
@@ -89,6 +95,14 @@ QString ConsolePanelWidget::logText() const {
         logs.append(card->logText());
     }
     return logs.join(QLatin1Char('\n'));
+}
+
+void ConsolePanelWidget::setPinned(bool pinned) {
+    m_pinned = pinned;
+    // Pin tegak = terpasang; pin rebah = panel sedang lepas (tampil sementara dari tab di samping)
+    ui->btnConsolePin->setIcon(Theme::icon(pinned ? ":/icons/pinned.svg" : ":/icons/unpinned.svg"));
+    ui->btnConsolePin->setToolTip(pinned ? QStringLiteral("Lepas pin: ciutkan jadi tab di samping")
+                                         : QStringLiteral("Pin panel: pasang tetap di samping"));
 }
 
 ConsoleTaskCard *ConsolePanelWidget::ensureCard(const TaskItem &task) {

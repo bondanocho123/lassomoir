@@ -20,6 +20,7 @@
 #include "ResponseDrawer.h"
 #include "RunLogFormatter.h"
 #include "RuntimeNoticeDialog.h"
+#include "SidePanelDock.h"
 #include "SplitterPaneAnimator.h"
 #include "StageCatalog.h"
 #include "SwarmCoordinator.h"
@@ -180,6 +181,7 @@ MainWindow::MainWindow(const StageCatalog &catalog, TaskManager &tasks, SwarmCoo
     m_sidebarMinWidth = ui->sidebarPanel->minimumWidth();
     m_sidebarMaxWidth = ui->sidebarPanel->maximumWidth();
     setupSidebarRail();
+    setupConsoleDock();
 
     setupMenuBar();
     QTimer::singleShot(0, this, [this]() {
@@ -293,6 +295,16 @@ void MainWindow::setupMenuBar() {
         } else {
             showBoard(projectId);
         }
+    });
+    // Panel Lieutenant (konsol di kanan). Panel yang ditutup lewat tombol ×-nya dimunculkan lagi
+    // dari sini, dalam keadaan terakhirnya: terpasang, atau tab di samping.
+    m_actionLieutenant = view->addAction("Lieutenant");
+    m_actionLieutenant->setObjectName("actionLieutenant");
+    m_actionLieutenant->setCheckable(true);
+    m_actionLieutenant->setChecked(m_consoleDock->isPanelVisible());
+    connect(m_actionLieutenant, &QAction::triggered, m_consoleDock, &SidePanelDock::setPanelVisible);
+    connect(m_consoleDock, &SidePanelDock::modeChanged, m_actionLieutenant, [this](SidePanelDock::Mode mode) {
+        m_actionLieutenant->setChecked(mode != SidePanelDock::Mode::Hidden);
     });
     view->addSeparator();
     m_actionSourceControl = view->addAction("Source Control", this, [this]() {
@@ -693,6 +705,23 @@ void MainWindow::setupSidebarRail() {
     connect(m_sidebarPeekTimer, &QTimer::timeout, this, &MainWindow::hideSidebarPeekIfLeft);
 }
 
+void MainWindow::setupConsoleDock() {
+    m_consoleDock = new SidePanelDock(ui->mainSplitter, 2, ui->contentWidget, QStringLiteral("console"),
+                                      QStringLiteral("Lieutenant"), this);
+    connect(ui->consolePanel, &ConsolePanelWidget::pinRequested, m_consoleDock, [this](bool pinned) {
+        m_consoleDock->setMode(pinned ? SidePanelDock::Mode::Pinned : SidePanelDock::Mode::Tab);
+    });
+    connect(ui->consolePanel, &ConsolePanelWidget::closeRequested, m_consoleDock, [this]() {
+        m_consoleDock->setPanelVisible(false);
+    });
+    connect(m_consoleDock, &SidePanelDock::modeChanged, ui->consolePanel, [this](SidePanelDock::Mode mode) {
+        // Selama disembunyikan tombol pin tidak terlihat; keadaannya dipakai lagi saat panel muncul
+        if (mode != SidePanelDock::Mode::Hidden) {
+            ui->consolePanel->setPinned(mode == SidePanelDock::Mode::Pinned);
+        }
+    });
+}
+
 int MainWindow::dockedSidebarWidth() const {
     return qBound(m_sidebarMinWidth, m_savedSidebarWidth, m_sidebarMaxWidth);
 }
@@ -764,10 +793,6 @@ void MainWindow::animateSidebar(bool opening) {
     QList<int> sizes = ui->mainSplitter->sizes();
     if (sizes.size() != ui->mainSplitter->count() || sizes.size() < 3) return;
 
-    // sidebar + board berbagi lebar ini; console tetap sebesar sebelumnya
-    const int sidebarBoardWidth = sizes.at(0) + sizes.at(1);
-    const int consoleWidth = sizes.at(2);
-
     // Selalu mulai dari lebar rel saat ini agar animasi yang diinterupsi
     // melanjutkan geseran, bukan melompat balik
     const int startWidth = sizes.at(0);
@@ -808,12 +833,16 @@ void MainWindow::animateSidebar(bool opening) {
     animation->setDuration(220);
     animation->setEasingCurve(QEasingCurve::OutCubic);
 
-    connect(animation, &QVariantAnimation::valueChanged, this,
-            [this, sidebarBoardWidth, consoleWidth](const QVariant &value) {
+    connect(animation, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
+        // sidebar + board berbagi lebar; pane lain tidak disentuh. Lebarnya dibaca tiap frame, bukan
+        // disimpan di awal: panel Lieutenant (pane 2) bisa berubah lebar selagi animasi ini berjalan.
+        QList<int> frame = ui->mainSplitter->sizes();
+        if (frame.size() < 3) return;
         const int sidebarWidth = value.toInt();
-        const int boardWidth = qMax(0, sidebarBoardWidth - sidebarWidth);
+        frame[1] = qMax(0, frame.at(0) + frame.at(1) - sidebarWidth);
+        frame[0] = sidebarWidth;
         m_sidebarRail->setMaximumWidth(sidebarWidth);
-        ui->mainSplitter->setSizes({sidebarWidth, boardWidth, consoleWidth});
+        ui->mainSplitter->setSizes(frame);
     });
 
     connect(animation, &QVariantAnimation::finished, this, [this, opening, handle]() {

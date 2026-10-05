@@ -161,6 +161,7 @@ Konvensi nama sinyal di kode sudah tepat dan dipertahankan: **peristiwa** dalam 
 | `AgentRuntime` / `AgentSession` ✅ | Infra | Kontrak menjalankan satu agent; implementasi `ClaudeCodeRuntime`/`ClaudeCodeSession` (`QProcess`, stdin, timeout, cancel) | Parsing stream-json sendiri |
 | `ClaudeCli` · `StreamJsonParser` ✅ | Infra | Flag & lokasi CLI · format stream-json | Menyimpan state |
 | `RunLogFormatter` ✅ | View | Teks baris konsol untuk kejadian run | — |
+| `SidePanelDock` · `VerticalTabButton` ✅ | View | Tiga keadaan panel Lieutenant di pane kanan `mainSplitter`: terpasang (pin), tab tegak di rel tepi kanan, atau disembunyikan (lihat §6.6 Konsol) | Tahu isi panelnya |
 | `CanvasWorkspace` ✅ | View | Satu kanvas brainstorm per project (§3.6): muat/simpan `canvas.json` lewat `FileManager`, segarkan kartu referensi saat task berubah, rakit `AgentLaunch` langkah AI, buat task usulan lewat `TaskManager` | Mengubah task tanpa `TaskManager` |
 | `CanvasPage` · `CanvasInspector` · `CanvasLibrary` ✅ | View | Halaman kanvas: toolbar, Pustaka artefak lintas project (sumber drag), panel Detail kartu terpilih | Menyimpan data kanvas sendiri |
 | `CanvasView` · `CanvasNodeItem` · `CanvasEdgeItem` ✅ | View | Kanvas tak terbatas (`QGraphicsView`): geser, zoom di kursor, seleksi, sambungan titik → kartu; semua perubahan dikirim sebagai intent ke `CanvasModel` | Mengubah kartu tanpa model |
@@ -983,6 +984,11 @@ Umum: radius 4px, padding 4px 10px, 11px bold, tinggi min. 24px, kursor tangan, 
 #### Konsol
 
 - Header: `labelConsoleTitle` `[LIEUTENANT]` (`font-caption`) · spacer · `labelLiveIndicator`: `● Live` (warna running) saat ada run aktif, `○ Idle` (`text-muted`) bila tidak.
+- ✅ Di kanan header ada tombol **pin** (`btnConsolePin`) dan **×** (`btnConsoleClose`). Panel punya tiga keadaan, diatur `SidePanelDock`:
+  - **Terpasang** (bawaan): menempati pane kanan; lebarnya digeser lewat handle splitter.
+  - **Tab** (pin dilepas): tinggal tab tegak di tepi kanan, berbentuk penanda buku seukuran caption-nya (`Lieutenant`, diputar 90° ke kiri, dibaca dari bawah ke atas). Hover atau klik tab menampilkan panel sementara di kiri rel, menimpa board tanpa menggesernya, sampai kursor meninggalkannya. Tombol pin di panel itu memasangnya kembali selebar semula.
+  - **Disembunyikan** (×): panel dan relnya hilang, lebarnya jatuh ke board. **View › Lieutenant** (item bercentang) memunculkannya lagi dalam keadaan terakhirnya, dan juga bisa menyembunyikannya.
+- Notifikasi tetap dicatat di ketiga keadaan. Keadaan panel tidak disimpan antar sesi: aplikasi selalu dibuka dengan panel terpasang.
 - Log: `QPlainTextEdit` **read-only**, `maximumBlockCount` 5000, `font-mono`, latar `surface-log`.
 - Input: placeholder `Ketik perintah — "help" untuk daftar`, fokus `focus`. Perintah v1: `help`, `clear`; M3: `run <task>`, `cancel <task>`.
 - Satu format baris log untuk semua sumber (`SYSTEM`, `TASK`, `AGENT:<STAGE>`, `GATE`, `ERROR`):
