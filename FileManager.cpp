@@ -95,6 +95,14 @@ void FileManager::flushPendingSaves() {
 
     m_pendingSaves.clear();
     m_pendingProjects.clear();
+
+    for (auto it = m_pendingCanvases.constBegin(); it != m_pendingCanvases.constEnd(); ++it) {
+        QString error;
+        if (!saveCanvas(it.key(), it.value(), &error)) {
+            qWarning() << "[FileManager] Gagal menyimpan kanvas" << it.key() << ":" << error;
+        }
+    }
+    m_pendingCanvases.clear();
 }
 
 QString FileManager::projectFilePath(const QString &projectId) {
@@ -321,6 +329,7 @@ bool FileManager::deleteProject(const QString &projectId, QString *error){
     // session.json beberapa ratus milidetik setelah foldernya dihapus.
     m_pendingSaves.remove(projectId);
     m_pendingProjects.remove(projectId);
+    m_pendingCanvases.remove(projectId);
     m_workingDirs.remove(projectId);
     m_referenceDirs.remove(projectId);
 
@@ -389,4 +398,58 @@ QString FileManager::worktreeDirectory(const QString &projectId, const QString &
         return QString();
     }
     return QStringLiteral("%1/projects/%2/worktrees/%3").arg(m_basePath, projectId, taskId);
+}
+
+QString FileManager::canvasFilePath(const QString &projectId) const {
+    return QStringLiteral("%1/projects/%2/canvas.json").arg(m_basePath, projectId);
+}
+
+QJsonObject FileManager::loadCanvas(const QString &projectId, QString *error) {
+    QFile file(canvasFilePath(projectId));
+    if (!file.exists()) {
+        return QJsonObject();
+    }
+    if (!file.open(QIODevice::ReadOnly)) {
+        if (error) *error = QStringLiteral("Tidak bisa membuka file kanvas: %1").arg(file.errorString());
+        return QJsonObject();
+    }
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+        if (error) {
+            *error = QStringLiteral("File kanvas rusak: %1")
+                         .arg(parseError.error != QJsonParseError::NoError ? parseError.errorString()
+                                                                            : QStringLiteral("isinya bukan objek JSON"));
+        }
+        return QJsonObject();
+    }
+    return doc.object();
+}
+
+bool FileManager::saveCanvas(const QString &projectId, const QJsonObject &canvas, QString *error) {
+    const QString path = canvasFilePath(projectId);
+    const QString dirPath = QFileInfo(path).absolutePath();
+    if (!QDir().mkpath(dirPath)) {
+        if (error) *error = QStringLiteral("Tidak bisa membuat folder project: %1").arg(dirPath);
+        return false;
+    }
+    if (!writeAtomic(path, QJsonDocument(canvas).toJson(QJsonDocument::Indented))) {
+        if (error) *error = QStringLiteral("Gagal menulis file kanvas: %1").arg(path);
+        return false;
+    }
+    return true;
+}
+
+void FileManager::scheduleCanvasSave(const QString &projectId, const QJsonObject &canvas) {
+    m_pendingCanvases[projectId] = canvas;
+    m_saveTimer->start(kSaveDebounceMs);
+}
+
+QString FileManager::setAsideCanvas(const QString &projectId) {
+    const QString path = canvasFilePath(projectId);
+    const QString target = QStringLiteral("%1/canvas-rusak-%2.json")
+                               .arg(QFileInfo(path).absolutePath(),
+                                    QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss")));
+    m_pendingCanvases.remove(projectId);
+    return QFile::rename(path, target) ? target : QString();
 }

@@ -75,6 +75,25 @@
       </spacer>
      </item>
      <item>
+      <widget class="QPushButton" name="btnCanvas">
+       <property name="minimumSize">
+        <size>
+         <width>75</width>
+         <height>24</height>
+        </size>
+       </property>
+       <property name="cursor">
+        <cursorShape>PointingHandCursor</cursorShape>
+       </property>
+       <property name="toolTip">
+        <string>Kanvas brainstorm project ini: catatan, artefak dari banyak task, dan langkah AI (Ctrl+Shift+K)</string>
+       </property>
+       <property name="text">
+        <string>Kanvas</string>
+       </property>
+      </widget>
+     </item>
+     <item>
       <widget class="QPushButton" name="btnWorkingDir">
        <property name="minimumSize">
         <size>

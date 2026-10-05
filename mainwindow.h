@@ -11,6 +11,7 @@
 #include <QString>
 
 #include <functional>
+#include <optional>
 
 // Tipe lengkap dibutuhkan moc untuk parameter slot run agent
 #include "AgentTypes.h"
@@ -23,6 +24,8 @@ class MainWindow;
 QT_END_NAMESPACE
 
 // Forward declaration widget anak agar kompilasi cepat
+class AgentRuntime;
+class CanvasWorkspace;
 class SwimlaneWidget;
 class KanbanCardWidget;
 class FileManager;
@@ -51,9 +54,9 @@ class MainWindow : public QMainWindow
     Q_OBJECT
 
 public:
-    // Katalog stage, pemilik data task, coordinator agent, dan renderer diagram
-    // dirakit di main.cpp (composition root)
-    MainWindow(const StageCatalog &catalog, TaskManager &tasks, SwarmCoordinator &swarm,
+    // Katalog stage, pemilik data task, coordinator agent, runtime agent (dipakai juga langkah AI
+    // kanvas brainstorm), dan renderer diagram dirakit di main.cpp (composition root)
+    MainWindow(const StageCatalog &catalog, TaskManager &tasks, SwarmCoordinator &swarm, AgentRuntime &runtime,
                MermaidRenderer &mermaid, QWidget *parent = nullptr);
     ~MainWindow() override;
 
@@ -76,6 +79,16 @@ private slots:
 
     // Slot saat tombol "New Task" di klik pada swimlane tertentu
     void handleNewTaskRequested(const QString &projectId);
+
+    // Kanvas brainstorm project di area board (tombol "Kanvas", View > Kanvas Brainstorm), atau
+    // kembali ke board kanban-nya. Pilihan ini berlaku juga saat berpindah project.
+    void showCanvas(const QString &projectId);
+    void showBoard(const QString &projectId);
+
+    // "Jadikan task…" di kanvas: form task baru terisi judul + ringkasan kanvas; task yang dibuat
+    // ditaruh di kanvas dan disambungkan dari kartu asalnya
+    void createTaskFromCanvas(const QString &projectId, const QString &fromNodeId, const QString &title,
+                              const QString &brief);
 
     // Slot saat kartu diklik dua kali: buka form task terisi data kartu, lalu terapkan perubahannya
     void handleEditTaskRequested(const QString &projectId, const QString &taskId);
@@ -154,6 +167,11 @@ private:
     TaskManager &m_tasks;
     SwarmCoordinator &m_swarm;
     FileManager *m_fileManager;
+    // Kanvas brainstorm semua project; halamannya ikut ditaruh di boardStack
+    CanvasWorkspace *m_canvas = nullptr;
+    // true = area board menampilkan kanvas project, bukan swimlane-nya
+    bool m_canvasMode = false;
+    QAction *m_actionCanvas = nullptr;
     // Drawer hasil agent, di splitter [board | drawer] yang menggantikan boardStack di mainSplitter
     QSplitter *m_boardSplitter = nullptr;
     ResponseDrawer *m_drawer = nullptr;
@@ -251,6 +269,9 @@ private:
     // Buang project dari sidebar + board (dipakai "Close" maupun "Hapus")
     void removeProjectFromUi(const QString &projectId);
 
+    // Form task baru (boleh sudah terisi); task yang disimpan masuk TaskManager. nullopt bila batal.
+    std::optional<TaskItem> createTaskWithDialog(const QString &projectId, const QString &title = QString(),
+                                                 const QString &subtext = QString());
     // Buat kartu, sambungkan tombol & klik-nya, lalu taruh di kolom stage task
     KanbanCardWidget *createCard(SwimlaneWidget *swimlane, const TaskItem &task);
     // Samakan isi kartu (teks, badge ✓ N, status Review/Failed) dengan data task

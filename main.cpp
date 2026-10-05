@@ -42,7 +42,7 @@ int main(int argc, char *argv[])
     });
 
     // 3. Jalankan MainWindow Utama
-    MainWindow window(catalog, tasks, swarm, mermaid);
+    MainWindow window(catalog, tasks, swarm, runtime, mermaid);
     window.setWindowTitle("L'Assommoir - Workflow Orchestrator");
     window.resize(1440, 850);
     window.show();

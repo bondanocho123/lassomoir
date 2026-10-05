@@ -29,6 +29,9 @@ public:
     // Mengambil daftar tugas berdasarkan ID proyek (misal "TTT" atau "spacewar")
     QList<TaskItem> tasksForProject(const QString &projectId) const;
 
+    // Semua task dari semua project yang terbuka (pustaka artefak kanvas)
+    QList<TaskItem> allTasks() const { return m_tasks.values(); }
+
     // Menambahkan item tugas baru ke dalam database/memori
     void addTask(const TaskItem &item);
 

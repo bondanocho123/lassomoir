@@ -1,5 +1,9 @@
 #include "AgentAccess.h"
 #include "AppSettings.h"
+#include "CanvasAutomation.h"
+#include "CanvasBoard.h"
+#include "CanvasModel.h"
+#include "CanvasWorkflow.h"
 #include "ClassDiagram.h"
 #include "ClaudeCli.h"
 #include "ClaudeCodeLogin.h"
@@ -559,6 +563,21 @@ private slots:
     void userMessageCarriesImages();
     void claudeSessionSendsImagesAsStreamJson();
     void swarmPassesMaterialsToLaunch();
+
+    // Kanvas brainstorm: model, alur kerja langkah AI, dan persistensinya
+    void canvasBoardRoundTripsJson();
+    void canvasModelValidatesIntents();
+    void canvasModelUndoRedoKeepsAgentResults();
+    void canvasBoardOrdersStepsByDependency();
+    void canvasBoardFindsOpenSpot();
+    void canvasWorkflowResolvesReferences();
+    void canvasWorkflowComposesStepPrompt();
+    void canvasWorkflowBuildsTaskBrief();
+    void canvasWorkflowParsesTaskProposals();
+    void canvasAutomationRunsStepsInDependencyOrder();
+    void canvasAutomationSkipsDependentsAndKeepsResults();
+    void canvasAutomationStopsRemovedSteps();
+    void fileManagerRoundTripsCanvas();
 
     // Claude Code sungguhan; hanya jalan bila LASSOMOIR_REAL_CLAUDE=1 (memakai token)
     void realClaudeRunsCoderTask();
@@ -4590,6 +4609,734 @@ void TestSwarm::realClaudeReadsAttachmentsAndReferences() {
     QVERIFY2(answer.contains(QStringLiteral("merah")), qPrintable(result.message));
     QVERIFY2(answer.contains(QStringLiteral("15000")) || answer.contains(QStringLiteral("15.000")), qPrintable(result.message));
     QVERIFY2(answer.contains(QStringLiteral("kode-referensi-4821")), qPrintable(result.message));
+}
+
+namespace {
+
+// Launch langkah AI seperti di aplikasi, tanpa folder kerja sungguhan
+CanvasAutomation::LaunchBuilder canvasLauncher(const CanvasModel &model, QStringList *built,
+                                               const QString &rejectedStep = QString()) {
+    return [&model, built, rejectedStep](const QString &stepId, QString *reason) -> std::optional<AgentLaunch> {
+        if (stepId == rejectedStep) {
+            *reason = QStringLiteral("folder kerja belum dipilih");
+            return std::nullopt;
+        }
+        built->append(stepId);
+        AgentLaunch launch;
+        launch.agent = CanvasWorkflow::brainstormAgent();
+        launch.prompt = CanvasWorkflow::stepPrompt(model.board(), stepId);
+        launch.workingDirectory = QDir::currentPath();
+        return launch;
+    };
+}
+
+AgentResult answer(const QString &message) {
+    AgentResult result = successResult();
+    result.message = message;
+    return result;
+}
+
+}
+
+void TestSwarm::canvasBoardRoundTripsJson() {
+    CanvasBoard board;
+    CanvasNode note;
+    note.id = QStringLiteral("n1");
+    note.kind = CanvasNodeKind::Note;
+    note.pos = QPointF(10.5, -20);
+    note.size = QSizeF(220, 150);
+    note.text = QStringLiteral("Ide: login tanpa password");
+    note.color = QStringLiteral("sage");
+    CanvasNode artifact;
+    artifact.id = QStringLiteral("a1");
+    artifact.kind = CanvasNodeKind::Artifact;
+    artifact.pos = QPointF(300, 0);
+    artifact.size = QSizeF(280, 180);
+    artifact.source = {QStringLiteral("TTT"), QStringLiteral("t1"), QStringLiteral("SPECIFIER"), QString()};
+    artifact.title = QStringLiteral("Spesifikasi · Login");
+    artifact.detail = QStringLiteral("SPECIFIER · disetujui");
+    artifact.text = QStringLiteral("# Spesifikasi");
+    artifact.available = false;
+    CanvasNode task;
+    task.id = QStringLiteral("k1");
+    task.kind = CanvasNodeKind::Task;
+    task.pos = QPointF(0, 300);
+    task.size = QSizeF(260, 132);
+    task.source = {QStringLiteral("spacewar"), QStringLiteral("t9"), QString(), QString()};
+    task.title = QStringLiteral("Skor");
+    task.detail = QStringLiteral("QA · gagal");
+    CanvasNode step;
+    step.id = QStringLiteral("s1");
+    step.kind = CanvasNodeKind::Step;
+    step.pos = QPointF(700, 0);
+    step.size = QSizeF(300, 200);
+    step.text = QStringLiteral("Gabungkan jadi rencana");
+    step.model = QStringLiteral("opus");
+    step.effort = QStringLiteral("high");
+    step.output = CanvasStepOutput::Tasks;
+    step.result = answer(QStringLiteral("# Rencana"));
+    step.result.sessionId = QStringLiteral("sesi-k");
+    step.result.durationMs = 4200;
+    step.result.totalTokens = 3100;
+    step.result.costUsd = 0.05;
+    step.result.deniedTools = QStringList({"Bash"});
+    step.finishedAt = QDateTime::currentDateTimeUtc();
+    board.nodes = {note, artifact, task, step};
+    board.edges = {{QStringLiteral("e1"), QStringLiteral("n1"), QStringLiteral("s1")},
+                   {QStringLiteral("e2"), QStringLiteral("a1"), QStringLiteral("s1")},
+                   {QStringLiteral("e3"), QStringLiteral("k1"), QStringLiteral("s1")}};
+    board.viewCenter = QPointF(120, 80);
+    board.zoom = 0.75;
+
+    QString error;
+    QStringList warnings;
+    const std::optional<CanvasBoard> back = CanvasBoard::fromJson(board.toJson(), &error, &warnings);
+    QVERIFY2(back, qPrintable(error));
+    QVERIFY2(warnings.isEmpty(), qPrintable(warnings.join(QStringLiteral("; "))));
+    QCOMPARE(int(back->nodes.size()), 4);
+    const CanvasNode *restoredNote = back->node(QStringLiteral("n1"));
+    QVERIFY(restoredNote && restoredNote->kind == CanvasNodeKind::Note);
+    QCOMPARE(restoredNote->pos, QPointF(10.5, -20));
+    QCOMPARE(restoredNote->text, note.text);
+    QCOMPARE(restoredNote->color, QStringLiteral("sage"));
+    const CanvasNode *restoredArtifact = back->node(QStringLiteral("a1"));
+    QVERIFY(restoredArtifact->source == artifact.source);
+    QCOMPARE(restoredArtifact->title, artifact.title);
+    QCOMPARE(restoredArtifact->detail, artifact.detail);
+    QCOMPARE(restoredArtifact->text, artifact.text);
+    QVERIFY(restoredArtifact->available);   // keadaan runtime, tidak ikut disimpan
+    QVERIFY(back->node(QStringLiteral("k1"))->kind == CanvasNodeKind::Task);
+    const CanvasNode *restoredStep = back->node(QStringLiteral("s1"));
+    QCOMPARE(restoredStep->model, QStringLiteral("opus"));
+    QCOMPARE(restoredStep->effort, QStringLiteral("high"));
+    QVERIFY(restoredStep->output == CanvasStepOutput::Tasks);
+    QVERIFY(restoredStep->result.success);
+    QCOMPARE(restoredStep->result.message, QStringLiteral("# Rencana"));
+    QCOMPARE(restoredStep->result.sessionId, QStringLiteral("sesi-k"));
+    QCOMPARE(restoredStep->result.durationMs, qint64(4200));
+    QCOMPARE(restoredStep->result.totalTokens, qint64(3100));
+    QCOMPARE(restoredStep->result.costUsd, 0.05);
+    QCOMPARE(restoredStep->result.deniedTools, QStringList({"Bash"}));
+    QCOMPARE(restoredStep->finishedAt.toSecsSinceEpoch(), step.finishedAt.toSecsSinceEpoch());
+    QCOMPARE(int(back->edges.size()), 3);
+    QCOMPARE(back->viewCenter, QPointF(120, 80));
+    QCOMPARE(back->zoom, 0.75);
+
+    // Isi yang tidak valid dilewati satu per satu, sisanya tetap terbaca
+    QJsonObject root = board.toJson();
+    QJsonArray nodes = root.value(QStringLiteral("nodes")).toArray();
+    nodes.append(QJsonObject{{QStringLiteral("id"), QStringLiteral("x1")}, {QStringLiteral("kind"), QStringLiteral("frame")}});
+    nodes.append(QJsonObject{{QStringLiteral("id"), QStringLiteral("n1")}, {QStringLiteral("kind"), QStringLiteral("note")}});
+    root[QStringLiteral("nodes")] = nodes;
+    QJsonArray edges = root.value(QStringLiteral("edges")).toArray();
+    edges.append(QJsonObject{{QStringLiteral("id"), QStringLiteral("e4")}, {QStringLiteral("from"), QStringLiteral("s1")},
+                             {QStringLiteral("to"), QStringLiteral("n1")}});
+    edges.append(QJsonObject{{QStringLiteral("id"), QStringLiteral("e5")}, {QStringLiteral("from"), QStringLiteral("n1")},
+                             {QStringLiteral("to"), QStringLiteral("hilang")}});
+    root[QStringLiteral("edges")] = edges;
+    warnings.clear();
+    const std::optional<CanvasBoard> cleaned = CanvasBoard::fromJson(root, &error, &warnings);
+    QVERIFY(cleaned);
+    QCOMPARE(int(cleaned->nodes.size()), 4);
+    QCOMPARE(int(cleaned->edges.size()), 3);
+    QCOMPARE(int(warnings.size()), 4);
+
+    // Ukuran di bawah batas minimum dinaikkan
+    QJsonObject tiny = board.toJson();
+    QJsonArray tinyNodes = tiny.value(QStringLiteral("nodes")).toArray();
+    QJsonObject first = tinyNodes.at(0).toObject();
+    first[QStringLiteral("width")] = 5;
+    tinyNodes[0] = first;
+    tiny[QStringLiteral("nodes")] = tinyNodes;
+    QCOMPARE(CanvasBoard::fromJson(tiny, &error)->nodes.first().size.width(),
+             CanvasNode::minimumSize(CanvasNodeKind::Note).width());
+
+    root[QStringLiteral("schemaVersion")] = 99;
+    QVERIFY(!CanvasBoard::fromJson(root, &error));
+    QVERIFY2(error.contains(QStringLiteral("99")), qPrintable(error));
+}
+
+void TestSwarm::canvasModelValidatesIntents() {
+    CanvasModel model(QStringLiteral("P"));
+    QSignalSpy changed(&model, &CanvasModel::changed);
+    const QString a = model.addNote(QPointF(0, 0), QStringLiteral("A"));
+    const QString b = model.addStep(QPointF(300, 0), QStringLiteral("B"));
+    const QString c = model.addNote(QPointF(600, 0), QStringLiteral("C"));
+    QCOMPARE(changed.count(), 3);
+
+    QString reason;
+    QVERIFY(!model.connectNodes(a, b, &reason).isEmpty());
+    QVERIFY(!model.connectNodes(b, c, &reason).isEmpty());
+    QVERIFY(model.connectNodes(c, a, &reason).isEmpty());
+    QVERIFY2(reason.contains(QStringLiteral("putaran")), qPrintable(reason));
+    QVERIFY(model.connectNodes(a, b, &reason).isEmpty());
+    QVERIFY2(reason.contains(QStringLiteral("sudah tersambung")), qPrintable(reason));
+    QVERIFY(model.connectNodes(a, a, &reason).isEmpty());
+    QVERIFY(model.connectNodes(a, QStringLiteral("hilang"), &reason).isEmpty());
+    QCOMPARE(int(model.board().edges.size()), 2);
+
+    // Referensi wajib punya sumber; isinya salinan, bukan untuk diketik pengguna
+    QVERIFY(model.addReference(CanvasSource(), QPointF(), QStringLiteral("x"), QString(), QString()).isEmpty());
+    const QString ref = model.addReference({QStringLiteral("P"), QStringLiteral("t1"), QStringLiteral("SPECIFIER"), QString()},
+                                           QPointF(0, 300), QStringLiteral("Spesifikasi · T"),
+                                           QStringLiteral("SPECIFIER"), QStringLiteral("isi"));
+    QVERIFY(model.node(ref)->kind == CanvasNodeKind::Artifact);
+    const QString taskRef = model.addReference({QStringLiteral("P"), QStringLiteral("t1"), QString(), QString()},
+                                               QPointF(0, 600), QStringLiteral("T"), QStringLiteral("CODER"), QString());
+    QVERIFY(model.node(taskRef)->kind == CanvasNodeKind::Task);
+    QVERIFY(!model.setText(ref, QStringLiteral("ubah")));
+    QVERIFY(!model.setColor(b, QStringLiteral("rose")));
+    QVERIFY(model.setColor(a, QStringLiteral("rose")));
+    QVERIFY(!model.setColor(a, QStringLiteral("rose")));
+    QVERIFY(!model.setStepOptions(a, QStringLiteral("opus"), QString(), CanvasStepOutput::Document));
+    QVERIFY(model.setStepOptions(b, QStringLiteral(" opus "), QStringLiteral("high"), CanvasStepOutput::Tasks));
+    QCOMPARE(model.node(b)->model, QStringLiteral("opus"));
+
+    // Ukuran tidak bisa di bawah batas minimum; grow hanya membesarkan kartu
+    QVERIFY(model.resizeNode(a, QSizeF(10, 10)));
+    QCOMPARE(model.node(a)->size, CanvasNode::minimumSize(CanvasNodeKind::Note));
+    QVERIFY(model.setText(a, QStringLiteral("A panjang"), QSizeF(500, 40)));
+    QCOMPARE(model.node(a)->size, QSizeF(500, CanvasNode::minimumSize(CanvasNodeKind::Note).height()));
+    QVERIFY(!model.setText(a, QStringLiteral("A panjang")));
+
+    // Salinan: id baru, garis di antara kartu yang disalin ikut, hasil langkah AI tidak
+    QVERIFY(model.setStepResult(b, answer(QStringLiteral("hasil")), QDateTime::currentDateTimeUtc()));
+    const QStringList copies = model.duplicateNodes({a, b, QStringLiteral("hilang")}, QPointF(40, 40));
+    QCOMPARE(int(copies.size()), 2);
+    QCOMPARE(model.node(copies.at(0))->pos, model.node(a)->pos + QPointF(40, 40));
+    QVERIFY(!model.node(copies.at(1))->hasResult());
+    QVERIFY(model.board().hasEdge(copies.at(0), copies.at(1)));
+    QVERIFY(!model.board().hasEdge(copies.at(1), c));
+
+    // Menghapus kartu ikut menghapus garisnya
+    QSignalSpy edgeRemoved(&model, &CanvasModel::edgeRemoved);
+    QVERIFY(model.removeNodes({b}));
+    QCOMPARE(edgeRemoved.count(), 2);
+    QVERIFY(!model.board().hasEdge(a, b));
+    QVERIFY(!model.removeNodes({b}));
+    QVERIFY(!model.moveNodes({{b, QPointF(1, 1)}}));
+}
+
+void TestSwarm::canvasModelUndoRedoKeepsAgentResults() {
+    CanvasModel model(QStringLiteral("P"));
+    const QString note = model.addNote(QPointF(0, 0), QStringLiteral("ide"));
+    const QString step = model.addStep(QPointF(300, 0), QStringLiteral("kembangkan"));
+    QVERIFY(model.moveNodes({{note, QPointF(50, 60)}}));
+    QVERIFY(!model.moveNodes({{note, QPointF(50, 60)}}));   // tidak berubah: bukan langkah undo
+    QVERIFY(model.canUndo());
+    QVERIFY(!model.canRedo());
+
+    QVERIFY(model.setStepResult(step, answer(QStringLiteral("hasil")), QDateTime::currentDateTimeUtc()));
+    QSignalSpy reset(&model, &CanvasModel::boardReset);
+    QVERIFY(model.undo());
+    QCOMPARE(reset.count(), 1);
+    QCOMPARE(model.node(note)->pos, QPointF(0, 0));
+    QCOMPARE(model.node(step)->result.message, QStringLiteral("hasil"));   // hasil agent tidak ikut dibatalkan
+    QVERIFY(model.canRedo());
+    QVERIFY(model.redo());
+    QCOMPARE(model.node(note)->pos, QPointF(50, 60));
+
+    // Salinan isi referensi juga bukan riwayat
+    const QString ref = model.addReference({QStringLiteral("P"), QStringLiteral("t1"), QStringLiteral("QA"), QString()},
+                                           QPointF(0, 300), QStringLiteral("Laporan QA · T"), QStringLiteral("QA"),
+                                           QStringLiteral("lama"));
+    QVERIFY(model.moveNodes({{ref, QPointF(10, 310)}}));
+    QVERIFY(model.refreshReference(ref, QStringLiteral("Laporan QA · T"), QStringLiteral("QA · disetujui"),
+                                   QStringLiteral("baru"), true));
+    QVERIFY(model.undo());
+    QCOMPARE(model.node(ref)->pos, QPointF(0, 300));
+    QCOMPARE(model.node(ref)->text, QStringLiteral("baru"));
+
+    // Undo penambahan langkah membuangnya; redo mengembalikannya beserta hasil terakhir
+    QVERIFY(model.undo());   // tambah referensi
+    QVERIFY(model.undo());   // pindah catatan
+    QVERIFY(model.undo());   // tambah langkah
+    QVERIFY(!model.node(step));
+    QVERIFY(model.redo());
+    QVERIFY(model.node(step));
+    QCOMPARE(model.node(step)->result.message, QStringLiteral("hasil"));
+
+    // Intent baru mengosongkan redo
+    QVERIFY(model.canRedo());
+    model.addNote(QPointF(0, 0));
+    QVERIFY(!model.canRedo());
+
+    // Macro: beberapa intent = satu langkah undo
+    const qsizetype before = model.board().nodes.size();
+    const qsizetype edgesBefore = model.board().edges.size();
+    model.beginMacro();
+    const QString x = model.addNote(QPointF(0, 400), QStringLiteral("x"));
+    const QString y = model.addNote(QPointF(300, 400), QStringLiteral("y"));
+    QVERIFY(!model.connectNodes(x, y).isEmpty());
+    model.endMacro();
+    QVERIFY(model.undo());
+    QCOMPARE(model.board().nodes.size(), before);
+    QCOMPARE(model.board().edges.size(), edgesBefore);
+
+    // Memuat dari disk: riwayat kosong dan tidak dianggap perubahan
+    QSignalSpy changed(&model, &CanvasModel::changed);
+    model.load(CanvasBoard());
+    QVERIFY(!model.canUndo());
+    QVERIFY(!model.canRedo());
+    QCOMPARE(changed.count(), 0);
+}
+
+void TestSwarm::canvasBoardOrdersStepsByDependency() {
+    CanvasModel model(QStringLiteral("P"));
+    const QString merge = model.addStep(QPointF(600, 0), QStringLiteral("gabung"));
+    const QString one = model.addStep(QPointF(0, 300), QStringLiteral("satu"));
+    const QString two = model.addStep(QPointF(0, 0), QStringLiteral("dua"));
+    const QString loose = model.addStep(QPointF(900, -100), QStringLiteral("lepas"));
+    const QString note = model.addNote(QPointF(-300, 0), QStringLiteral("bahan"));
+    QVERIFY(!model.connectNodes(one, merge).isEmpty());
+    QVERIFY(!model.connectNodes(two, merge).isEmpty());
+    QVERIFY(!model.connectNodes(note, one).isEmpty());
+
+    const CanvasBoard &board = model.board();
+    QCOMPARE(board.inputsOf(merge), QStringList({one, two}));
+    QCOMPARE(board.upstreamSteps(merge), QStringList({one, two}));
+    QCOMPARE(board.upstreamSteps(one), QStringList());
+    QCOMPARE(board.stepIds(), QStringList({merge, one, two, loose}));
+    // Hulu dulu; yang setara diurutkan dari atas ke bawah
+    QCOMPARE(board.stepOrder(board.stepIds()), QStringList({loose, two, one, merge}));
+    QCOMPARE(board.withUpstream(merge), QStringList({two, one, merge}));
+    QCOMPARE(board.withUpstream(one), QStringList({one}));
+    QVERIFY(board.reaches(note, merge));
+    QVERIFY(!board.reaches(merge, note));
+    QCOMPARE(board.bounds(), QRectF(-300, -100, 1500, 600));
+}
+
+void TestSwarm::canvasBoardFindsOpenSpot() {
+    CanvasBoard board;
+    const QSizeF size(200, 100);
+    QCOMPARE(board.openSpot(QRectF(QPointF(10, 20), size)), QPointF(10, 20));
+
+    CanvasNode first;
+    first.id = QStringLiteral("a");
+    first.size = size;
+    board.nodes.append(first);
+    // Tidak menimpa kartu lain dan berjarak minimal 24; jarak sama ke atas dan ke bawah: bawah dulu
+    const QPointF spot = board.openSpot(QRectF(QPointF(0, 0), size));
+    QVERIFY(!first.rect().adjusted(-24, -24, 24, 24).intersects(QRectF(spot, size)));
+    QCOMPARE(spot, QPointF(0, 150));
+    // Tempat yang sudah lapang dipakai apa adanya
+    QCOMPARE(board.openSpot(QRectF(QPointF(0, 130), size)), QPointF(0, 130));
+
+    // Kartu-kartu baru berjajar tanpa saling menimpa
+    for (int i = 0; i < 6; ++i) {
+        CanvasNode next;
+        next.id = QStringLiteral("n%1").arg(i);
+        next.size = size;
+        next.pos = board.openSpot(QRectF(QPointF(0, 0), size));
+        for (const CanvasNode &placed : std::as_const(board.nodes)) {
+            QVERIFY2(!placed.rect().intersects(next.rect()), qPrintable(next.id));
+        }
+        board.nodes.append(next);
+    }
+}
+
+void TestSwarm::canvasWorkflowResolvesReferences() {
+    QTemporaryDir dir;
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("data.csv")), "a,b\n1,2\n"));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("foto.png")), pngBytes(QSize(8, 8), Qt::red)));
+    QVERIFY(writeFile(dir.filePath(QStringLiteral("session.json")), "{}"));
+
+    TaskItem task = makeTask(QStringLiteral("t1"), QStringLiteral("CODER"), QStringLiteral("TTT"));
+    task.title = QStringLiteral("Login");
+    task.subtext = QStringLiteral("Halaman login baru");
+    StageRun first = stageRun(QStringLiteral("SPECIFIER"), true, QStringLiteral("# Spek v1"));
+    first.decision = ReviewDecision::Revise;
+    StageRun approved = stageRun(QStringLiteral("SPECIFIER"), true, QStringLiteral("# Spek v2"));
+    approved.decision = ReviewDecision::Approved;
+    // Run gagal sesudahnya tidak menggantikan dokumen yang sudah ada
+    const StageRun timedOut = stageRun(QStringLiteral("SPECIFIER"), false, QStringLiteral("melewati batas"),
+                                       QStringLiteral("timeout"));
+    const StageRun coder = stageRun(QStringLiteral("CODER"), true, QStringLiteral("Ringkasan perubahan"));
+    task.runs = {first, approved, timedOut, coder};
+    task.attachments = QStringList({"data.csv", "foto.png", "hilang.csv"});
+
+    QCOMPARE(CanvasWorkflow::documentRun(task, QStringLiteral("SPECIFIER"))->result.message, QStringLiteral("# Spek v2"));
+    QVERIFY(!CanvasWorkflow::documentRun(task, QStringLiteral("QA")));
+    QCOMPARE(CanvasWorkflow::documentLabel(QStringLiteral("ARCHITECT")), QStringLiteral("Catatan arsitektur"));
+    QCOMPARE(CanvasWorkflow::documentLabel(QStringLiteral("LAIN")), QStringLiteral("Hasil LAIN"));
+
+    const QList<CanvasWorkflow::Artifact> artifacts = CanvasWorkflow::artifactsOf(task, StageCatalog::standard().keys());
+    QStringList labels;
+    for (const CanvasWorkflow::Artifact &artifact : artifacts) {
+        labels.append(artifact.label);
+    }
+    QCOMPARE(labels, QStringList({"Spesifikasi", "Ringkasan kode", "data.csv", "foto.png", "hilang.csv"}));
+    QCOMPARE(artifacts.first().detail, QStringLiteral("SPECIFIER · disetujui"));
+    QCOMPARE(artifacts.at(3).detail, QStringLiteral("foto"));
+    QCOMPARE(artifacts.at(2).source.attachment, QStringLiteral("data.csv"));
+
+    const CanvasWorkflow::Reference spec = CanvasWorkflow::resolve(
+        {QStringLiteral("TTT"), QStringLiteral("t1"), QStringLiteral("SPECIFIER"), QString()}, task, dir.path());
+    QVERIFY(spec.available);
+    QCOMPARE(spec.title, QStringLiteral("Spesifikasi · Login"));
+    QCOMPARE(spec.detail, QStringLiteral("SPECIFIER · disetujui"));
+    QCOMPARE(spec.text, QStringLiteral("# Spek v2"));
+
+    const CanvasWorkflow::Reference whole = CanvasWorkflow::resolve(
+        {QStringLiteral("TTT"), QStringLiteral("t1"), QString(), QString()}, task, dir.path());
+    QCOMPARE(whole.title, QStringLiteral("Login"));
+    QCOMPARE(whole.detail, QStringLiteral("CODER"));
+    QVERIFY2(whole.text.contains(QStringLiteral("Stage: CODER")), qPrintable(whole.text));
+    QVERIFY(whole.text.contains(QStringLiteral("Halaman login baru")));
+    QVERIFY(whole.text.contains(QStringLiteral("Hasil run terakhir (CODER):\nRingkasan perubahan")));
+
+    const CanvasWorkflow::Reference csv = CanvasWorkflow::resolve(
+        {QStringLiteral("TTT"), QStringLiteral("t1"), QString(), QStringLiteral("data.csv")}, task, dir.path());
+    QVERIFY(csv.available);
+    QVERIFY2(csv.text.contains(QStringLiteral("a,b")), qPrintable(csv.text));
+    QCOMPARE(csv.detail, QStringLiteral("lampiran · Login"));
+
+    const CanvasSource photoSource{QStringLiteral("TTT"), QStringLiteral("t1"), QString(), QStringLiteral("foto.png")};
+    const CanvasWorkflow::Reference photo = CanvasWorkflow::resolve(photoSource, task, dir.path());
+    QVERIFY(photo.available);
+    QVERIFY(photo.text.isEmpty());
+    CanvasNode photoNode;
+    photoNode.kind = CanvasNodeKind::Artifact;
+    photoNode.source = photoSource;
+    QVERIFY(CanvasWorkflow::isImageReference(photoNode));
+
+    // File yang hilang, nama di luar daftar lampiran, atau task yang sudah tidak ada
+    QVERIFY(!CanvasWorkflow::resolve({QStringLiteral("TTT"), QStringLiteral("t1"), QString(), QStringLiteral("hilang.csv")},
+                                     task, dir.path()).available);
+    QVERIFY(!CanvasWorkflow::resolve({QStringLiteral("TTT"), QStringLiteral("t1"), QString(), QStringLiteral("session.json")},
+                                     task, dir.path()).available);
+    QVERIFY(!CanvasWorkflow::resolve({QStringLiteral("TTT"), QStringLiteral("t1"), QString(), QStringLiteral("../session.json")},
+                                     task, dir.path()).available);
+    QVERIFY(!CanvasWorkflow::resolve({QStringLiteral("TTT"), QStringLiteral("t1"), QStringLiteral("SPECIFIER"), QString()},
+                                     std::nullopt, dir.path()).available);
+
+    task.state = TaskState::AwaitingReview;
+    QCOMPARE(CanvasWorkflow::resolve({QStringLiteral("TTT"), QStringLiteral("t1"), QString(), QString()}, task, dir.path()).detail,
+             QStringLiteral("CODER · menunggu review"));
+    const CanvasWorkflow::Reference missingRun = CanvasWorkflow::resolve(
+        {QStringLiteral("TTT"), QStringLiteral("t1"), QStringLiteral("QA"), QString()}, task, dir.path());
+    QVERIFY(missingRun.available);
+    QCOMPARE(missingRun.text, QStringLiteral("(Belum ada hasil run di QA.)"));
+}
+
+void TestSwarm::canvasWorkflowComposesStepPrompt() {
+    CanvasModel model(QStringLiteral("P"));
+    const QString note = model.addNote(QPointF(0, 0), QStringLiteral("Pengguna sering lupa password"));
+    const QString spec = model.addReference({QStringLiteral("TTT"), QStringLiteral("t1"), QStringLiteral("SPECIFIER"), QString()},
+                                            QPointF(0, 200), QStringLiteral("Spesifikasi · Login"),
+                                            QStringLiteral("SPECIFIER · disetujui"),
+                                            QStringLiteral("# Spek\n```cpp\nint x;\n```"));
+    const QString risks = model.addStep(QPointF(300, 0), QStringLiteral("## Daftar risiko\nfokus keamanan"));
+    const QString failed = model.addStep(QPointF(300, 300), QStringLiteral("Gagal"));
+    const QString step = model.addStep(QPointF(600, 0), QStringLiteral("Gabungkan jadi rencana"));
+    for (const QString &input : {note, spec, risks, failed}) {
+        QVERIFY(!model.connectNodes(input, step).isEmpty());
+    }
+    model.setStepResult(risks, answer(QStringLiteral("- risiko A")), QDateTime::currentDateTimeUtc());
+    model.setStepResult(failed, AgentResult::failure(QStringLiteral("timeout"), QStringLiteral("melewati batas")),
+                        QDateTime::currentDateTimeUtc());
+
+    const QString prompt = CanvasWorkflow::stepPrompt(model.board(), step);
+    QVERIFY2(prompt.startsWith(QStringLiteral("# Langkah brainstorming\n\nGabungkan jadi rencana\n\n# Bahan dari kanvas\n"
+                                              "4 kartu tersambung ke langkah ini")), qPrintable(prompt));
+    QVERIFY2(prompt.contains(QStringLiteral("## 1. Catatan\nPengguna sering lupa password\n")), qPrintable(prompt));
+    // Dokumen dipagari lebih panjang dari blok kode di dalamnya
+    QVERIFY2(prompt.contains(QStringLiteral("## 2. Spesifikasi · Login\nSPECIFIER · disetujui · project TTT\n"
+                                            "````markdown\n# Spek\n```cpp\nint x;\n```\n````\n")), qPrintable(prompt));
+    QVERIFY2(prompt.contains(QStringLiteral("## 3. Hasil langkah AI \"Daftar risiko\"\n```markdown\n- risiko A\n```\n")),
+             qPrintable(prompt));
+    QVERIFY2(prompt.contains(QStringLiteral("## 4. Hasil langkah AI \"Gagal\"\n(run terakhirnya tidak berhasil")),
+             qPrintable(prompt));
+    QVERIFY(!prompt.contains(QStringLiteral("melewati batas")));
+    QVERIFY(prompt.contains(QStringLiteral("# Bentuk jawaban\nJawab dalam Markdown")));
+    QVERIFY(!prompt.contains(QStringLiteral("```json")));
+
+    QVERIFY(model.setStepOptions(step, QString(), QString(), CanvasStepOutput::Tasks));
+    QVERIFY(CanvasWorkflow::stepPrompt(model.board(), step).contains(QStringLiteral("blok ```json")));
+
+    // Bahan yang panjang dipotong di akhir baris
+    QString longText;
+    for (int i = 0; i < 4000; ++i) {
+        longText += QStringLiteral("baris %1 berisi catatan panjang\n").arg(i);
+    }
+    const QString big = model.addNote(QPointF(0, 600), longText);
+    QVERIFY(!model.connectNodes(big, step).isEmpty());
+    const QString cut = CanvasWorkflow::stepPrompt(model.board(), step);
+    QVERIFY(cut.contains(QStringLiteral("(Dipotong: ")));
+    QVERIFY(cut.size() < longText.size());
+    QVERIFY(cut.contains(QStringLiteral("baris 0 berisi")));
+
+    // Langkah yang belum bisa jalan, dan langkah tanpa bahan
+    const QString empty = model.addStep(QPointF(900, 0));
+    QVERIFY(!CanvasWorkflow::stepProblem(model.board(), empty).isEmpty());
+    QVERIFY(!model.connectNodes(note, empty).isEmpty());
+    QVERIFY(CanvasWorkflow::stepProblem(model.board(), empty).isEmpty());
+    QVERIFY(!CanvasWorkflow::stepProblem(model.board(), note).isEmpty());
+    const QString lone = model.addStep(QPointF(1200, 0), QStringLiteral("Sendirian"));
+    QVERIFY(CanvasWorkflow::stepProblem(model.board(), lone).isEmpty());
+    QVERIFY(CanvasWorkflow::stepPrompt(model.board(), lone).contains(QStringLiteral("Tidak ada kartu yang tersambung")));
+}
+
+void TestSwarm::canvasWorkflowBuildsTaskBrief() {
+    CanvasModel model(QStringLiteral("P"));
+    const QString spec = model.addReference({QStringLiteral("TTT"), QStringLiteral("t1"), QStringLiteral("SPECIFIER"), QString()},
+                                            QPointF(0, 0), QStringLiteral("Spesifikasi · Login"),
+                                            QStringLiteral("SPECIFIER · disetujui"), QStringLiteral("# Spek login"));
+    const QString note = model.addNote(QPointF(300, 0), QStringLiteral("- Tambahkan login dengan **magic link**"));
+    QVERIFY(!model.connectNodes(spec, note).isEmpty());
+
+    QCOMPARE(CanvasWorkflow::suggestedTitle(*model.node(note)), QStringLiteral("Tambahkan login dengan magic link"));
+    const QString brief = CanvasWorkflow::taskBrief(model.board(), {note});
+    QVERIFY2(brief.startsWith(QStringLiteral("- Tambahkan login dengan **magic link**\n\n## Bahan dari kanvas\n\n"
+                                             "### Spesifikasi · Login\nSPECIFIER · disetujui · project TTT\n"
+                                             "```markdown\n# Spek login\n```")), qPrintable(brief));
+
+    // Langkah AI: hasilnya yang dibawa, judul dari baris pertama hasil
+    const QString step = model.addStep(QPointF(600, 0), QStringLiteral("Rancang alur"));
+    QCOMPARE(CanvasWorkflow::suggestedTitle(*model.node(step)), QStringLiteral("Rancang alur"));
+    model.setStepResult(step, answer(QStringLiteral("# Alur magic link\n1. Kirim email")), QDateTime::currentDateTimeUtc());
+    QCOMPARE(CanvasWorkflow::suggestedTitle(*model.node(step)), QStringLiteral("Alur magic link"));
+    QVERIFY(CanvasWorkflow::taskBrief(model.board(), {step}).startsWith(QStringLiteral("# Alur magic link")));
+
+    // Referensi yang dipilih langsung jadi bagian sendiri; tidak diulang sebagai bahan
+    const QString both = CanvasWorkflow::taskBrief(model.board(), {note, spec});
+    QCOMPARE(int(both.count(QStringLiteral("# Spek login"))), 1);
+    QCOMPARE(CanvasWorkflow::suggestedTitle(*model.node(spec)), QStringLiteral("Spesifikasi · Login"));
+    QCOMPARE(CanvasWorkflow::suggestedTitle(*model.node(model.addNote(QPointF()))), QStringLiteral("Task dari kanvas"));
+}
+
+void TestSwarm::canvasWorkflowParsesTaskProposals() {
+    // Blok json yang string-nya berisi ``` tetap terbaca utuh; judul ganda dan tanpa judul dilewati
+    const QString answer = QStringLiteral(
+        "Berikut usulan task.\n\n```json\n[\n"
+        "  {\"title\": \"Form login\", \"category\": \"Component\", \"instructions\": \"Buat form.\\n```cpp\\nLogin();\\n```\"},\n"
+        "  {\"judul\": \"Reset password\", \"instruksi\": [\"Kirim email\", \"Batasi 3x\"]},\n"
+        "  {\"title\": \"form login\"},\n"
+        "  {\"category\": \"bug\"}\n"
+        "]\n```\nSelesai.");
+    QString error;
+    const QList<CanvasWorkflow::TaskProposal> proposals = CanvasWorkflow::parseTaskProposals(answer, &error);
+    QCOMPARE(int(proposals.size()), 2);
+    QCOMPARE(proposals.at(0).title, QStringLiteral("Form login"));
+    QCOMPARE(proposals.at(0).category, QStringLiteral("component"));
+    QVERIFY(proposals.at(0).instructions.contains(QStringLiteral("```cpp\nLogin();")));
+    QCOMPARE(proposals.at(1).title, QStringLiteral("Reset password"));
+    QCOMPARE(proposals.at(1).category, QStringLiteral("feature"));
+    QCOMPARE(proposals.at(1).instructions, QStringLiteral("Kirim email\nBatasi 3x"));
+
+    // Bentuk {"tasks": [...]}, blok terakhir yang menang
+    const QString two = QStringLiteral("```json\n[{\"title\": \"Lama\"}]\n```\nRevisi:\n```json\n{\"tasks\": [{\"title\": \"Baru\"}]}\n```");
+    QCOMPARE(CanvasWorkflow::parseTaskProposals(two).first().title, QStringLiteral("Baru"));
+
+    // Tanpa blok kode: array JSON di dalam teks
+    QCOMPARE(int(CanvasWorkflow::parseTaskProposals(QStringLiteral("Task: [{\"title\": \"X\"}] itu saja")).size()), 1);
+
+    // Paling banyak kMaxProposals
+    QJsonArray many;
+    for (int i = 0; i < 20; ++i) {
+        many.append(QJsonObject{{QStringLiteral("title"), QStringLiteral("Task %1").arg(i)}});
+    }
+    const QString manyAnswer = QStringLiteral("```json\n%1\n```").arg(QString::fromUtf8(QJsonDocument(many).toJson()));
+    QCOMPARE(int(CanvasWorkflow::parseTaskProposals(manyAnswer).size()), CanvasWorkflow::kMaxProposals);
+
+    QVERIFY(CanvasWorkflow::parseTaskProposals(QStringLiteral("Tidak ada daftar."), &error).isEmpty());
+    QVERIFY(error.contains(QStringLiteral("```json")));
+}
+
+void TestSwarm::canvasAutomationRunsStepsInDependencyOrder() {
+    CanvasModel model(QStringLiteral("P"));
+    FakeAgentRuntime runtime;
+    QStringList built;
+    CanvasAutomation automation(model, runtime, canvasLauncher(model, &built));
+    const QString a = model.addStep(QPointF(0, 0), QStringLiteral("A"));
+    const QString b = model.addStep(QPointF(300, 0), QStringLiteral("B"));
+    const QString c = model.addStep(QPointF(0, 300), QStringLiteral("C"));
+    QVERIFY(!model.connectNodes(a, b).isEmpty());
+    QSignalSpy finished(&automation, &CanvasAutomation::stepFinished);
+    QSignalSpy batch(&automation, &CanvasAutomation::batchFinished);
+
+    QVERIFY(automation.runAll());
+    // Paling banyak dua bersamaan; B menunggu hulunya
+    QCOMPARE(built, QStringList({a, c}));
+    QVERIFY(automation.state(a) == RunState::Running);
+    QVERIFY(automation.state(c) == RunState::Running);
+    QVERIFY(automation.state(b) == RunState::Queued);
+    QString reason;
+    QVERIFY(!automation.run(a, &reason));
+    QVERIFY(!reason.isEmpty());
+    QCOMPARE(runtime.sessions.first()->launch().agent.tools, QStringList({"Read", "Grep", "Glob"}));
+
+    runtime.sessions.at(0)->finishWith(answer(QStringLiteral("hasil A")));
+    QCOMPARE(model.node(a)->result.message, QStringLiteral("hasil A"));
+    // B baru disusun setelah A selesai, jadi prompt-nya memuat hasil A
+    QCOMPARE(built.last(), b);
+    QVERIFY(runtime.sessions.last()->launch().prompt.contains(QStringLiteral("hasil A")));
+
+    runtime.sessions.at(1)->finishWith(answer(QStringLiteral("hasil C")));
+    QCOMPARE(batch.count(), 0);
+    runtime.sessions.at(2)->finishWith(answer(QStringLiteral("hasil B")));
+    QCOMPARE(batch.count(), 1);
+    QCOMPARE(batch.first().at(0).toInt(), 3);
+    QCOMPARE(batch.first().at(1).toInt(), 0);
+    QCOMPARE(finished.count(), 3);
+    QVERIFY(!automation.isBusy());
+    QVERIFY(model.node(b)->finishedAt.isValid());
+
+    // Langkah beserta hulunya, urut dependensi
+    built.clear();
+    QVERIFY(automation.runWithUpstream(b));
+    QCOMPARE(built, QStringList({a}));
+    runtime.sessions.last()->finishWith(answer(QStringLiteral("hasil A2")));
+    QCOMPARE(built, QStringList({a, b}));
+    runtime.sessions.last()->finishWith(answer(QStringLiteral("hasil B2")));
+    QVERIFY(!automation.isBusy());
+
+    // Satu per satu bila batasnya 1
+    automation.setMaxConcurrent(1);
+    built.clear();
+    QVERIFY(automation.runAll());
+    QCOMPARE(int(built.size()), 1);
+    automation.cancelAll();
+    QVERIFY(!automation.isBusy());
+
+    runtime.available = false;
+    QVERIFY(!automation.run(a, &reason));
+    QCOMPARE(reason, QStringLiteral("runtime palsu dimatikan"));
+}
+
+void TestSwarm::canvasAutomationSkipsDependentsAndKeepsResults() {
+    CanvasModel model(QStringLiteral("P"));
+    FakeAgentRuntime runtime;
+    QStringList built;
+    CanvasAutomation automation(model, runtime, canvasLauncher(model, &built));
+    const QString a = model.addStep(QPointF(0, 0), QStringLiteral("A"));
+    const QString b = model.addStep(QPointF(300, 0), QStringLiteral("B"));
+    const QString c = model.addStep(QPointF(600, 0), QStringLiteral("C"));
+    const QString d = model.addStep(QPointF(0, 300), QStringLiteral("D"));
+    QVERIFY(!model.connectNodes(a, b).isEmpty());
+    QVERIFY(!model.connectNodes(b, c).isEmpty());
+    model.setStepResult(b, answer(QStringLiteral("lama")), QDateTime::currentDateTimeUtc());
+
+    QList<AgentResult> results;
+    QStringList finishedIds;
+    connect(&automation, &CanvasAutomation::stepFinished, this, [&](const QString &id, const AgentResult &result) {
+        finishedIds.append(id);
+        results.append(result);
+    });
+    QSignalSpy batch(&automation, &CanvasAutomation::batchFinished);
+
+    QVERIFY(automation.runAll());
+    QCOMPARE(built, QStringList({a, d}));
+    // A gagal: B dan C dilewati, hasil lama B tetap
+    runtime.sessions.at(0)->finishWith(AgentResult::failure(QStringLiteral("error_during_execution"), QStringLiteral("rusak")));
+    QCOMPARE(finishedIds, QStringList({a, b, c}));
+    QCOMPARE(results.at(1).outcome, QStringLiteral("skipped"));
+    QCOMPARE(results.at(2).outcome, QStringLiteral("skipped"));
+    QCOMPARE(model.node(a)->result.outcome, QStringLiteral("error_during_execution"));
+    QCOMPARE(model.node(b)->result.message, QStringLiteral("lama"));
+    QVERIFY(automation.state(b) == RunState::Idle);
+
+    // Dibatalkan: tidak menimpa hasil apa pun
+    automation.cancel(d);
+    QCOMPARE(results.last().outcome, QStringLiteral("cancelled"));
+    QVERIFY(!model.node(d)->hasResult());
+    QCOMPARE(batch.count(), 1);
+    QCOMPARE(batch.first().at(0).toInt(), 0);
+    QCOMPARE(batch.first().at(1).toInt(), 2);
+    QCOMPARE(batch.first().at(2).toInt(), 2);
+
+    // Gagal disiapkan (mis. folder kerja belum dipilih): alasannya dilaporkan, hasil lama tetap
+    const QString again = model.addStep(QPointF(0, 1200), QStringLiteral("R2"));
+    CanvasAutomation strict(model, runtime, canvasLauncher(model, &built, again));
+    QVERIFY(strict.run(again));
+    QCOMPARE(results.size(), 4);   // automation lain tidak ikut melapor
+    QVERIFY(!model.node(again)->hasResult());
+    QVERIFY(!strict.isBusy());
+
+    // Antrean yang dibatalkan sebelum mulai melewati hilirnya
+    automation.setMaxConcurrent(1);
+    finishedIds.clear();
+    results.clear();
+    QVERIFY(automation.runWithUpstream(c));   // A, lalu B, lalu C
+    QVERIFY(automation.state(b) == RunState::Queued);
+    automation.cancel(b);
+    QCOMPARE(finishedIds, QStringList({b, c}));
+    QCOMPARE(results.at(1).outcome, QStringLiteral("skipped"));
+    QVERIFY(automation.state(a) == RunState::Running);
+    automation.cancelAll();
+    QVERIFY(!automation.isBusy());
+}
+
+void TestSwarm::canvasAutomationStopsRemovedSteps() {
+    CanvasModel model(QStringLiteral("P"));
+    FakeAgentRuntime runtime;
+    QStringList built;
+    CanvasAutomation automation(model, runtime, canvasLauncher(model, &built));
+    const QString step = model.addStep(QPointF(0, 0), QStringLiteral("hapus aku"));
+    QVERIFY(automation.run(step));
+    QVERIFY(automation.state(step) == RunState::Running);
+    QVERIFY(model.removeNodes({step}));
+    QVERIFY(!automation.isBusy());
+
+    // Undo penambahan langkah yang sedang berjalan juga menghentikannya
+    const QString added = model.addStep(QPointF(0, 0), QStringLiteral("dari undo"));
+    QVERIFY(automation.run(added));
+    QVERIFY(model.undo());
+    QVERIFY(!model.node(added));
+    QVERIFY(!automation.isBusy());
+    QVERIFY(automation.state(added) == RunState::Idle);
+}
+
+void TestSwarm::fileManagerRoundTripsCanvas() {
+    const QString project = QStringLiteral("KanvasUji");
+    CanvasBoard board;
+    CanvasNode note;
+    note.id = QStringLiteral("n1");
+    note.pos = QPointF(1, 2);
+    note.size = CanvasNode::defaultSize(CanvasNodeKind::Note);
+    note.text = QStringLiteral("ide");
+    board.nodes = {note};
+
+    QString error;
+    FileManager files;
+    QVERIFY(files.canvasFilePath(project).endsWith(QStringLiteral("/projects/KanvasUji/canvas.json")));
+    QVERIFY2(files.saveCanvas(project, board.toJson(), &error), qPrintable(error));
+    {
+        FileManager reader;
+        const QJsonObject loaded = reader.loadCanvas(project, &error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        const std::optional<CanvasBoard> back = CanvasBoard::fromJson(loaded, &error);
+        QVERIFY2(back, qPrintable(error));
+        QCOMPARE(back->nodes.first().text, QStringLiteral("ide"));
+    }
+
+    // Belum ada: objek kosong tanpa error
+    QVERIFY(files.loadCanvas(QStringLiteral("KanvasBelumAda"), &error).isEmpty());
+    QVERIFY(error.isEmpty());
+
+    // Debounce: baru tertulis saat flush
+    board.nodes.first().text = QStringLiteral("ide baru");
+    files.scheduleCanvasSave(project, board.toJson());
+    files.flushPendingSaves();
+    QCOMPARE(CanvasBoard::fromJson(files.loadCanvas(project, &error), &error)->nodes.first().text, QStringLiteral("ide baru"));
+
+    // File rusak tidak ditimpa saat dibaca, lalu disisihkan supaya kanvas bisa mulai baru
+    const QString path = files.canvasFilePath(project);
+    QVERIFY(writeFile(path, "{ rusak"));
+    QVERIFY(files.loadCanvas(project, &error).isEmpty());
+    QVERIFY(error.contains(QStringLiteral("rusak")));
+    QCOMPARE(readFile(path), QByteArray("{ rusak"));
+    const QString aside = files.setAsideCanvas(project);
+    QVERIFY(!aside.isEmpty());
+    QVERIFY(!QFile::exists(path));
+    QCOMPARE(readFile(aside), QByteArray("{ rusak"));
+
+    // Hapus project: simpanan tertunda dibatalkan dan foldernya hilang
+    files.scheduleCanvasSave(project, board.toJson());
+    QVERIFY(files.deleteProject(project, &error));
+    files.flushPendingSaves();
+    QVERIFY(!QFile::exists(path));
+    QVERIFY(!QFileInfo::exists(QFileInfo(path).absolutePath()));
 }
 
 int main(int argc, char *argv[]) {

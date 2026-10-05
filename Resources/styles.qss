@@ -130,6 +130,7 @@ QToolTip {
 /* Tombol Header Swimlane - "Close", folder kerja agent, branch aktif folder kerja, dan folder
    referensi (outline navy) */
 QPushButton#btnClose,
+QPushButton#btnCanvas,
 QPushButton#btnWorkingDir,
 QPushButton#btnBranch,
 QPushButton#btnReferenceDirs {
@@ -143,6 +144,7 @@ QPushButton#btnReferenceDirs {
 }
 
 QPushButton#btnClose:hover,
+QPushButton#btnCanvas:hover,
 QPushButton#btnWorkingDir:hover,
 QPushButton#btnBranch:hover,
 QPushButton#btnReferenceDirs:hover {
@@ -151,6 +153,7 @@ QPushButton#btnReferenceDirs:hover {
 }
 
 QPushButton#btnClose:pressed,
+QPushButton#btnCanvas:pressed,
 QPushButton#btnWorkingDir:pressed,
 QPushButton#btnBranch:pressed,
 QPushButton#btnReferenceDirs:pressed {
@@ -1785,4 +1788,405 @@ QPlainTextEdit#consoleCardLog {
     font-family: "Cascadia Code", Consolas, "Courier New", monospace;
     font-size: 10px;
     color: #1f2937;
+}
+
+/* ============ Kanvas brainstorm (CanvasPage) ============ */
+
+/* Toolbar di atas kanvas: kartu putih seperti header swimlane */
+QWidget#canvasToolbar {
+    background-color: #ffffff;
+    border: 1px solid #e2d5c1;
+    border-radius: 8px;
+}
+
+QLabel#canvasTitle {
+    background: transparent;
+    font-size: 14px;
+    font-weight: bold;
+    color: #33517a;
+    padding: 0px 4px;
+}
+
+QFrame#canvasToolbarSeparator {
+    background-color: #e7ddcd;
+    border: none;
+    margin: 4px 2px;
+}
+
+/* Tombol toolbar: varian lewat dynamic property "variant" (secondary, toggle, primary) */
+QWidget#canvasToolbar QPushButton[variant="secondary"],
+QWidget#canvasToolbar QPushButton[variant="toggle"],
+QToolButton#btnCanvasAddStep {
+    background-color: #ffffff;
+    color: #33517a;
+    border: 1px solid #b9c6da;
+    border-radius: 4px;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+QWidget#canvasToolbar QPushButton[variant="secondary"]:hover,
+QWidget#canvasToolbar QPushButton[variant="toggle"]:hover,
+QToolButton#btnCanvasAddStep:hover {
+    background-color: #eef2f8;
+    border: 1px solid #33517a;
+}
+
+QWidget#canvasToolbar QPushButton[variant="secondary"]:pressed,
+QToolButton#btnCanvasAddStep:pressed {
+    background-color: #dfe7f2;
+}
+
+QWidget#canvasToolbar QPushButton[variant="secondary"]:disabled {
+    color: #b3aa9c;
+    border: 1px solid #dfe5ee;
+}
+
+QWidget#canvasToolbar QPushButton[variant="toggle"]:checked {
+    background-color: #33517a;
+    color: #ffffff;
+    border: 1px solid #33517a;
+}
+
+QWidget#canvasToolbar QPushButton[variant="primary"] {
+    background-color: #8f5f31;
+    color: #ffffff;
+    border: 1px solid #8f5f31;
+    border-radius: 4px;
+    padding: 4px 12px;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+QWidget#canvasToolbar QPushButton[variant="primary"]:hover {
+    background-color: #7a5024;
+    border: 1px solid #7a5024;
+}
+
+QWidget#canvasToolbar QPushButton[variant="primary"]:pressed {
+    background-color: #6a441f;
+    border: 1px solid #6a441f;
+}
+
+QPushButton#btnCanvasZoomOut,
+QPushButton#btnCanvasZoomIn {
+    padding: 0px;
+    font-size: 15px;
+}
+
+/* Ruang untuk panah menu "Langkah AI" (dokumen / pecah jadi task) */
+QToolButton#btnCanvasAddStep {
+    padding-right: 20px;
+}
+
+QToolButton#btnCanvasAddStep::menu-button {
+    border: none;
+    border-left: 1px solid #dfe5ee;
+    width: 16px;
+}
+
+QToolButton#btnCanvasAddStep::menu-arrow {
+    image: url(:/icons/chevron-down.svg);
+    width: 9px;
+    height: 9px;
+}
+
+QToolButton#btnCanvasUndo,
+QToolButton#btnCanvasRedo {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 3px;
+}
+
+QToolButton#btnCanvasUndo:hover,
+QToolButton#btnCanvasRedo:hover {
+    background-color: #eef2f8;
+    border: 1px solid #b9c6da;
+}
+
+QLabel#canvasStatus {
+    background: transparent;
+    font-size: 11px;
+    color: #6f6557;
+    padding-left: 6px;
+}
+
+QLabel#canvasStatus[error="true"] {
+    color: #9b2c1f;
+}
+
+QLabel#canvasZoomLevel {
+    background: transparent;
+    min-width: 42px;
+    font-size: 11px;
+    font-weight: bold;
+    color: #3d3730;
+}
+
+/* Kanvas tak terbatas: latar dan grid titiknya dilukis CanvasView */
+QGraphicsView#canvasView {
+    border: 1px solid #e2d5c1;
+}
+
+QLabel#canvasEmptyHint {
+    background: transparent;
+    font-size: 12px;
+    color: #8a7f70;
+}
+
+/* Panel samping: pustaka artefak (kiri) dan detail kartu (kanan) */
+QWidget#canvasLibrary,
+QWidget#canvasInspector {
+    background-color: #fbf8f3;
+    border: 1px solid #e2d5c1;
+    border-radius: 8px;
+}
+
+QLabel#canvasPanelTitle {
+    background: transparent;
+    font-size: 10px;
+    font-weight: bold;
+    color: #a9743f;
+    letter-spacing: 0.5px;
+}
+
+QLabel#canvasPanelHint {
+    background: transparent;
+    font-size: 11px;
+    color: #8a7f70;
+}
+
+QLabel#canvasInspectorTitle {
+    background: transparent;
+    font-size: 14px;
+    font-weight: bold;
+    color: #33517a;
+}
+
+QLabel#canvasInspectorTips {
+    background: transparent;
+    font-size: 12px;
+    color: #3d3730;
+}
+
+QLabel#canvasInspectorWarning {
+    background-color: #fbeccf;
+    color: #7a4a12;
+    border: 1px solid #b7791f;
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 11px;
+}
+
+QLabel#canvasStepStatus {
+    background: transparent;
+    font-size: 11px;
+    color: #6f6557;
+}
+
+QLabel#canvasStepStatus[error="true"] {
+    color: #9b2c1f;
+}
+
+QLineEdit#canvasLibraryFilter {
+    background-color: #ffffff;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    padding: 5px 8px;
+    font-size: 11px;
+    color: #111827;
+}
+
+QLineEdit#canvasLibraryFilter:focus {
+    border: 1px solid #a9743f;
+}
+
+QTreeWidget#canvasLibraryTree {
+    background-color: #ffffff;
+    border: 1px solid #e7ddcd;
+    border-radius: 6px;
+    font-family: "Segoe UI", sans-serif;
+    font-size: 12px;
+    color: #3d3730;
+    outline: none;
+}
+
+QTreeWidget#canvasLibraryTree::item {
+    padding: 3px 2px;
+}
+
+QTreeWidget#canvasLibraryTree::item:hover {
+    background-color: #f8f1e6;
+}
+
+QTreeWidget#canvasLibraryTree::item:selected {
+    background-color: #f2e3d1;
+    color: #3d3730;
+}
+
+QPlainTextEdit#canvasInspectorText {
+    background-color: #ffffff;
+    border: 1px solid #e2d5c1;
+    border-radius: 4px;
+    padding: 4px;
+    font-family: "Segoe UI", sans-serif;
+    font-size: 12px;
+    color: #111827;
+}
+
+QPlainTextEdit#canvasInspectorText:focus {
+    border: 1px solid #a9743f;
+}
+
+QComboBox#canvasInspectorCombo {
+    background-color: #ffffff;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 11px;
+    color: #111827;
+}
+
+QComboBox#canvasInspectorCombo:focus {
+    border: 1px solid #a9743f;
+}
+
+QComboBox#canvasInspectorCombo::drop-down {
+    border: none;
+    width: 18px;
+}
+
+QComboBox#canvasInspectorCombo::down-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+    margin-right: 8px;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid #8a7f70;
+}
+
+QComboBox#canvasInspectorCombo QAbstractItemView {
+    background-color: #ffffff;
+    border: 1px solid #d1d5db;
+    outline: none;
+    selection-background-color: #f2e3d1;
+    selection-color: #3d3730;
+}
+
+/* Pilihan warna kertas catatan: kotak warna di dalam ikon, yang terpilih bergaris coklat */
+QToolButton#canvasSwatch {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 2px;
+}
+
+QToolButton#canvasSwatch:hover {
+    border: 1px solid #b9c6da;
+}
+
+QToolButton#canvasSwatch:checked {
+    border: 2px solid #a9743f;
+}
+
+/* Aksi di panel detail: sekunder (outline navy), utama (coklat), hapus (merah) */
+QPushButton#btnCanvasSecondary,
+QPushButton#btnCanvasDanger {
+    background-color: #ffffff;
+    color: #33517a;
+    border: 1px solid #b9c6da;
+    border-radius: 4px;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+QPushButton#btnCanvasSecondary:hover {
+    background-color: #eef2f8;
+    border: 1px solid #33517a;
+}
+
+QPushButton#btnCanvasSecondary:disabled {
+    color: #b3aa9c;
+    border: 1px solid #dfe5ee;
+}
+
+QPushButton#btnCanvasDanger {
+    color: #9b2c1f;
+    border: 1px solid #e2c4bd;
+}
+
+QPushButton#btnCanvasDanger:hover {
+    background-color: #9b2c1f;
+    color: #ffffff;
+    border: 1px solid #9b2c1f;
+}
+
+QPushButton#btnCanvasPrimary,
+QPushButton#btnCanvasRunStep {
+    background-color: #8f5f31;
+    color: #ffffff;
+    border: 1px solid #8f5f31;
+    border-radius: 4px;
+    padding: 5px 12px;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+QPushButton#btnCanvasPrimary:hover,
+QPushButton#btnCanvasRunStep:hover {
+    background-color: #7a5024;
+    border: 1px solid #7a5024;
+}
+
+QPushButton#btnCanvasPrimary:disabled {
+    background-color: #d9c6ac;
+    border: 1px solid #d9c6ac;
+    color: #ffffff;
+}
+
+/* Selama langkah berjalan tombolnya jadi "Hentikan" */
+QPushButton#btnCanvasRunStep[busy="true"] {
+    background-color: #ffffff;
+    color: #9b2c1f;
+    border: 1px solid #e2c4bd;
+}
+
+QPushButton#btnCanvasRunStep[busy="true"]:hover {
+    background-color: #9b2c1f;
+    color: #ffffff;
+    border: 1px solid #9b2c1f;
+}
+
+/* Menu klik kanan kanvas dan menu tombol "Langkah AI" */
+QMenu#canvasContextMenu {
+    background-color: #ffffff;
+    border: 1px solid #e2d5c1;
+    border-radius: 6px;
+    padding: 4px 0px;
+    font-size: 11px;
+    color: #3d3730;
+}
+
+QMenu#canvasContextMenu::item {
+    padding: 5px 28px 5px 12px;
+    background: transparent;
+}
+
+QMenu#canvasContextMenu::item:selected {
+    background-color: #f2e3d1;
+    color: #3d3730;
+}
+
+QMenu#canvasContextMenu::item:disabled {
+    color: #b3a898;
+}
+
+QMenu#canvasContextMenu::separator {
+    height: 1px;
+    background: #efe6d8;
+    margin: 3px 8px;
 }

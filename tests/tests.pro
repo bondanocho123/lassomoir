@@ -16,6 +16,10 @@ win32: LIBS += -ladvapi32
 SOURCES += \
     tst_swarm.cpp \
     ../AgentAccess.cpp \
+    ../CanvasAutomation.cpp \
+    ../CanvasBoard.cpp \
+    ../CanvasModel.cpp \
+    ../CanvasWorkflow.cpp \
     ../ClaudeCli.cpp \
     ../CSharpMetrics.cpp \
     ../ClassDiagram.cpp \
@@ -52,6 +56,10 @@ HEADERS += \
     ../AgentDefinition.h \
     ../AgentRuntime.h \
     ../AgentTypes.h \
+    ../CanvasAutomation.h \
+    ../CanvasBoard.h \
+    ../CanvasModel.h \
+    ../CanvasWorkflow.h \
     ../AppSettings.h \
     ../ClaudeCli.h \
     ../CSharpMetrics.h \

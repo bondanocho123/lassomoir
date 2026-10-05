@@ -62,6 +62,18 @@ public:
     // Ikut terhapus bersama project di deleteProject().
     QString worktreeDirectory(const QString &projectId, const QString &taskId) const;
 
+    // Kanvas brainstorm project: <AppData>/projects/<projectId>/canvas.json. Isinya dirakit
+    // CanvasBoard; di sini hanya dibaca/ditulis secara atomik, dengan debounce yang sama seperti
+    // session.json, dan ikut terhapus bersama project.
+    QString canvasFilePath(const QString &projectId) const;
+    // Objek kosong bila belum ada. File yang tidak terbaca: objek kosong + *error, file tidak disentuh.
+    QJsonObject loadCanvas(const QString &projectId, QString *error);
+    bool saveCanvas(const QString &projectId, const QJsonObject &canvas, QString *error);
+    void scheduleCanvasSave(const QString &projectId, const QJsonObject &canvas);
+    // canvas.json yang tidak terbaca dipindah ke canvas-rusak-<waktu>.json supaya kanvas bisa mulai
+    // baru tanpa membuang isinya; path barunya, atau kosong bila gagal
+    QString setAsideCanvas(const QString &projectId);
+
 signals:
     void saveFailed(const QString &projectId, QString *reason);
 
@@ -73,6 +85,7 @@ private:
     QTimer* m_saveTimer;
     QSet<QString> m_pendingProjects;
     QMap<QString, QList<TaskItem>> m_pendingSaves;
+    QMap<QString, QJsonObject> m_pendingCanvases;   // projectId -> isi canvas.json yang menunggu debounce
     QMap<QString, QString> m_workingDirs;   // projectId -> folder kerja agent
     QMap<QString, QStringList> m_referenceDirs;   // projectId -> folder referensi
     QJsonObject taskToJson(TaskItem task);

@@ -161,6 +161,12 @@ Konvensi nama sinyal di kode sudah tepat dan dipertahankan: **peristiwa** dalam 
 | `AgentRuntime` / `AgentSession` ✅ | Infra | Kontrak menjalankan satu agent; implementasi `ClaudeCodeRuntime`/`ClaudeCodeSession` (`QProcess`, stdin, timeout, cancel) | Parsing stream-json sendiri |
 | `ClaudeCli` · `StreamJsonParser` ✅ | Infra | Flag & lokasi CLI · format stream-json | Menyimpan state |
 | `RunLogFormatter` ✅ | View | Teks baris konsol untuk kejadian run | — |
+| `CanvasWorkspace` ✅ | View | Satu kanvas brainstorm per project (§3.6): muat/simpan `canvas.json` lewat `FileManager`, segarkan kartu referensi saat task berubah, rakit `AgentLaunch` langkah AI, buat task usulan lewat `TaskManager` | Mengubah task tanpa `TaskManager` |
+| `CanvasPage` · `CanvasInspector` · `CanvasLibrary` ✅ | View | Halaman kanvas: toolbar, Pustaka artefak lintas project (sumber drag), panel Detail kartu terpilih | Menyimpan data kanvas sendiri |
+| `CanvasView` · `CanvasNodeItem` · `CanvasEdgeItem` ✅ | View | Kanvas tak terbatas (`QGraphicsView`): geser, zoom di kursor, seleksi, sambungan titik → kartu; semua perubahan dikirim sebagai intent ke `CanvasModel` | Mengubah kartu tanpa model |
+| `CanvasModel` · `CanvasBoard` ✅ | Domain | Satu-satunya pengubah isi kanvas: validasi intent (garis tanpa putaran), undo/redo, JSON, urutan dependensi langkah AI | Menyentuh file atau proses |
+| `CanvasWorkflow` ✅ | Domain | Isi kartu referensi dari task, prompt langkah AI, ringkasan task baru, parsing usulan task | UI, proses |
+| `CanvasAutomation` ✅ | Infra | Antrean langkah AI urut dependensi (maks. 2 paralel), hasil ke `CanvasModel` | Tahu soal `QProcess` |
 | `BridgeServer` ⬜ | Infra | `QLocalServer` untuk bridge MCP, validasi *run key* | Menulis file sesi |
 
 `TaskManager` dibuat di `main.cpp` lalu diteruskan ke `MainWindow` (mis. `MainWindow(TaskManager *tasks, QWidget *parent = nullptr)`), supaya logika domain bisa dites tanpa membuka jendela.
@@ -183,6 +189,42 @@ Konvensi nama sinyal di kode sudah tepat dan dipertahankan: **peristiwa** dalam 
 5. Event `result` → metrik disimpan ke `StageRun`; bila `subtype` = `success`, `structured_output` dibaca sebagai hasil stage.
 6. `TaskManager::finishRun()`: stage ber-gate **atau** `status` = `"blocked"` → `AwaitingReview`; selain itu → `Idle` di stage berikutnya.
 7. Tanpa event `result`, exit code ≠ 0, timeout, atau `subtype` selain `success` → `failRun()` → `Failed` beserta alasannya.
+
+### 3.6 Kanvas brainstorm ✅
+
+Ruang brainstorm pribadi per project berupa kanvas tak terbatas. Isinya ide sendiri dan artefak dari banyak task, juga dari project lain yang sedang terbuka. Langkah AI di kanvas mengolah bahan yang disambungkan ke sana menjadi dokumen atau task baru untuk pipeline.
+
+Dibuka lewat tombol **Kanvas** di header swimlane atau **View › Kanvas Brainstorm** (`Ctrl+Shift+K`). Tombol **Board** kembali ke kanban. Tata letaknya: toolbar di atas, **Pustaka artefak** di kiri, kanvas di tengah, **Detail** kartu terpilih di kanan.
+
+| Kartu | Isi | Asal |
+|---|---|---|
+| Catatan | Teks bebas; 5 warna kertas | Klik dua kali di ruang kosong, `N`, tombol **Catatan** |
+| Artefak | Dokumen hasil satu stage (run sukses terakhir) atau satu lampiran task; foto tampil sebagai gambar | Seret dari Pustaka, atau klik dua kali di sana |
+| Task | Judul, stage, dan status task | Seret baris task dari Pustaka; task usulan |
+| Langkah AI | Instruksi + model/effort; keluaran **dokumen Markdown** atau **task untuk pipeline** | `L`, tombol **Langkah AI** |
+
+Aturan:
+
+1. **Sambungan berarah.** Tarik dari titik ● di tepi kanan kartu ke kartu lain. Dilepas di ruang kosong, sambungan membuat catatan baru. Garis yang masuk ke langkah AI adalah bahan agent. Garis yang membuat putaran ditolak (`CanvasModel::connectNodes`), jadi langkah AI selalu bisa diurutkan.
+2. **Referensi hidup.** Kartu artefak dan task disegarkan setiap kali task sumbernya berubah. Bila sumbernya hilang (task dihapus, project ditutup), salinan terakhir tetap dipakai dan kartunya ditandai *tidak tersedia*.
+3. **Menjalankan.** **▶ Jalankan** menjalankan satu langkah, **Jalankan + hulunya** menyertakan langkah hulu, dan **▶ Jalankan alur** di toolbar menjalankan semua langkah. Urutannya mengikuti dependensi, dengan paling banyak 2 agent paralel. Hasil langkah hulu menjadi bahan langkah hilir. Hulu yang gagal membuat hilirnya dilewati (`skipped`), bukan dijalankan dengan bahan kurang.
+4. **Agent baca-saja.** `claude -p` berjalan di folder kerja project dengan tool `Read`, `Grep`, `Glob` saja dan prompt peran `:/prompts/BRAINSTORM.md`. Bawaannya sonnet/medium. Bahan dibatasi 24 000 karakter per kartu dan 90 000 per langkah. Foto lampiran ikut sebagai blok gambar.
+5. **Hasil ke pipeline.** Hasil langkah bisa disalin menjadi catatan. **Jadikan task…** membuka form *New Task* yang sudah berisi judul dan ringkasan bahan yang tersambung. Langkah berkeluaran *task* menjawab dengan blok ` ```json ` berisi `[{title, category, instructions}]` (maks. 12). **Buat N task di WAITING** menambahkannya lewat `TaskManager`, lalu kartu task-nya muncul di kanvas, tersambung ke langkahnya.
+6. **Undo/redo** (`Ctrl+Z` / `Ctrl+Y`, 200 langkah) mencakup kartu, garis, posisi, dan isi. Hasil langkah AI dan salinan isi referensi tidak ikut di-undo, supaya run yang sudah dibayar tidak hilang.
+7. **Penempatan.** Kartu yang posisinya tidak dipilih pengguna (dari Pustaka lewat klik dua kali, task usulan, hasil yang dijadikan catatan) ditaruh di tempat lapang terdekat (`CanvasBoard::openSpot`), tidak menimpa kartu lain.
+8. **Zoom.** Di bawah 60% kartu dilukis ringkas: pita warna jenisnya dan judul berhuruf ±11 px di layar, supaya papan besar tetap terbaca sebagai peta.
+
+| Pintasan | Aksi |
+|---|---|
+| Klik dua kali di ruang kosong · `N` | Catatan baru |
+| `L` | Langkah AI baru |
+| `Enter` / `F2` | Edit catatan; kartu lain: buka di Detail |
+| `Ctrl+Enter` · `Ctrl+Shift+Enter` | Jalankan langkah AI terpilih · beserta hulunya |
+| `Del` · `Ctrl+D` · `Ctrl+A` | Hapus · duplikat · pilih semua |
+| Panah (`Shift` = 50 px) | Geser kartu terpilih |
+| `Spasi` + seret · tombol tengah | Geser kanvas |
+| `Ctrl` + scroll · `+` / `−` · `Ctrl+0` · `Ctrl+1` | Zoom di kursor · zoom · tampilkan semua · 100% |
+| `Esc` | Batalkan sambungan / kosongkan pilihan; di editor catatan: simpan |
 
 ---
 
@@ -352,6 +394,7 @@ SwarmForge/
 └── projects/
     └── spacewar/
         ├── session.json             satu-satunya file state, hanya ditulis aplikasi
+        ├── canvas.json              kanvas brainstorm project (§4.6)
         ├── artifacts/<taskId>/      spec.md, qa-report.md, …
         └── runs/<taskId>/CODER-2/
             ├── prompt.md
@@ -407,6 +450,37 @@ Aturan:
 4. Stage tidak dikenal → task dipindah ke `WAITING` + log `ERROR`.
 5. State `Running` saat dimuat → `Failed` (lihat §4.2).
 6. Waktu dalam ISO-8601 UTC.
+
+### 4.6 File kanvas
+
+`projects/<projectId>/canvas.json` dirakit `CanvasBoard::toJson()` dan ditulis `FileManager` dengan aturan yang sama seperti `session.json` (`QSaveFile`, debounce ±500 ms, sekali lagi saat aplikasi ditutup). File ini ikut terhapus bersama project.
+
+```json
+{
+  "schemaVersion": 1,
+  "view": { "x": 700, "y": 200, "zoom": 0.75 },
+  "nodes": [
+    { "id": "4f0c…", "kind": "note", "x": 380, "y": -20, "width": 220, "height": 150,
+      "text": "Ide: login tanpa password", "color": "amber" },
+    { "id": "9b2e…", "kind": "artifact", "x": 0, "y": 0, "width": 280, "height": 180,
+      "source": { "projectId": "TTT", "taskId": "1001", "stage": "SPECIFIER" },
+      "title": "Spesifikasi · Login magic link", "detail": "SPECIFIER · disetujui", "text": "# Spesifikasi …" },
+    { "id": "c71d…", "kind": "step", "x": 760, "y": 60, "width": 300, "height": 200,
+      "text": "Gabungkan bahan ini jadi rencana rilis", "model": "opus", "output": "document",
+      "run": { "success": true, "outcome": "success", "message": "# Rencana rilis …", "sessionId": "…",
+               "durationMs": 38000, "totalTokens": 21000, "costUsd": 0.08, "finishedAt": "2026-10-05T12:00:00Z" } }
+  ],
+  "edges": [ { "id": "e5a3…", "from": "9b2e…", "to": "c71d…" } ]
+}
+```
+
+Aturan:
+
+1. `id` kartu dan garis berupa UUID. `kind`: `note` · `artifact` (`source.stage` = dokumen stage, atau `source.attachment` = nama lampiran) · `task` · `step`. `model`/`effort` kosong = bawaan langkah AI; `output`: `document` | `tasks`.
+2. Kartu referensi menyimpan salinan isi sumbernya (maks. 60 000 karakter), supaya kanvas tetap bermakna setelah task sumbernya hilang. Status *tersedia* tidak disimpan; dihitung ulang saat dimuat.
+3. `schemaVersion` tidak dikenal atau JSON rusak → file dipindah ke `canvas-rusak-<yyyyMMdd-HHmmss>.json` (isinya tidak dibuang), kanvas mulai kosong, dan konsol mencatat `[KANVAS WARN]`.
+4. Kartu berjenis tidak dikenal, id ganda, dan garis yang menunjuk kartu yang tidak ada atau membuat putaran dilewati saat dimuat, masing-masing dengan peringatan.
+5. Hanya hasil run yang sudah selesai yang disimpan (`run`). Run yang masih berjalan saat aplikasi ditutup dihentikan tanpa dicatat; langkahnya tetap memegang hasil sebelumnya (bila ada) dan bisa dijalankan ulang.
 
 ---
 

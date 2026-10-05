@@ -2,6 +2,8 @@
 #include "ui_MainWindow.h"
 #include "AgentAccess.h"
 #include "BranchViewer.h"
+#include "CanvasPage.h"
+#include "CanvasWorkspace.h"
 #include "GitHistory.h"
 #include "SwimlaneWidget.h"
 #include "KanbanColumnWidget.h"
@@ -33,6 +35,7 @@
 #include <QFutureWatcher>
 #include <QtConcurrent/QtConcurrentRun>
 #include <QInputDialog>
+#include <QKeySequence>
 #include <QAbstractAnimation>
 #include <QAction>
 #include <QCursor>
@@ -99,7 +102,7 @@ constexpr int kSidebarPeekPollMs = 120;
 
 }
 
-MainWindow::MainWindow(const StageCatalog &catalog, TaskManager &tasks, SwarmCoordinator &swarm,
+MainWindow::MainWindow(const StageCatalog &catalog, TaskManager &tasks, SwarmCoordinator &swarm, AgentRuntime &runtime,
                        MermaidRenderer &mermaid, QWidget *parent)
     : QMainWindow(parent),
     ui(new Ui::MainWindow),
@@ -108,6 +111,27 @@ MainWindow::MainWindow(const StageCatalog &catalog, TaskManager &tasks, SwarmCoo
     m_swarm(swarm) {
     m_fileManager = new FileManager(this);
     ui->setupUi(this);
+
+    // Kanvas brainstorm: satu halaman per project di boardStack. Dibuat sebelum project dimuat dari
+    // disk supaya kartu referensi ikut setiap perubahan task sejak awal.
+    m_canvas = new CanvasWorkspace(m_catalog, *m_fileManager, m_tasks, runtime, &mermaid,
+                                   [this](const QString &projectId) { return ensureWorkingDirectory(projectId); }, this);
+    connect(m_canvas, &CanvasWorkspace::boardRequested, this, &MainWindow::showBoard);
+    connect(m_canvas, &CanvasWorkspace::taskDraftRequested, this, &MainWindow::createTaskFromCanvas);
+    connect(m_canvas, &CanvasWorkspace::openTaskRequested, this, [this](const QString &taskId) {
+        const std::optional<TaskItem> task = m_tasks.task(taskId);
+        if (!task) return;
+        showBoard(task->projectId);
+        openDrawer(taskId);
+    });
+    connect(m_canvas, &CanvasWorkspace::logLine, ui->consolePanel, &ConsolePanelWidget::appendLog);
+    connect(m_canvas, &CanvasWorkspace::taskLogged, this, [this](const TaskItem &task, const QString &line) {
+        logTask(task, line);
+    });
+    // Langkah AI gagal karena Claude Code-nya sendiri (hilang, belum login): notice yang sama dengan run task
+    connect(m_canvas, &CanvasWorkspace::runFailed, this, [this](const AgentResult &result) {
+        showRuntimeNotice(m_swarm.diagnose(result));
+    });
 
     // Semua kejadian run agent (dari gerombolan stage mana pun) lewat coordinator
     connect(&m_swarm, &SwarmCoordinator::runQueued, this, &MainWindow::handleRunQueued);
@@ -252,6 +276,25 @@ void MainWindow::setupMenuBar() {
     // Jendela branch & commit project yang tampil, sama dengan tombol branch di header swimlane.
     // Seperti tombol itu, hanya berlaku bila folder kerjanya repository git.
     QMenu *view = addMenu("&View");
+    // Kanvas brainstorm project yang tampil, bergantian dengan board kanban-nya
+    m_actionCanvas = view->addAction("Kanvas Brainstorm");
+    m_actionCanvas->setObjectName("actionCanvas");
+    m_actionCanvas->setCheckable(true);
+    m_actionCanvas->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_K));
+    connect(m_actionCanvas, &QAction::triggered, this, [this](bool checked) {
+        if (m_activeProjectId.isEmpty()) {
+            m_actionCanvas->setChecked(false);
+            return;
+        }
+        // Salinan id: setActiveProject menulis ulang m_activeProjectId
+        const QString projectId = m_activeProjectId;
+        if (checked) {
+            showCanvas(projectId);
+        } else {
+            showBoard(projectId);
+        }
+    });
+    view->addSeparator();
     m_actionSourceControl = view->addAction("Source Control", this, [this]() {
         showBranchViewer(m_activeProjectId);
     });
@@ -279,6 +322,8 @@ void MainWindow::setupMenuBar() {
         m_actionShowInExplorer->setEnabled(hasFolder);
         m_actionShowInTerminal->setEnabled(hasFolder);
         m_actionChangeFolder->setEnabled(hasProject);
+        m_actionCanvas->setEnabled(hasProject);
+        m_actionCanvas->setChecked(hasProject && m_canvasMode);
     });
 
     QMenu *help = addMenu("&Help");
@@ -325,7 +370,9 @@ int MainWindow::loadProjectsFromDisk() {
 }
 
 MainWindow::~MainWindow() {
-    // Perubahan yang masih menunggu debounce (mis. hasil run barusan) jangan sampai hilang
+    // Perubahan yang masih menunggu debounce (mis. hasil run barusan) jangan sampai hilang,
+    // termasuk posisi tampilan kanvas yang sedang terbuka
+    m_canvas->storeViews();
     m_fileManager->flushPendingSaves();
     delete ui;
 }
@@ -354,6 +401,7 @@ void MainWindow::addSwimlane(const QString &projectId) {
     connect(swimlane, &SwimlaneWidget::branchViewRequested, this, [this](const QString &id) {
         showBranchViewer(id);
     });
+    connect(swimlane, &SwimlaneWidget::canvasRequested, this, &MainWindow::showCanvas);
 
     // Board hanya menampilkan satu project; sisanya menganggur di dalam stack
     ui->boardStack->addWidget(swimlane);
@@ -569,7 +617,19 @@ void MainWindow::setActiveProject(const QString &projectId) {
     }
 
     m_activeProjectId = projectId;
-    ui->boardStack->setCurrentWidget(swimlane);
+    if (m_canvasMode) {
+        // Halaman kanvas dibuat (dan dimuat dari disk) saat pertama kali dibuka
+        CanvasPage *page = m_canvas->page(projectId);
+        if (ui->boardStack->indexOf(page) < 0) {
+            ui->boardStack->addWidget(page);
+        }
+        ui->boardStack->setCurrentWidget(page);
+    } else {
+        ui->boardStack->setCurrentWidget(swimlane);
+    }
+    if (m_actionCanvas) {
+        m_actionCanvas->setChecked(m_canvasMode);
+    }
     refreshGitHead(projectId);
 
     // Jaga sidebar tetap sinkron bila pemanggilan datang dari luar daftar
@@ -788,19 +848,27 @@ void MainWindow::handleCardMoved(const QString &projectId, KanbanCardWidget *car
 }
 
 void MainWindow::handleNewTaskRequested(const QString &projectId) {
+    createTaskWithDialog(projectId);
+}
+
+std::optional<TaskItem> MainWindow::createTaskWithDialog(const QString &projectId, const QString &title,
+                                                         const QString &subtext) {
     NewTaskDialog dialog(projectId, m_catalog, this);
     dialog.loadBranches(m_fileManager->workingDirectory(projectId));
+    if (!title.isEmpty() || !subtext.isEmpty()) {
+        dialog.prefill(title, subtext);
+    }
     if (dialog.exec() != QDialog::Accepted) {
-        return;
+        return std::nullopt;
     }
 
     auto *swimlane = m_swimlanes.value(projectId, nullptr);
-    if (!swimlane) return;
+    if (!swimlane) return std::nullopt;
 
     TaskItem item = dialog.resultTask();
     if (!swimlane->column(item.stage)) {
         ui->consolePanel->appendLog(QString("[TASK CREATE WARN] %1: stage '%2' tidak dikenal").arg(projectId, item.stage));
-        return;
+        return std::nullopt;
     }
     item.attachments = saveAttachments(item, dialog.attachments());
 
@@ -809,6 +877,25 @@ void MainWindow::handleNewTaskRequested(const QString &projectId) {
 
     logTask(item, QString("[TASK CREATED] %1 -> %2: '%3'").arg(projectId, item.stage, item.title));
     pullBaseLater(item);
+    return item;
+}
+
+void MainWindow::showCanvas(const QString &projectId) {
+    m_canvasMode = true;
+    setActiveProject(projectId);
+}
+
+void MainWindow::showBoard(const QString &projectId) {
+    m_canvasMode = false;
+    setActiveProject(projectId);
+}
+
+void MainWindow::createTaskFromCanvas(const QString &projectId, const QString &fromNodeId, const QString &title,
+                                      const QString &brief) {
+    const std::optional<TaskItem> created = createTaskWithDialog(projectId, title, brief);
+    if (created) {
+        m_canvas->placeTasks(projectId, fromNodeId, {*created});
+    }
 }
 
 void MainWindow::handleEditTaskRequested(const QString &projectId, const QString &taskId) {
@@ -886,7 +973,16 @@ void MainWindow::removeProjectFromUi(const QString &projectId) {
     if (shown && shown->projectId == projectId) {
         m_drawerAnimator->close();
     }
+
+    // Kanvas project ini: langkah AI-nya dihentikan, isinya disimpan, halamannya dibuang
+    if (CanvasPage *page = m_canvas->existingPage(projectId)) {
+        ui->boardStack->removeWidget(page);
+    }
+    m_canvas->closeProject(projectId);
+
     m_tasks.removeProject(projectId);
+    // Kanvas project lain yang merujuk task project ini menandai kartunya tidak tersedia
+    m_canvas->tasksReloaded();
 
     // Hapus baris sidebar lebih dulu: QListWidget otomatis memindahkan seleksi
     // ke baris tetangga, dan handleProjectSelected() yang menukar halaman board.
@@ -1091,6 +1187,7 @@ void MainWindow::handleTaskAdded(const TaskItem &task) {
         // Task baru ikut dipersistenkan; tanpa ini kartu hilang saat aplikasi ditutup
         saveProject(task.projectId);
     }
+    m_canvas->taskChanged(task);
 }
 
 void MainWindow::handleTaskChanged(const TaskItem &task) {
@@ -1104,6 +1201,8 @@ void MainWindow::handleTaskChanged(const TaskItem &task) {
     ui->consolePanel->updateTask(task);
     refreshDrawer(task);
     saveProject(task.projectId);
+    // Kartu referensi di kanvas (dokumen hasil run, status task) ikut isi terbaru
+    m_canvas->taskChanged(task);
 }
 
 void MainWindow::handleTaskMoved(const TaskItem &task, const QString &fromStage) {
@@ -1162,6 +1261,7 @@ void MainWindow::handleTaskRemoved(const TaskItem &task) {
     logTask(task, QString("[TASK DELETED] %1/%2 (%3)").arg(task.projectId, task.title, task.stage));
     ui->consolePanel->markTaskRemoved(task);
     removeWorktreeLater(task);
+    m_canvas->taskRemoved(task);
 }
 
 void MainWindow::handleApproveRequested(const QString &taskId, const QString &note) {

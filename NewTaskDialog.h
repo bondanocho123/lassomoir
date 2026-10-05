@@ -36,6 +36,9 @@ public:
     NewTaskDialog(const TaskItem &task, const QString &attachmentDirectory, const StageCatalog &catalog,
                   QWidget *parent = nullptr);
 
+    // Isi awal form task baru dari luar form, mis. "Jadikan task…" di kanvas brainstorm
+    void prefill(const QString &title, const QString &subtext);
+
     // Hanya valid dipanggil setelah exec() == QDialog::Accepted.
     // Mode edit: id, projectId, dan field yang tidak ada di form (status, riwayat run)
     // dibawa dari task asal. attachments masih berisi nama lampiran lama: lampiran di form
