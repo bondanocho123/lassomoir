@@ -11,11 +11,16 @@
 #include <QJsonObject>
 #include <QRegularExpression>
 
+#include <algorithm>
+
 namespace {
 
 const QString kDefaultModel = QStringLiteral("sonnet");
 const QString kDefaultEffort = QStringLiteral("medium");
 constexpr int kTimeoutMs = 15 * 60 * 1000;
+constexpr int kChatTimeoutMs = 10 * 60 * 1000;
+// Bahan chat seluruh kanvas: jatah per kartu dibagi rata supaya kartu di bawah tetap kebagian
+constexpr qsizetype kChatMinInputChars = 6000;
 
 // Bahan ringkasan task baru lebih hemat dari prompt langkah AI: isinya ikut ke setiap run task itu
 constexpr qsizetype kBriefInputChars = 12000;
@@ -253,6 +258,16 @@ AgentDefinition CanvasWorkflow::brainstormAgent(const QString &model, const QStr
     agent.effort = kDefaultEffort;
     agent.timeoutMs = kTimeoutMs;
     agent.applyTuning({model, effort});
+    return agent;
+}
+
+AgentDefinition CanvasWorkflow::chatAgent(const QString &model) {
+    AgentDefinition agent = brainstormAgent(model);
+    QFile file(QStringLiteral(":/prompts/BRAINSTORM_CHAT.md"));
+    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        agent.rolePrompt = QString::fromUtf8(file.readAll()).trimmed();
+    }
+    agent.timeoutMs = kChatTimeoutMs;
     return agent;
 }
 
@@ -536,6 +551,136 @@ QString CanvasWorkflow::taskBrief(const CanvasBoard &board, const QStringList &n
         appendMaterials(lines, inputs, QStringLiteral("###"), false, kBriefInputChars, kBriefInputsChars);
     }
     return lines.join(QLatin1Char('\n')).trimmed();
+}
+
+QString CanvasWorkflow::cardName(const CanvasNode &node) {
+    QString name;
+    switch (node.kind) {
+    case CanvasNodeKind::Note:
+        name = firstLine(node.text);
+        if (name.isEmpty()) {
+            name = QStringLiteral("Catatan kosong");
+        }
+        break;
+    case CanvasNodeKind::Step:
+        name = firstLine(node.text);
+        if (name.isEmpty()) {
+            name = QStringLiteral("Langkah AI");
+        }
+        break;
+    case CanvasNodeKind::Artifact:
+    case CanvasNodeKind::Task:
+        name = node.title.isEmpty() ? QStringLiteral("Referensi") : node.title;
+        break;
+    }
+    return elided(name.simplified(), 48);
+}
+
+QStringList CanvasWorkflow::chatContext(const CanvasBoard &board, const QStringList &contextIds) {
+    QList<const CanvasNode *> nodes;
+    if (contextIds.isEmpty()) {
+        for (const CanvasNode &node : board.nodes) {
+            nodes.append(&node);
+        }
+    } else {
+        for (const QString &id : contextIds) {
+            const CanvasNode *node = board.node(id);
+            if (node && !nodes.contains(node)) {
+                nodes.append(node);
+            }
+        }
+    }
+    std::stable_sort(nodes.begin(), nodes.end(), [](const CanvasNode *a, const CanvasNode *b) {
+        if (!qFuzzyCompare(a->pos.y() + 1.0, b->pos.y() + 1.0)) {
+            return a->pos.y() < b->pos.y();
+        }
+        return a->pos.x() < b->pos.x();
+    });
+    QStringList ids;
+    for (const CanvasNode *node : std::as_const(nodes)) {
+        ids.append(node->id);
+    }
+    return ids;
+}
+
+QString CanvasWorkflow::chatContextLabel(const CanvasBoard &board, const QStringList &contextIds) {
+    const QStringList ids = chatContext(board, contextIds);
+    if (contextIds.isEmpty()) {
+        return ids.isEmpty() ? QStringLiteral("kanvas masih kosong")
+                             : QStringLiteral("seluruh kanvas · %1 kartu").arg(ids.size());
+    }
+    if (ids.isEmpty()) {
+        return QStringLiteral("kartu bahannya sudah tidak ada");
+    }
+    QStringList names;
+    for (const QString &id : ids) {
+        if (names.size() == 3) {
+            names.append(QStringLiteral("+%1 lagi").arg(ids.size() - 3));
+            break;
+        }
+        names.append(cardName(*board.node(id)));
+    }
+    return QStringLiteral("%1 kartu: %2").arg(ids.size()).arg(names.join(QStringLiteral(", ")));
+}
+
+QString CanvasWorkflow::chatPrompt(const CanvasBoard &board, const QStringList &contextIds,
+                                   const QList<ChatTurn> &history, const QString &question) {
+    const QStringList ids = chatContext(board, contextIds);
+    QList<Material> materials;
+    for (const QString &id : ids) {
+        materials.append(materialOf(*board.node(id)));
+    }
+    QStringList lines = {QStringLiteral("# Bahan dari kanvas")};
+    if (materials.isEmpty()) {
+        lines.append(QStringLiteral("Tidak ada kartu yang jadi bahan; jawab dari percakapan dan kode di folder kerja."));
+    } else if (contextIds.isEmpty()) {
+        lines.append(QStringLiteral("Seluruh kartu di kanvas (%1 kartu), urut posisinya dari atas ke bawah.").arg(materials.size()));
+    } else {
+        lines.append(QStringLiteral("%1 kartu yang dipilih pengguna untuk pertanyaan ini.").arg(materials.size()));
+    }
+    const qsizetype perItem = materials.isEmpty()
+                                  ? kInputChars
+                                  : qBound(kChatMinInputChars, kInputsChars / materials.size(), kInputChars);
+    appendMaterials(lines, materials, QStringLiteral("##"), true, perItem, kInputsChars);
+
+    // Pesan terbaru didahulukan sampai jumlah atau panjangnya habis, lalu ditulis urut waktu
+    QStringList turns;
+    qsizetype budget = kChatHistoryChars;
+    qsizetype skipped = 0;
+    for (qsizetype i = history.size() - 1; i >= 0; --i) {
+        const ChatTurn &turn = history.at(i);
+        const QString text = turn.text.trimmed();
+        if (text.isEmpty()) {
+            continue;
+        }
+        if (turns.size() >= kChatHistoryTurns || budget <= 0) {
+            ++skipped;
+            continue;
+        }
+        qsizetype omitted = 0;
+        QString kept = truncated(text, qMin(kChatTurnChars, budget), &omitted);
+        budget -= kept.size();
+        if (omitted > 0) {
+            kept += QStringLiteral("\n(dipotong)");
+        }
+        turns.prepend(QStringLiteral("**%1:** %2").arg(turn.fromUser ? QStringLiteral("Pengguna") : QStringLiteral("Kamu"), kept));
+    }
+    if (!turns.isEmpty()) {
+        lines.append(QString());
+        lines.append(QStringLiteral("# Percakapan sebelumnya"));
+        if (skipped > 0) {
+            lines.append(QStringLiteral("(%1 pesan yang lebih lama tidak disertakan.)").arg(skipped));
+        }
+        for (const QString &turn : std::as_const(turns)) {
+            lines.append(QString());
+            lines.append(turn);
+        }
+    }
+
+    lines.append(QString());
+    lines.append(QStringLiteral("# Pertanyaan"));
+    lines.append(question.trimmed());
+    return lines.join(QLatin1Char('\n')) + QLatin1Char('\n');
 }
 
 QList<CanvasWorkflow::TaskProposal> CanvasWorkflow::parseTaskProposals(const QString &answer, QString *error) {

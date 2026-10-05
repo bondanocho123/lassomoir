@@ -2190,3 +2190,123 @@ QMenu#canvasContextMenu::separator {
     background: #efe6d8;
     margin: 3px 8px;
 }
+
+/* Chat tanya jawab kanvas (CanvasChatPanel), bergantian dengan Detail di panel kanan */
+QWidget#canvasChatPanel {
+    background-color: #fbf8f3;
+    border: 1px solid #e2d5c1;
+    border-radius: 8px;
+}
+
+QScrollArea#canvasChatScroll,
+QWidget#canvasChatList {
+    background: transparent;
+    border: none;
+}
+
+QLabel#canvasChatSuggestion {
+    background-color: #ffffff;
+    border: 1px solid #e2d5c1;
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 12px;
+    color: #33517a;
+}
+
+QLabel#canvasChatSuggestion:hover {
+    background-color: #eef2f8;
+    border: 1px solid #33517a;
+}
+
+QFrame#canvasChatUser {
+    background-color: #e3ebf6;
+    border: 1px solid #ccd9ea;
+    border-radius: 10px;
+}
+
+QLabel#canvasChatUserText {
+    background: transparent;
+    font-size: 12px;
+    color: #2f4b73;
+}
+
+QFrame#canvasChatAgent {
+    background-color: #ffffff;
+    border: 1px solid #e7ddcd;
+    border-radius: 10px;
+}
+
+QLabel#canvasChatAgentName {
+    background: transparent;
+    font-size: 10px;
+    font-weight: bold;
+    color: #a9743f;
+    letter-spacing: 0.5px;
+}
+
+QLabel#canvasChatMeta {
+    background: transparent;
+    font-size: 10px;
+    color: #8a7f70;
+}
+
+QLabel#canvasChatActivity {
+    background: transparent;
+    font-size: 11px;
+    font-style: italic;
+    color: #6f6557;
+}
+
+QLabel#canvasChatFailure {
+    background: transparent;
+    font-size: 12px;
+    color: #9b2c1f;
+}
+
+QTextBrowser#canvasChatAnswer {
+    background-color: #ffffff;
+    border: none;
+    padding: 0px;
+    font-family: "Segoe UI", sans-serif;
+    font-size: 13px;
+    color: #3d3730;
+}
+
+QLabel#canvasChatContext {
+    background: transparent;
+    font-size: 11px;
+    color: #3d3730;
+}
+
+QPlainTextEdit#canvasChatInput {
+    background-color: #ffffff;
+    border: 1px solid #e2d5c1;
+    border-radius: 6px;
+    padding: 4px;
+    font-family: "Segoe UI", sans-serif;
+    font-size: 12px;
+    color: #111827;
+}
+
+QPlainTextEdit#canvasChatInput:focus {
+    border: 1px solid #a9743f;
+}
+
+QPushButton#btnCanvasChatAction {
+    background: transparent;
+    border: 1px solid #e2d5c1;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 11px;
+    color: #33517a;
+}
+
+QPushButton#btnCanvasChatAction:hover {
+    background-color: #eef2f8;
+    border: 1px solid #33517a;
+}
+
+QPushButton#btnCanvasChatAction:disabled {
+    color: #b3aa9c;
+    border: 1px solid #efe6d8;
+}

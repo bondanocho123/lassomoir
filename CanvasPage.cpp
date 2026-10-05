@@ -1,5 +1,7 @@
 #include "CanvasPage.h"
 #include "CanvasAutomation.h"
+#include "CanvasChat.h"
+#include "CanvasChatPanel.h"
 #include "CanvasInspector.h"
 #include "CanvasItems.h"
 #include "CanvasLibrary.h"
@@ -11,7 +13,9 @@
 #include <QLabel>
 #include <QMenu>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QSplitter>
+#include <QStackedWidget>
 #include <QStyle>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -54,15 +58,22 @@ QFrame *separator(QWidget *parent) {
 
 }
 
-CanvasPage::CanvasPage(CanvasModel &model, CanvasAutomation &automation, MermaidRenderer *renderer, QWidget *parent)
-    : QWidget(parent), m_model(model), m_automation(automation) {
+CanvasPage::CanvasPage(CanvasModel &model, CanvasAutomation &automation, CanvasChat &chat, MermaidRenderer *renderer,
+                       QWidget *parent)
+    : QWidget(parent), m_model(model), m_automation(automation), m_chat(chat) {
     setObjectName("canvasPage");
 
     m_view = new CanvasView(model, this);
     m_library = new CanvasLibrary(this);
     m_library->setMinimumWidth(180);
+    // Panel kanan: Detail kartu terpilih atau Chat, bergantian
     m_inspector = new CanvasInspector(renderer, this);
-    m_inspector->setMinimumWidth(260);
+    m_chatPanel = new CanvasChatPanel(chat, renderer, this);
+    m_side = new QStackedWidget(this);
+    m_side->setObjectName("canvasSidePanel");
+    m_side->addWidget(m_inspector);
+    m_side->addWidget(m_chatPanel);
+    m_side->setMinimumWidth(260);
 
     auto *toolbar = new QWidget(this);
     toolbar->setObjectName("canvasToolbar");
@@ -120,6 +131,9 @@ CanvasPage::CanvasPage(CanvasModel &model, CanvasAutomation &automation, Mermaid
     m_toggleInspector->setCheckable(true);
     m_toggleInspector->setChecked(true);
     m_toggleInspector->setToolTip(QStringLiteral("Tampilkan/sembunyikan detail kartu terpilih"));
+    m_toggleChat = toolbarButton(QStringLiteral("Chat"), "btnCanvasToggleChat", "toggle", toolbar);
+    m_toggleChat->setCheckable(true);
+    m_toggleChat->setToolTip(QStringLiteral("Tanya jawab dengan agent tentang kartu terpilih atau seluruh kanvas (C)"));
 
     auto *tools = new QHBoxLayout(toolbar);
     tools->setContentsMargins(10, 6, 10, 6);
@@ -145,6 +159,7 @@ CanvasPage::CanvasPage(CanvasModel &model, CanvasAutomation &automation, Mermaid
     tools->addWidget(separator(toolbar));
     tools->addWidget(m_toggleLibrary);
     tools->addWidget(m_toggleInspector);
+    tools->addWidget(m_toggleChat);
 
     m_splitter = new QSplitter(Qt::Horizontal, this);
     m_splitter->setObjectName("canvasSplitter");
@@ -152,7 +167,7 @@ CanvasPage::CanvasPage(CanvasModel &model, CanvasAutomation &automation, Mermaid
     m_splitter->setChildrenCollapsible(false);
     m_splitter->addWidget(m_library);
     m_splitter->addWidget(m_view);
-    m_splitter->addWidget(m_inspector);
+    m_splitter->addWidget(m_side);
     m_splitter->setStretchFactor(1, 1);
     m_splitter->setSizes({220, 780, 320});
 
@@ -178,7 +193,7 @@ CanvasPage::CanvasPage(CanvasModel &model, CanvasAutomation &automation, Mermaid
     auto addStepAtCenter = [this](CanvasStepOutput output) {
         const QSizeF size = CanvasNode::defaultSize(CanvasNodeKind::Step);
         m_view->addStepAt(m_view->centerScenePos() - QPointF(size.width() / 2, size.height() / 2), output);
-        m_toggleInspector->setChecked(true);
+        showPanel(SidePanel::Detail);
     };
     connect(addStep, &QToolButton::clicked, this, [addStepAtCenter]() { addStepAtCenter(CanvasStepOutput::Document); });
     connect(documentStep, &QAction::triggered, this, [addStepAtCenter]() { addStepAtCenter(CanvasStepOutput::Document); });
@@ -191,7 +206,17 @@ CanvasPage::CanvasPage(CanvasModel &model, CanvasAutomation &automation, Mermaid
     connect(zoomIn, &QPushButton::clicked, m_view, &CanvasView::zoomIn);
     connect(fit, &QPushButton::clicked, m_view, &CanvasView::fitAll);
     connect(m_toggleLibrary, &QPushButton::toggled, m_library, &QWidget::setVisible);
-    connect(m_toggleInspector, &QPushButton::toggled, m_inspector, &QWidget::setVisible);
+    // Tombol panel yang aktif menutup panel kanan; tombol lainnya berpindah panel
+    connect(m_toggleInspector, &QPushButton::clicked, this, [this](bool checked) {
+        checked ? showPanel(SidePanel::Detail) : hidePanel();
+    });
+    connect(m_toggleChat, &QPushButton::clicked, this, [this](bool checked) {
+        if (checked) {
+            openChat();
+        } else {
+            hidePanel();
+        }
+    });
 
     // Kanvas
     connect(m_view, &CanvasView::zoomChanged, this, [this](qreal zoom) {
@@ -199,7 +224,7 @@ CanvasPage::CanvasPage(CanvasModel &model, CanvasAutomation &automation, Mermaid
     });
     connect(m_view, &CanvasView::selectionChanged, this, &CanvasPage::scheduleInspectorRefresh);
     connect(m_view, &CanvasView::nodeActivated, this, [this](const QString &id) {
-        m_toggleInspector->setChecked(true);
+        showPanel(SidePanel::Detail);
         if (m_view->selectedNodeIds() != QStringList{id}) {
             m_view->selectNodes({id});
         }
@@ -212,6 +237,12 @@ CanvasPage::CanvasPage(CanvasModel &model, CanvasAutomation &automation, Mermaid
     connect(m_view, &CanvasView::runRequested, this, &CanvasPage::runRequested);
     connect(m_view, &CanvasView::createTaskRequested, this, &CanvasPage::createTaskRequested);
     connect(m_view, &CanvasView::openTaskRequested, this, &CanvasPage::openTaskRequested);
+    connect(m_view, &CanvasView::chatRequested, this, [this](const QStringList &ids) {
+        if (m_view->selectedNodeIds() != ids) {
+            m_view->selectNodes(ids);
+        }
+        openChat();
+    });
     connect(m_library, &CanvasLibrary::sourceActivated, this, [this](const CanvasSource &source) {
         emit sourcesDropped({source}, m_view->centerScenePos(), false);
     });
@@ -252,6 +283,30 @@ CanvasPage::CanvasPage(CanvasModel &model, CanvasAutomation &automation, Mermaid
         m_model.removeNodes(ids);
     });
 
+    // Chat
+    connect(m_chatPanel, &CanvasChatPanel::askRequested, this, &CanvasPage::chatAskRequested);
+    connect(m_chatPanel, &CanvasChatPanel::noteRequested, this, &CanvasPage::noteFromChat);
+    connect(m_chatPanel, &CanvasChatPanel::contextActivated, this, [this](const QStringList &ids) {
+        QStringList existing;
+        for (const QString &id : ids) {
+            if (m_model.node(id)) {
+                existing.append(id);
+            }
+        }
+        if (existing.isEmpty()) {
+            showMessage(QStringLiteral("Kartu bahan pertanyaan itu sudah tidak ada di kanvas"), true);
+            return;
+        }
+        m_view->selectNodes(existing);
+        m_view->centerOnNode(existing.first());
+    });
+    // Jawaban yang datang selagi panel chat tertutup ditandai di tombolnya
+    connect(&m_chat, &CanvasChat::finished, this, [this]() {
+        if (!isChatOpen()) {
+            m_toggleChat->setText(QStringLiteral("Chat •"));
+        }
+    });
+
     refreshToolbar();
     refreshInspector();
 }
@@ -261,9 +316,11 @@ CanvasPage::~CanvasPage() {
     // model dan automation yang hidup lebih lama, tidak boleh lagi sampai ke halaman yang setengah hancur
     m_view->blockSignals(true);
     m_inspector->blockSignals(true);
+    m_chatPanel->blockSignals(true);
     m_library->blockSignals(true);
     disconnect(&m_model, nullptr, this, nullptr);
     disconnect(&m_automation, nullptr, this, nullptr);
+    disconnect(&m_chat, nullptr, this, nullptr);
 }
 
 QString CanvasPage::projectId() const {
@@ -336,6 +393,7 @@ void CanvasPage::refreshInspector() {
     const QString single = ids.size() == 1 ? ids.first() : QString();
     m_inspector->showSelection(m_model.board(), ids, single.isEmpty() ? RunState::Idle : m_automation.state(single),
                                m_live.value(single));
+    m_chatPanel->setContext(m_model.board(), ids);
 }
 
 void CanvasPage::refreshToolbar() {
@@ -359,4 +417,86 @@ void CanvasPage::noteFromResult(const QString &stepId) {
     m_model.endMacro();
     m_view->selectNodes({note});
     showMessage(QStringLiteral("Hasil disalin ke catatan baru yang bisa diedit"));
+}
+
+void CanvasPage::showPanel(SidePanel panel) {
+    m_side->setCurrentWidget(panel == SidePanel::Chat ? static_cast<QWidget *>(m_chatPanel) : m_inspector);
+    m_side->show();
+    m_toggleInspector->setChecked(panel == SidePanel::Detail);
+    m_toggleChat->setChecked(panel == SidePanel::Chat);
+    if (panel == SidePanel::Chat) {
+        m_toggleChat->setText(QStringLiteral("Chat"));
+    }
+}
+
+void CanvasPage::hidePanel() {
+    m_side->hide();
+    m_toggleInspector->setChecked(false);
+    m_toggleChat->setChecked(false);
+}
+
+bool CanvasPage::isChatOpen() const {
+    return m_side->isVisible() && m_side->currentWidget() == m_chatPanel;
+}
+
+void CanvasPage::openChat() {
+    showPanel(SidePanel::Chat);
+    m_chatPanel->setContext(m_model.board(), m_view->selectedNodeIds());
+    m_chatPanel->focusInput();
+}
+
+void CanvasPage::showChatError(const QString &reason) {
+    if (!isChatOpen()) {
+        showPanel(SidePanel::Chat);
+    }
+    m_chatPanel->showError(reason);
+}
+
+void CanvasPage::noteFromChat(const QString &answerId) {
+    const CanvasChatMessage *answer = m_chat.message(answerId);
+    if (!answer || answer->text.trimmed().isEmpty()) {
+        return;
+    }
+    const CanvasChatMessage *question = m_chat.message(answer->replyTo);
+    QString text = answer->text.trimmed();
+    QStringList sources;
+    if (question) {
+        // Pertanyaannya jadi baris pertama: judul catatan di kanvas
+        QString asked = question->text.simplified();
+        if (asked.size() > 200) {
+            asked = asked.left(199).trimmed() + QChar(0x2026);
+        }
+        text = QStringLiteral("> %1\n\n%2").arg(asked, text);
+        for (const QString &id : question->contextIds) {
+            if (m_model.node(id)) {
+                sources.append(id);
+            }
+        }
+    }
+
+    // Di kanan kartu bahannya, atau di tengah tampilan bila bahannya seluruh kanvas
+    const QSizeF size(320, 260);
+    QPointF anchor = m_view->centerScenePos() - QPointF(size.width() / 2, size.height() / 2);
+    if (!sources.isEmpty()) {
+        QRectF bounds;
+        for (const QString &id : std::as_const(sources)) {
+            const QRectF rect = m_model.node(id)->rect();
+            bounds = bounds.isNull() ? rect : bounds.united(rect);
+        }
+        anchor = QPointF(bounds.right() + 100, bounds.top());
+    }
+    const QPointF pos = m_model.board().openSpot(QRectF(anchor, size));
+    m_model.beginMacro();
+    const QString note = m_model.addNote(pos, text, QStringLiteral("sky"));
+    m_model.resizeNode(note, size);
+    // Garis dari bahannya, selama masih terbaca (bukan puluhan garis)
+    if (sources.size() <= 6) {
+        for (const QString &id : std::as_const(sources)) {
+            m_model.connectNodes(id, note);
+        }
+    }
+    m_model.endMacro();
+    m_view->selectNodes({note});
+    m_view->centerOnNode(note);
+    showMessage(QStringLiteral("Jawaban chat disalin ke catatan baru di kanvas"));
 }

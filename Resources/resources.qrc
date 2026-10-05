@@ -80,6 +80,7 @@
         <file>prompts/HARDENER.md</file>
         <file>prompts/QA.md</file>
         <file>prompts/BRAINSTORM.md</file>
+        <file>prompts/BRAINSTORM_CHAT.md</file>
         <file>vendor/mermaid.min.js</file>
     </qresource>
 </RCC>

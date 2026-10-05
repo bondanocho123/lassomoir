@@ -392,7 +392,7 @@ void CanvasInspector::showEmpty(const CanvasBoard &board) {
         "biarkan langkah AI mengolahnya.</p>"
         "<p style='color:#6f6557; line-height:140%'>"
         "<b>Klik dua kali</b> di ruang kosong: catatan baru<br>"
-        "<b>N</b> catatan · <b>L</b> langkah AI · <b>Del</b> hapus<br>"
+        "<b>N</b> catatan · <b>L</b> langkah AI · <b>C</b> tanya di chat · <b>Del</b> hapus<br>"
         "Seret dari <b>Pustaka</b> di kiri untuk merujuk dokumen hasil stage dan lampiran task lain<br>"
         "Tarik dari titik <b>●</b> di tepi kanan kartu ke kartu lain untuk menyambungkan. Garis yang "
         "masuk ke langkah AI menjadi bahan agent<br>"

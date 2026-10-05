@@ -163,9 +163,11 @@ Konvensi nama sinyal di kode sudah tepat dan dipertahankan: **peristiwa** dalam 
 | `RunLogFormatter` ✅ | View | Teks baris konsol untuk kejadian run | — |
 | `CanvasWorkspace` ✅ | View | Satu kanvas brainstorm per project (§3.6): muat/simpan `canvas.json` lewat `FileManager`, segarkan kartu referensi saat task berubah, rakit `AgentLaunch` langkah AI, buat task usulan lewat `TaskManager` | Mengubah task tanpa `TaskManager` |
 | `CanvasPage` · `CanvasInspector` · `CanvasLibrary` ✅ | View | Halaman kanvas: toolbar, Pustaka artefak lintas project (sumber drag), panel Detail kartu terpilih | Menyimpan data kanvas sendiri |
+| `CanvasChatPanel` ✅ | View | Panel chat tanya jawab (bergantian dengan Detail): gelembung pesan, jawaban Markdown, keluaran live, bahan = kartu terpilih | Menjalankan agent sendiri (kirim intent) |
+| `CanvasChat` ✅ | Infra | Percakapan satu kanvas: pesan + metrik, satu pertanyaan pada satu waktu lewat `AgentRuntime`, JSON untuk `canvas.json` | Mengubah kartu kanvas |
 | `CanvasView` · `CanvasNodeItem` · `CanvasEdgeItem` ✅ | View | Kanvas tak terbatas (`QGraphicsView`): geser, zoom di kursor, seleksi, sambungan titik → kartu; semua perubahan dikirim sebagai intent ke `CanvasModel` | Mengubah kartu tanpa model |
 | `CanvasModel` · `CanvasBoard` ✅ | Domain | Satu-satunya pengubah isi kanvas: validasi intent (garis tanpa putaran), undo/redo, JSON, urutan dependensi langkah AI | Menyentuh file atau proses |
-| `CanvasWorkflow` ✅ | Domain | Isi kartu referensi dari task, prompt langkah AI, ringkasan task baru, parsing usulan task | UI, proses |
+| `CanvasWorkflow` ✅ | Domain | Isi kartu referensi dari task, prompt langkah AI dan chat, ringkasan task baru, parsing usulan task | UI, proses |
 | `CanvasAutomation` ✅ | Infra | Antrean langkah AI urut dependensi (maks. 2 paralel), hasil ke `CanvasModel` | Tahu soal `QProcess` |
 | `BridgeServer` ⬜ | Infra | `QLocalServer` untuk bridge MCP, validasi *run key* | Menulis file sesi |
 
@@ -214,6 +216,16 @@ Aturan:
 7. **Penempatan.** Kartu yang posisinya tidak dipilih pengguna (dari Pustaka lewat klik dua kali, task usulan, hasil yang dijadikan catatan) ditaruh di tempat lapang terdekat (`CanvasBoard::openSpot`), tidak menimpa kartu lain.
 8. **Zoom.** Di bawah 60% kartu dilukis ringkas: pita warna jenisnya dan judul berhuruf ±11 px di layar, supaya papan besar tetap terbaca sebagai peta.
 
+#### Chat tanya jawab
+
+Panel kanan bergantian antara **Detail** dan **Chat** (tombol di toolbar; tombol yang aktif menutup panel). Chat dibuka juga dengan `C` atau menu klik kanan **Tanyakan kartu ini di chat**.
+
+1. **Bahan mengikuti pilihan.** Kartu yang sedang dipilih menjadi bahan pertanyaan berikutnya; tanpa pilihan, bahannya seluruh kanvas. Baris **Bahan** di atas input menunjukkannya. Seluruh kanvas membagi jatah 90 000 karakter rata per kartu (min. 6 000, maks. 24 000).
+2. **Satu proses per pertanyaan.** Seperti langkah AI, setiap pertanyaan menjalankan `claude -p` baru yang baca-saja (`Read`, `Grep`, `Glob`) di folder kerja project, dengan prompt peran `:/prompts/BRAINSTORM_CHAT.md`. Prompt-nya dirakit ulang: bahan kartu, percakapan sebelumnya (maks. 16 pesan / 20 000 karakter, pesan terbaru didahulukan, jawaban gagal tidak ikut), lalu pertanyaannya. Tidak memakai `--resume`, jadi pertanyaan tidak bergantung pada sesi lama dan bahan selalu yang terbaru.
+3. **Satu pertanyaan pada satu waktu.** Selama agent menjawab, tombol **Kirim** menjadi **■ Hentikan**. Teks agent dan tool yang sedang dipakai tampil live. Jawaban yang dihentikan menyimpan potongan yang sudah masuk; jawaban gagal menampilkan alasannya beserta **Tanya lagi**.
+4. **Ke kanvas.** **Jadikan catatan** menaruh pertanyaan (sebagai baris pertama) dan jawabannya di catatan biru di kanan kartu bahannya, tersambung dari kartu-kartu itu (bila ≤ 6), di tempat lapang. Langkah ini masuk undo seperti intent lain; percakapannya sendiri tidak.
+5. **Tersimpan.** Percakapan (maks. 200 pesan) ikut `canvas.json` (§4.6). **Mulai ulang** menghapusnya setelah konfirmasi. Klik bahan di gelembung pertanyaan memilih kartu-kartunya lagi di kanvas.
+
 | Pintasan | Aksi |
 |---|---|
 | Klik dua kali di ruang kosong · `N` | Catatan baru |
@@ -224,7 +236,9 @@ Aturan:
 | Panah (`Shift` = 50 px) | Geser kartu terpilih |
 | `Spasi` + seret · tombol tengah | Geser kanvas |
 | `Ctrl` + scroll · `+` / `−` · `Ctrl+0` · `Ctrl+1` | Zoom di kursor · zoom · tampilkan semua · 100% |
+| `C` | Buka chat dengan kartu terpilih (atau seluruh kanvas) sebagai bahan |
 | `Esc` | Batalkan sambungan / kosongkan pilihan; di editor catatan: simpan |
+| `Enter` · `Shift+Enter` (input chat) | Kirim pertanyaan · baris baru |
 
 ---
 
@@ -453,7 +467,7 @@ Aturan:
 
 ### 4.6 File kanvas
 
-`projects/<projectId>/canvas.json` dirakit `CanvasBoard::toJson()` dan ditulis `FileManager` dengan aturan yang sama seperti `session.json` (`QSaveFile`, debounce ±500 ms, sekali lagi saat aplikasi ditutup). File ini ikut terhapus bersama project.
+`projects/<projectId>/canvas.json` dirakit `CanvasBoard::toJson()` (ditambah `CanvasChat::toJson()` untuk percakapan chat) dan ditulis `FileManager` dengan aturan yang sama seperti `session.json` (`QSaveFile`, debounce ±500 ms, sekali lagi saat aplikasi ditutup). File ini ikut terhapus bersama project.
 
 ```json
 {
@@ -470,7 +484,13 @@ Aturan:
       "run": { "success": true, "outcome": "success", "message": "# Rencana rilis …", "sessionId": "…",
                "durationMs": 38000, "totalTokens": 21000, "costUsd": 0.08, "finishedAt": "2026-10-05T12:00:00Z" } }
   ],
-  "edges": [ { "id": "e5a3…", "from": "9b2e…", "to": "c71d…" } ]
+  "edges": [ { "id": "e5a3…", "from": "9b2e…", "to": "c71d…" } ],
+  "chat": [
+    { "id": "1f7a…", "role": "user", "text": "Apa risiko terbesarnya?", "at": "2026-10-05T12:03:00Z",
+      "context": ["9b2e…"], "contextLabel": "1 kartu: Spesifikasi · Login magic link" },
+    { "id": "8d2c…", "role": "agent", "text": "Risiko terbesar: email terlambat …", "at": "2026-10-05T12:03:21Z",
+      "replyTo": "1f7a…", "model": "sonnet", "outcome": "success", "durationMs": 21000, "totalTokens": 18400, "costUsd": 0.06 }
+  ]
 }
 ```
 
@@ -481,6 +501,7 @@ Aturan:
 3. `schemaVersion` tidak dikenal atau JSON rusak → file dipindah ke `canvas-rusak-<yyyyMMdd-HHmmss>.json` (isinya tidak dibuang), kanvas mulai kosong, dan konsol mencatat `[KANVAS WARN]`.
 4. Kartu berjenis tidak dikenal, id ganda, dan garis yang menunjuk kartu yang tidak ada atau membuat putaran dilewati saat dimuat, masing-masing dengan peringatan.
 5. Hanya hasil run yang sudah selesai yang disimpan (`run`). Run yang masih berjalan saat aplikasi ditutup dihentikan tanpa dicatat; langkahnya tetap memegang hasil sebelumnya (bila ada) dan bisa dijalankan ulang.
+6. `chat` (opsional): percakapan chat, urut waktu. Pertanyaan: `{id, role: "user", text, at, context?: [id kartu], contextLabel}`; `context` tidak ada = seluruh kanvas. Jawaban: `{id, role: "agent", text, at, replyTo, model, outcome, durationMs, totalTokens, costUsd}`. Pesan dengan `role` lain dilewati saat dimuat.
 
 ---
 

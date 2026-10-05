@@ -1,6 +1,7 @@
 #include "CanvasWorkspace.h"
 #include "AgentRuntime.h"
 #include "CanvasAutomation.h"
+#include "CanvasChat.h"
 #include "CanvasModel.h"
 #include "CanvasPage.h"
 #include "CanvasView.h"
@@ -15,6 +16,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QImageReader>
+#include <QJsonArray>
 #include <QJsonObject>
 
 namespace {
@@ -49,10 +51,11 @@ CanvasWorkspace::CanvasWorkspace(const StageCatalog &catalog, FileManager &files
 }
 
 CanvasWorkspace::~CanvasWorkspace() {
-    // Halaman memegang referensi ke model dan automation kanvasnya: dibongkar lebih dulu
+    // Halaman memegang referensi ke model, automation, dan chat kanvasnya: dibongkar lebih dulu
     for (Canvas *canvas : std::as_const(m_canvases)) {
         delete canvas->page;
         delete canvas->automation;
+        delete canvas->chat;
         delete canvas->model;
         delete canvas;
     }
@@ -68,11 +71,13 @@ CanvasWorkspace::Canvas *CanvasWorkspace::ensure(const QString &projectId) {
     QString error;
     const QJsonObject stored = m_files.loadCanvas(projectId, &error);
     CanvasBoard board;
+    QList<CanvasChatMessage> chatMessages;
     if (error.isEmpty() && !stored.isEmpty()) {
         QStringList warnings;
         const std::optional<CanvasBoard> parsed = CanvasBoard::fromJson(stored, &error, &warnings);
         if (parsed) {
             board = *parsed;
+            chatMessages = CanvasChat::fromJson(stored.value(QStringLiteral("chat")).toArray());
         }
         for (const QString &warning : std::as_const(warnings)) {
             emit logLine(QStringLiteral("[KANVAS WARN] %1: %2").arg(projectId, warning));
@@ -94,6 +99,18 @@ CanvasWorkspace::Canvas *CanvasWorkspace::ensure(const QString &projectId) {
         *canvas->model, m_runtime,
         [this, projectId](const QString &stepId, QString *reason) { return launchFor(projectId, stepId, reason); });
     wireAutomation(projectId, canvas);
+    // Foto lampiran di antara kartu bahan ikut sebagai blok gambar, sama seperti langkah AI
+    auto chatLaunch = [this, projectId](const QStringList &contextIds, QString *reason) -> std::optional<AgentLaunch> {
+        const Canvas *current = m_canvases.value(projectId);
+        if (!current) {
+            *reason = QStringLiteral("kanvas sudah ditutup");
+            return std::nullopt;
+        }
+        return environmentFor(projectId, CanvasWorkflow::chatContext(current->model->board(), contextIds), reason);
+    };
+    canvas->chat = new CanvasChat(*canvas->model, m_runtime, chatLaunch);
+    canvas->chat->load(chatMessages);
+    wireChat(projectId, canvas);
     connect(canvas->model, &CanvasModel::changed, this, [this, projectId]() { save(projectId); });
     // Undo/redo bisa mengembalikan kartu referensi lama: isinya disegarkan dari task-nya
     connect(canvas->model, &CanvasModel::boardReset, this, [this, projectId]() {
@@ -182,12 +199,61 @@ void CanvasWorkspace::wireAutomation(const QString &projectId, Canvas *canvas) {
     });
 }
 
+void CanvasWorkspace::wireChat(const QString &projectId, Canvas *canvas) {
+    CanvasChat *chat = canvas->chat;
+    connect(chat, &CanvasChat::changed, this, [this, projectId]() { save(projectId); });
+    connect(chat, &CanvasChat::started, this, [this, projectId](const AgentLaunch &launch) {
+        emit logLine(QStringLiteral("[KANVAS] %1 · chat ▶ %2 · %3").arg(projectId, launch.agent.model, launch.agent.effort));
+    });
+    connect(chat, &CanvasChat::finished, this,
+            [this, projectId](const CanvasChatMessage &answer, const AgentResult &result) {
+        if (answer.succeeded()) {
+            QStringList facts = {RunLogFormatter::formatDuration(result.durationMs),
+                                 QStringLiteral("%1 tok").arg(RunLogFormatter::formatTokens(result.totalTokens))};
+            if (result.costUsd > 0) {
+                facts.append(QStringLiteral("$%1").arg(result.costUsd, 0, 'f', 2));
+            }
+            emit logLine(QStringLiteral("[KANVAS] %1 · ✓ chat dijawab · %2").arg(projectId, facts.join(QStringLiteral(" · "))));
+            return;
+        }
+        if (answer.outcome == QLatin1String("cancelled")) {
+            emit logLine(QStringLiteral("[KANVAS] %1 · chat dihentikan").arg(projectId));
+            return;
+        }
+        emit logLine(QStringLiteral("[KANVAS] %1 · ✗ chat gagal (%2): %3").arg(projectId, answer.outcome, result.message));
+        message(projectId, QStringLiteral("Chat gagal: %1").arg(elided(result.message, 160)), true);
+        emit runFailed(result);
+    });
+}
+
+void CanvasWorkspace::askChat(const QString &projectId, const QString &question, const QStringList &contextIds,
+                              const QString &model) {
+    Canvas *canvas = m_canvases.value(projectId);
+    if (!canvas) {
+        return;
+    }
+    QString reason;
+    // Agent membaca kode project: folder kerja dipilih dulu bila belum ada
+    if (m_ensureWorkingDirectory && m_ensureWorkingDirectory(projectId).isEmpty()) {
+        reason = QStringLiteral("chat butuh folder kerja project: pilih foldernya dulu");
+    } else if (canvas->chat->ask(question, contextIds, model, &reason)) {
+        return;
+    }
+    if (canvas->page) {
+        canvas->page->showChatError(reason);
+    }
+    QString missing;
+    if (!m_runtime.isAvailable(&missing)) {
+        emit runFailed(AgentResult::failure(QStringLiteral("failed_to_start"), missing));
+    }
+}
+
 CanvasPage *CanvasWorkspace::page(const QString &projectId) {
     Canvas *canvas = ensure(projectId);
     if (canvas->page) {
         return canvas->page;
     }
-    auto *page = new CanvasPage(*canvas->model, *canvas->automation, m_renderer);
+    auto *page = new CanvasPage(*canvas->model, *canvas->automation, *canvas->chat, m_renderer);
     page->view()->setThumbnailProvider([this](const CanvasSource &source) { return thumbnail(source); });
     connect(page, &CanvasPage::boardRequested, this, [this, projectId]() { emit boardRequested(projectId); });
     connect(page, &CanvasPage::sourcesDropped, this,
@@ -206,6 +272,10 @@ CanvasPage *CanvasWorkspace::page(const QString &projectId) {
     });
     connect(page, &CanvasPage::openTaskRequested, this, &CanvasWorkspace::openTaskRequested);
     connect(page, &CanvasPage::viewStored, this, [this, projectId]() { save(projectId); });
+    connect(page, &CanvasPage::chatAskRequested, this,
+            [this, projectId](const QString &question, const QStringList &contextIds, const QString &model) {
+        askChat(projectId, question, contextIds, model);
+    });
     canvas->page = page;
     page->setLibraryTasks(m_tasks.allTasks(), m_catalog.keys());
     return page;
@@ -222,21 +292,32 @@ void CanvasWorkspace::closeProject(const QString &projectId) {
         return;
     }
     canvas->automation->cancelAll();
+    canvas->chat->cancel();
     if (canvas->page) {
         canvas->page->storeView();
         canvas->page->deleteLater();
     }
-    m_files.scheduleCanvasSave(projectId, canvas->model->board().toJson());
-    // Dibuang di siklus event berikutnya, urut: halaman dulu, baru automation dan model yang dipakainya
+    m_files.scheduleCanvasSave(projectId, snapshot(canvas));
+    // Dibuang di siklus event berikutnya, urut: halaman dulu, baru automation, chat, dan model yang dipakainya
     canvas->automation->deleteLater();
+    canvas->chat->deleteLater();
     canvas->model->deleteLater();
     delete canvas;
 }
 
 void CanvasWorkspace::save(const QString &projectId) {
     if (const Canvas *canvas = m_canvases.value(projectId)) {
-        m_files.scheduleCanvasSave(projectId, canvas->model->board().toJson());
+        m_files.scheduleCanvasSave(projectId, snapshot(canvas));
     }
+}
+
+QJsonObject CanvasWorkspace::snapshot(const Canvas *canvas) {
+    QJsonObject root = canvas->model->board().toJson();
+    const QJsonArray chat = canvas->chat->toJson();
+    if (!chat.isEmpty()) {
+        root[QStringLiteral("chat")] = chat;
+    }
+    return root;
 }
 
 void CanvasWorkspace::storeViews() {
@@ -300,16 +381,31 @@ std::optional<AgentLaunch> CanvasWorkspace::launchFor(const QString &projectId, 
         *reason = problem;
         return std::nullopt;
     }
+    // Foto lampiran yang tersambung ikut sebagai blok gambar
+    std::optional<AgentLaunch> launch = environmentFor(projectId, board.inputsOf(stepId), reason);
+    if (launch) {
+        const CanvasNode *step = board.node(stepId);
+        launch->agent = CanvasWorkflow::brainstormAgent(step->model, step->effort);
+        launch->prompt = CanvasWorkflow::stepPrompt(board, stepId);
+    }
+    return launch;
+}
+
+std::optional<AgentLaunch> CanvasWorkspace::environmentFor(const QString &projectId, const QStringList &imageNodeIds,
+                                                           QString *reason) const {
+    const Canvas *canvas = m_canvases.value(projectId);
+    if (!canvas) {
+        *reason = QStringLiteral("kanvas sudah ditutup");
+        return std::nullopt;
+    }
     const QString directory = m_files.workingDirectory(projectId);
     if (directory.isEmpty() || !QDir(directory).exists()) {
         *reason = QStringLiteral("folder kerja project %1 belum dipilih atau sudah tidak ada").arg(projectId);
         return std::nullopt;
     }
 
-    const CanvasNode *step = board.node(stepId);
+    const CanvasBoard &board = canvas->model->board();
     AgentLaunch launch;
-    launch.agent = CanvasWorkflow::brainstormAgent(step->model, step->effort);
-    launch.prompt = CanvasWorkflow::stepPrompt(board, stepId);
     launch.workingDirectory = directory;
     const QStringList references = m_files.referenceDirectories(projectId);
     for (const QString &reference : references) {
@@ -317,10 +413,9 @@ std::optional<AgentLaunch> CanvasWorkspace::launchFor(const QString &projectId, 
             launch.readableDirectories.append(QDir::toNativeSeparators(QDir::cleanPath(reference)));
         }
     }
-    // Foto lampiran yang tersambung ikut sebagai blok gambar, dalam batas yang sama dengan lampiran task
+    // Foto lampiran ikut sebagai blok gambar, dalam batas yang sama dengan lampiran task
     qint64 imageBytes = 0;
-    const QStringList inputs = board.inputsOf(stepId);
-    for (const QString &input : inputs) {
+    for (const QString &input : imageNodeIds) {
         const CanvasNode *node = board.node(input);
         if (!node || !CanvasWorkflow::isImageReference(*node) || !isPlainName(node->source.attachment)) {
             continue;
