@@ -67,12 +67,19 @@
         <file>icons/branch.svg</file>
         <file>icons/info.svg</file>
         <file>icons/signal.svg</file>
+        <file>icons/canvas.svg</file>
+        <file>icons/board.svg</file>
+        <file>icons/note.svg</file>
+        <file>icons/spark.svg</file>
+        <file>icons/undo.svg</file>
+        <file>icons/redo.svg</file>
         <file>prompts/SPECIFIER.md</file>
         <file>prompts/CODER.md</file>
         <file>prompts/CLEANER.md</file>
         <file>prompts/ARCHITECT.md</file>
         <file>prompts/HARDENER.md</file>
         <file>prompts/QA.md</file>
+        <file>prompts/BRAINSTORM.md</file>
         <file>vendor/mermaid.min.js</file>
     </qresource>
 </RCC>

@@ -59,6 +59,8 @@ public:
 
 signals:
     void closeProjectRequested(const QString &projectId);
+    // Tombol "Kanvas" di header diklik
+    void canvasRequested(const QString &projectId);
     // Tombol folder kerja di header diklik
     void workingDirectoryChangeRequested(const QString &projectId);
     // Tombol branch di header diklik

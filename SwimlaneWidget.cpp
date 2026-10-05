@@ -50,6 +50,11 @@ SwimlaneWidget::SwimlaneWidget(const QString &projectId, const StageCatalog &cat
     connect(ui->btnBranch, &QPushButton::clicked, this, [this]() {
         emit branchViewRequested(m_projectId);
     });
+    ui->btnCanvas->setIconSize(QSize(iconSide, iconSide));
+    ui->btnCanvas->setIcon(Theme::icon(":/icons/canvas.svg"));
+    connect(ui->btnCanvas, &QPushButton::clicked, this, [this]() {
+        emit canvasRequested(m_projectId);
+    });
 
     initializeColumns(catalog);
     setProjectTitle(m_projectId);

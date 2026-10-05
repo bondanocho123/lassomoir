@@ -47,3 +47,9 @@ Kalau tetap pakai akun gratis, catat sumber tiap ikon di sini supaya nggak lupa 
 | `branch.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
 | `info.svg` | dilampirkan pemilik proyek (PNG 16x16), digambar ulang sebagai SVG; sumber aslinya belum dicatat | - |
 | `signal.svg` | dilampirkan pemilik proyek (PNG 16x16), digambar ulang sebagai SVG; sumber aslinya belum dicatat | - |
+| `canvas.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
+| `board.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
+| `note.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
+| `spark.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
+| `undo.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
+| `redo.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |

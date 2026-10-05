@@ -19,6 +19,16 @@ SOURCES += \
     AgentAccess.cpp \
     AppFonts.cpp \
     BranchViewer.cpp \
+    CanvasAutomation.cpp \
+    CanvasBoard.cpp \
+    CanvasInspector.cpp \
+    CanvasItems.cpp \
+    CanvasLibrary.cpp \
+    CanvasModel.cpp \
+    CanvasPage.cpp \
+    CanvasView.cpp \
+    CanvasWorkflow.cpp \
+    CanvasWorkspace.cpp \
     ClaudeCli.cpp \
     CSharpMetrics.cpp \
     ClassDiagram.cpp \
@@ -79,6 +89,16 @@ HEADERS += \
     AppFonts.h \
     AppSettings.h \
     BranchViewer.h \
+    CanvasAutomation.h \
+    CanvasBoard.h \
+    CanvasInspector.h \
+    CanvasItems.h \
+    CanvasLibrary.h \
+    CanvasModel.h \
+    CanvasPage.h \
+    CanvasView.h \
+    CanvasWorkflow.h \
+    CanvasWorkspace.h \
     ClaudeCli.h \
     CSharpMetrics.h \
     ClassDiagram.h \

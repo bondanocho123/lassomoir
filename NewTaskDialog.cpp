@@ -220,6 +220,11 @@ NewTaskDialog::NewTaskDialog(const TaskItem &task, const QString &attachmentDire
     }
 }
 
+void NewTaskDialog::prefill(const QString &title, const QString &subtext) {
+    m_titleInput->setText(title);
+    m_promptInput->setText(subtext);
+}
+
 void NewTaskDialog::loadBranches(const QString &workingDirectory) {
     if (!m_original.branch.isEmpty()) {
         return;
