@@ -102,6 +102,7 @@ private:
     QImage thumbnail(const CanvasSource &source) const;
     QString uniqueTaskId() const;
     QString stepName(const Canvas *canvas, const QString &stepId) const;
+    // Pemberitahuan kanvas (berhasil, ditolak, gagal) sebagai baris [KANVAS] di panel Lieutenant
     void message(const QString &projectId, const QString &text, bool error = false);
 
     const StageCatalog &m_catalog;

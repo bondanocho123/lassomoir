@@ -17,9 +17,10 @@ class QPushButton;
 class QStackedWidget;
 class QToolButton;
 
-// Panel kanan kanvas: isi lengkap kartu yang dipilih. Catatan dan instruksi langkah AI diedit di
+// Isi drawer kanan kanvas: isi lengkap kartu yang dipilih. Catatan dan instruksi langkah AI diedit di
 // sini (tersimpan saat fokus pindah), dokumen artefak dan hasil langkah AI dibaca sebagai Markdown,
-// dan aksi alur kerja (jalankan, jadikan catatan/task, buat task usulan) ada di sini.
+// dan aksi alur kerja (jalankan, jadikan catatan/task, buat task usulan) ada di sini. Status run
+// langkah AI (selesai, gagal, durasi, token) tidak diulang di sini: sudah dilaporkan di Lieutenant.
 class CanvasInspector : public QWidget {
     Q_OBJECT
 
@@ -86,7 +87,6 @@ private:
     QComboBox *m_stepOutput;
     QPushButton *m_stepRun;
     QPushButton *m_stepRunUpstream;
-    QLabel *m_stepStatus;
     MarkdownView *m_stepResult;
     QPushButton *m_stepToNote;
     QPushButton *m_stepProposals;

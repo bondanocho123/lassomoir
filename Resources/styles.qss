@@ -1936,17 +1936,6 @@ QToolButton#btnCanvasRedo:hover {
     border: 1px solid #b9c6da;
 }
 
-QLabel#canvasStatus {
-    background: transparent;
-    font-size: 11px;
-    color: #6f6557;
-    padding-left: 6px;
-}
-
-QLabel#canvasStatus[error="true"] {
-    color: #9b2c1f;
-}
-
 QLabel#canvasZoomLevel {
     background: transparent;
     min-width: 42px;
@@ -1966,12 +1955,33 @@ QLabel#canvasEmptyHint {
     color: #8a7f70;
 }
 
-/* Panel samping: pustaka artefak (kiri) dan detail kartu (kanan) */
+/* Panel samping: pustaka artefak (kiri) dan drawer detail/chat (kanan, seperti drawer task di board) */
 QWidget#canvasLibrary,
-QWidget#canvasInspector {
+QWidget#canvasDrawer {
     background-color: #fbf8f3;
     border: 1px solid #e2d5c1;
     border-radius: 8px;
+}
+
+/* Isi drawer: bingkainya milik canvasDrawer */
+QWidget#canvasInspector,
+QWidget#canvasChatPanel {
+    background-color: #fbf8f3;
+    border: none;
+}
+
+QPushButton#btnCanvasDrawerClose,
+QPushButton#btnCanvasDrawerExpand {
+    background: transparent;
+    border: none;
+    color: #6f6557;
+    font-size: 14px;
+}
+
+QPushButton#btnCanvasDrawerClose:hover,
+QPushButton#btnCanvasDrawerExpand:hover {
+    background-color: #f1e8da;
+    border-radius: 4px;
 }
 
 QLabel#canvasPanelTitle {
@@ -2010,6 +2020,7 @@ QLabel#canvasInspectorWarning {
     font-size: 11px;
 }
 
+/* Baris kesalahan di panel chat */
 QLabel#canvasStepStatus {
     background: transparent;
     font-size: 11px;
@@ -2221,13 +2232,7 @@ QMenu#canvasContextMenu::separator {
     margin: 3px 8px;
 }
 
-/* Chat tanya jawab kanvas (CanvasChatPanel), bergantian dengan Detail di panel kanan */
-QWidget#canvasChatPanel {
-    background-color: #fbf8f3;
-    border: 1px solid #e2d5c1;
-    border-radius: 8px;
-}
-
+/* Chat tanya jawab kanvas (CanvasChatPanel), bergantian dengan Detail di drawer kanan */
 QScrollArea#canvasChatScroll,
 QWidget#canvasChatList {
     background: transparent;

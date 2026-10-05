@@ -24,11 +24,15 @@ class QPushButton;
 class QSplitter;
 class QStackedWidget;
 class QToolButton;
+class SplitterPaneAnimator;
 
 // Halaman kanvas satu project: toolbar, pustaka artefak (kiri), kanvas tak terbatas (tengah), dan
-// panel kanan yang bergantian antara detail kartu terpilih dan chat tanya jawab. Perubahan kanvas
+// drawer kanan yang bergantian antara detail kartu terpilih dan chat tanya jawab. Drawer-nya
+// seperti drawer task di board: tertutup sampai kartu dibuka (klik dua kali, "Buka detail") atau
+// tombol Detail/Chat ditekan, bisa diperluas, dan ditutup lewat ✕ atau Esc. Perubahan kanvas
 // lewat CanvasModel; aksi yang butuh data di luar kanvas (isi referensi task, folder kerja, task
-// baru, pertanyaan chat) diteruskan lewat sinyal ke CanvasWorkspace.
+// baru, pertanyaan chat) diteruskan lewat sinyal ke CanvasWorkspace. Pemberitahuan halaman ini
+// tidak ditampilkan di kanvas, tetapi dikirim lewat message() ke panel Lieutenant.
 class CanvasPage : public QWidget {
     Q_OBJECT
 
@@ -45,13 +49,13 @@ public:
     // Panel chat dibuka dengan kartu terpilih sebagai bahan, input siap diketik
     void openChat();
     bool isChatOpen() const;
+    bool isDrawerOpen() const;
     // Pertanyaan chat ditolak: alasannya tampil di panel chat, ketikannya dibiarkan
     void showChatError(const QString &reason);
 
     void setLibraryTasks(const QList<TaskItem> &tasks, const QStringList &stageOrder);
     // Keluaran agent langkah yang sedang berjalan; kosong = run selesai
     void setLiveOutput(const QString &stepId, const QString &markdown);
-    void showMessage(const QString &text, bool error = false);
     // Posisi tampilan dan teks yang masih diketik ke CanvasModel, tersimpan bersama canvas.json berikutnya
     void storeView();
 
@@ -68,6 +72,8 @@ signals:
     void viewStored();
     // contextIds kosong = seluruh kanvas; model kosong = bawaan
     void chatAskRequested(const QString &question, const QStringList &contextIds, const QString &model);
+    // Pemberitahuan untuk pengguna (mis. hasil disalin ke catatan); tampil di panel Lieutenant
+    void message(const QString &text, bool error);
 
 protected:
     void showEvent(QShowEvent *event) override;
@@ -83,6 +89,7 @@ private:
     enum class SidePanel { Detail, Chat };
     void showPanel(SidePanel panel);
     void hidePanel();
+    void setDrawerExpanded(bool expanded);   // ikon dan tooltip tombol expand saja
 
     CanvasModel &m_model;
     CanvasAutomation &m_automation;
@@ -92,8 +99,11 @@ private:
     CanvasInspector *m_inspector;
     CanvasChatPanel *m_chatPanel;
     QStackedWidget *m_side;
-    QSplitter *m_splitter;
-    QLabel *m_status;
+    QWidget *m_drawer;              // [tombol expand/tutup | m_side]
+    QPushButton *m_drawerExpand;
+    QSplitter *m_splitter;          // [pustaka | kanvas]
+    QSplitter *m_drawerSplitter;    // [m_splitter | m_drawer]
+    SplitterPaneAnimator *m_drawerAnimator;
     QLabel *m_zoomLabel;
     QPushButton *m_runAll;
     QPushButton *m_stopAll;
@@ -103,7 +113,6 @@ private:
     QPushButton *m_toggleInspector;
     QPushButton *m_toggleChat;
     QTimer m_inspectorTimer;
-    QTimer m_statusTimer;
     QHash<QString, QString> m_live;   // stepId -> keluaran agent yang sedang mengalir
     bool m_viewRestored = false;
 };

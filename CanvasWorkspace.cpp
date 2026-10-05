@@ -170,7 +170,6 @@ void CanvasWorkspace::wireAutomation(const QString &projectId, Canvas *canvas) {
             }
             emit logLine(QStringLiteral("[KANVAS] %1 · ✓ langkah \"%2\" selesai · %3")
                              .arg(projectId, name, facts.join(QStringLiteral(" · "))));
-            message(projectId, QStringLiteral("Langkah \"%1\" selesai").arg(name));
             return;
         }
         if (result.outcome == QLatin1String("skipped") || result.outcome == QLatin1String("cancelled")) {
@@ -182,7 +181,6 @@ void CanvasWorkspace::wireAutomation(const QString &projectId, Canvas *canvas) {
                               result.outcome == QLatin1String("rejected") ? QStringLiteral("tidak dijalankan")
                                                                           : QStringLiteral("gagal (%1)").arg(result.outcome),
                               result.message));
-        message(projectId, QStringLiteral("Langkah \"%1\": %2").arg(name, elided(result.message, 160)), true);
         if (result.outcome != QLatin1String("rejected")) {
             emit runFailed(result);
         }
@@ -195,7 +193,6 @@ void CanvasWorkspace::wireAutomation(const QString &projectId, Canvas *canvas) {
         const QString summary = QStringLiteral("Alur selesai: %1 berhasil · %2 gagal · %3 dilewati")
                                     .arg(succeeded).arg(failed).arg(skipped);
         emit logLine(QStringLiteral("[KANVAS] %1 · %2").arg(projectId, summary));
-        message(projectId, summary, failed > 0);
     });
 }
 
@@ -221,7 +218,6 @@ void CanvasWorkspace::wireChat(const QString &projectId, Canvas *canvas) {
             return;
         }
         emit logLine(QStringLiteral("[KANVAS] %1 · ✗ chat gagal (%2): %3").arg(projectId, answer.outcome, result.message));
-        message(projectId, QStringLiteral("Chat gagal: %1").arg(elided(result.message, 160)), true);
         emit runFailed(result);
     });
 }
@@ -271,6 +267,9 @@ CanvasPage *CanvasWorkspace::page(const QString &projectId) {
         createProposedTasks(projectId, stepId);
     });
     connect(page, &CanvasPage::openTaskRequested, this, &CanvasWorkspace::openTaskRequested);
+    connect(page, &CanvasPage::message, this, [this, projectId](const QString &text, bool error) {
+        message(projectId, text, error);
+    });
     connect(page, &CanvasPage::viewStored, this, [this, projectId]() { save(projectId); });
     connect(page, &CanvasPage::chatAskRequested, this,
             [this, projectId](const QString &question, const QStringList &contextIds, const QString &model) {
@@ -659,8 +658,7 @@ QString CanvasWorkspace::stepName(const Canvas *canvas, const QString &stepId) c
 }
 
 void CanvasWorkspace::message(const QString &projectId, const QString &text, bool error) {
-    const Canvas *canvas = m_canvases.value(projectId);
-    if (canvas && canvas->page) {
-        canvas->page->showMessage(text, error);
-    }
+    // Kanvas tidak punya baris status sendiri: semua pemberitahuannya masuk panel Lieutenant
+    emit logLine(error ? QStringLiteral("[KANVAS WARN] %1: %2").arg(projectId, text)
+                       : QStringLiteral("[KANVAS] %1 · %2").arg(projectId, text));
 }

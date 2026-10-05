@@ -163,7 +163,7 @@ Konvensi nama sinyal di kode sudah tepat dan dipertahankan: **peristiwa** dalam 
 | `RunLogFormatter` ✅ | View | Teks baris konsol untuk kejadian run | — |
 | `SidePanelDock` · `VerticalTabButton` ✅ | View | Tiga keadaan panel Lieutenant di pane kanan `mainSplitter`: terpasang (pin), tab tegak di rel tepi kanan, atau disembunyikan (lihat §6.6 Konsol) | Tahu isi panelnya |
 | `CanvasWorkspace` ✅ | View | Satu kanvas brainstorm per project (§3.6): muat/simpan `canvas.json` lewat `FileManager`, segarkan kartu referensi saat task berubah, rakit `AgentLaunch` langkah AI, buat task usulan lewat `TaskManager` | Mengubah task tanpa `TaskManager` |
-| `CanvasPage` · `CanvasInspector` · `CanvasLibrary` ✅ | View | Halaman kanvas: toolbar, Pustaka artefak lintas project (sumber drag), panel Detail kartu terpilih | Menyimpan data kanvas sendiri |
+| `CanvasPage` · `CanvasInspector` · `CanvasLibrary` ✅ | View | Halaman kanvas: toolbar, Pustaka artefak lintas project (sumber drag), drawer Detail kartu terpilih | Menyimpan data kanvas sendiri |
 | `CanvasChatPanel` ✅ | View | Panel chat tanya jawab (bergantian dengan Detail): gelembung pesan, jawaban Markdown, keluaran live, bahan = kartu terpilih | Menjalankan agent sendiri (kirim intent) |
 | `CanvasChat` ✅ | Infra | Percakapan satu kanvas: pesan + metrik, satu pertanyaan pada satu waktu lewat `AgentRuntime`, JSON untuk `canvas.json` | Mengubah kartu kanvas |
 | `CanvasView` · `CanvasNodeItem` · `CanvasEdgeItem` ✅ | View | Kanvas tak terbatas (`QGraphicsView`): geser, zoom di kursor, seleksi, sambungan titik → kartu; semua perubahan dikirim sebagai intent ke `CanvasModel` | Mengubah kartu tanpa model |
@@ -197,7 +197,7 @@ Konvensi nama sinyal di kode sudah tepat dan dipertahankan: **peristiwa** dalam 
 
 Ruang brainstorm pribadi per project berupa kanvas tak terbatas. Isinya ide sendiri dan artefak dari banyak task, juga dari project lain yang sedang terbuka. Langkah AI di kanvas mengolah bahan yang disambungkan ke sana menjadi dokumen atau task baru untuk pipeline.
 
-Dibuka lewat tombol **Kanvas** di header swimlane atau **View › Kanvas Brainstorm** (`Ctrl+Shift+K`). Tombol **Board** kembali ke kanban. Tata letaknya: toolbar di atas, **Pustaka artefak** di kiri, kanvas di tengah, **Detail** kartu terpilih di kanan.
+Dibuka lewat tombol **Kanvas** di header swimlane atau **View › Kanvas Brainstorm** (`Ctrl+Shift+K`). Tombol **Board** kembali ke kanban. Tata letaknya: toolbar di atas, **Pustaka artefak** di kiri, kanvas di tengah, dan drawer **Detail** kartu terpilih di kanan. Seperti drawer task di board, drawer ini tertutup sampai kartu dibuka (klik dua kali, `Enter`, menu klik kanan **Buka detail**, atau tombol **Detail**), bisa diperluas menutupi kanvas, dan ditutup lewat ✕ atau `Esc`. Kanvas tidak punya baris status sendiri: pemberitahuannya (langkah selesai/gagal, alur selesai, hasil disalin ke catatan, permintaan yang ditolak) dan status run langkah AI (durasi, token, biaya) tampil sebagai baris `[KANVAS]` di panel Lieutenant.
 
 | Kartu | Isi | Asal |
 |---|---|---|
@@ -219,7 +219,7 @@ Aturan:
 
 #### Chat tanya jawab
 
-Panel kanan bergantian antara **Detail** dan **Chat** (tombol di toolbar; tombol yang aktif menutup panel). Chat dibuka juga dengan `C` atau menu klik kanan **Tanyakan kartu ini di chat**.
+Drawer kanan bergantian antara **Detail** dan **Chat** (tombol di toolbar; tombol yang aktif menutup drawer). Chat dibuka juga dengan `C` atau menu klik kanan **Tanyakan kartu ini di chat**.
 
 1. **Bahan mengikuti pilihan.** Kartu yang sedang dipilih menjadi bahan pertanyaan berikutnya; tanpa pilihan, bahannya seluruh kanvas. Baris **Bahan** di atas input menunjukkannya. Seluruh kanvas membagi jatah 90 000 karakter rata per kartu (min. 6 000, maks. 24 000).
 2. **Satu proses per pertanyaan.** Seperti langkah AI, setiap pertanyaan menjalankan `claude -p` baru yang baca-saja (`Read`, `Grep`, `Glob`) di folder kerja project, dengan prompt peran `:/prompts/BRAINSTORM_CHAT.md`. Prompt-nya dirakit ulang: bahan kartu, percakapan sebelumnya (maks. 16 pesan / 20 000 karakter, pesan terbaru didahulukan, jawaban gagal tidak ikut), lalu pertanyaannya. Tidak memakai `--resume`, jadi pertanyaan tidak bergantung pada sesi lama dan bahan selalu yang terbaru.

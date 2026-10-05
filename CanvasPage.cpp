@@ -7,16 +7,18 @@
 #include "CanvasLibrary.h"
 #include "CanvasModel.h"
 #include "CanvasView.h"
+#include "SplitterPaneAnimator.h"
 #include "Theme.h"
 
+#include <QApplication>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMenu>
 #include <QPushButton>
+#include <QShortcut>
 #include <QSignalBlocker>
 #include <QSplitter>
 #include <QStackedWidget>
-#include <QStyle>
 #include <QToolButton>
 #include <QVBoxLayout>
 
@@ -66,14 +68,40 @@ CanvasPage::CanvasPage(CanvasModel &model, CanvasAutomation &automation, CanvasC
     m_view = new CanvasView(model, this);
     m_library = new CanvasLibrary(this);
     m_library->setMinimumWidth(180);
-    // Panel kanan: Detail kartu terpilih atau Chat, bergantian
-    m_inspector = new CanvasInspector(renderer, this);
-    m_chatPanel = new CanvasChatPanel(chat, renderer, this);
-    m_side = new QStackedWidget(this);
+    // Drawer kanan: Detail kartu terpilih atau Chat, bergantian, di bawah tombol perluas dan tutup
+    m_drawer = new QWidget(this);
+    m_drawer->setObjectName("canvasDrawer");
+    m_drawer->setAttribute(Qt::WA_StyledBackground, true);
+    m_drawer->setMinimumWidth(300);
+    m_inspector = new CanvasInspector(renderer, m_drawer);
+    m_chatPanel = new CanvasChatPanel(chat, renderer, m_drawer);
+    m_side = new QStackedWidget(m_drawer);
     m_side->setObjectName("canvasSidePanel");
     m_side->addWidget(m_inspector);
     m_side->addWidget(m_chatPanel);
-    m_side->setMinimumWidth(260);
+    m_drawerExpand = new QPushButton(m_drawer);
+    m_drawerExpand->setObjectName("btnCanvasDrawerExpand");
+    m_drawerExpand->setCursor(Qt::PointingHandCursor);
+    m_drawerExpand->setFocusPolicy(Qt::NoFocus);
+    m_drawerExpand->setFixedSize(26, 26);
+    m_drawerExpand->setIconSize(QSize(14, 14));
+    auto *drawerClose = new QPushButton(QStringLiteral("✕"), m_drawer);
+    drawerClose->setObjectName("btnCanvasDrawerClose");
+    drawerClose->setCursor(Qt::PointingHandCursor);
+    drawerClose->setFocusPolicy(Qt::NoFocus);
+    drawerClose->setToolTip(QStringLiteral("Tutup (Esc)"));
+    drawerClose->setFixedSize(26, 26);
+    auto *drawerHeader = new QHBoxLayout();
+    drawerHeader->setContentsMargins(0, 6, 6, 0);
+    drawerHeader->setSpacing(2);
+    drawerHeader->addStretch(1);
+    drawerHeader->addWidget(m_drawerExpand);
+    drawerHeader->addWidget(drawerClose);
+    auto *drawerLayout = new QVBoxLayout(m_drawer);
+    drawerLayout->setContentsMargins(0, 0, 0, 0);
+    drawerLayout->setSpacing(0);
+    drawerLayout->addLayout(drawerHeader);
+    drawerLayout->addWidget(m_side, 1);
 
     auto *toolbar = new QWidget(this);
     toolbar->setObjectName("canvasToolbar");
@@ -108,10 +136,6 @@ CanvasPage::CanvasPage(CanvasModel &model, CanvasAutomation &automation, CanvasC
     m_undo = iconButton(QStringLiteral(":/icons/undo.svg"), "btnCanvasUndo", QStringLiteral("Urungkan (Ctrl+Z)"), toolbar);
     m_redo = iconButton(QStringLiteral(":/icons/redo.svg"), "btnCanvasRedo", QStringLiteral("Ulangi (Ctrl+Y)"), toolbar);
 
-    m_status = new QLabel(toolbar);
-    m_status->setObjectName("canvasStatus");
-    m_status->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-
     auto *zoomOut = toolbarButton(QStringLiteral("−"), "btnCanvasZoomOut", "secondary", toolbar);
     zoomOut->setToolTip(QStringLiteral("Perkecil (−)"));
     zoomOut->setFixedSize(28, 26);
@@ -129,8 +153,7 @@ CanvasPage::CanvasPage(CanvasModel &model, CanvasAutomation &automation, CanvasC
     m_toggleLibrary->setToolTip(QStringLiteral("Tampilkan/sembunyikan pustaka artefak"));
     m_toggleInspector = toolbarButton(QStringLiteral("Detail"), "btnCanvasToggleInspector", "toggle", toolbar);
     m_toggleInspector->setCheckable(true);
-    m_toggleInspector->setChecked(true);
-    m_toggleInspector->setToolTip(QStringLiteral("Tampilkan/sembunyikan detail kartu terpilih"));
+    m_toggleInspector->setToolTip(QStringLiteral("Buka/tutup drawer detail kartu terpilih (klik dua kali kartu juga membukanya)"));
     m_toggleChat = toolbarButton(QStringLiteral("Chat"), "btnCanvasToggleChat", "toggle", toolbar);
     m_toggleChat->setCheckable(true);
     m_toggleChat->setToolTip(QStringLiteral("Tanya jawab dengan agent tentang kartu terpilih atau seluruh kanvas (C)"));
@@ -150,8 +173,7 @@ CanvasPage::CanvasPage(CanvasModel &model, CanvasAutomation &automation, CanvasC
     tools->addWidget(separator(toolbar));
     tools->addWidget(m_undo);
     tools->addWidget(m_redo);
-    tools->addSpacing(6);
-    tools->addWidget(m_status, 1);
+    tools->addStretch(1);
     tools->addWidget(zoomOut);
     tools->addWidget(m_zoomLabel);
     tools->addWidget(zoomIn);
@@ -167,22 +189,41 @@ CanvasPage::CanvasPage(CanvasModel &model, CanvasAutomation &automation, CanvasC
     m_splitter->setChildrenCollapsible(false);
     m_splitter->addWidget(m_library);
     m_splitter->addWidget(m_view);
-    m_splitter->addWidget(m_side);
     m_splitter->setStretchFactor(1, 1);
-    m_splitter->setSizes({220, 780, 320});
+    m_splitter->setSizes({220, 780});
+
+    // Drawer di splitter bersarang [pustaka + kanvas | drawer], sama seperti drawer task di board:
+    // animator menggiring pane kedua, dan saat drawer diperluas pane pertama yang diciutkan
+    m_drawerSplitter = new QSplitter(Qt::Horizontal, this);
+    m_drawerSplitter->setObjectName("canvasDrawerSplitter");
+    m_drawerSplitter->setHandleWidth(6);
+    m_drawerSplitter->setChildrenCollapsible(false);
+    m_drawerSplitter->addWidget(m_splitter);
+    m_drawerSplitter->addWidget(m_drawer);
+    m_drawerSplitter->setStretchFactor(0, 1);
+    m_drawer->hide();
+    m_drawerAnimator = new SplitterPaneAnimator(m_drawerSplitter, 1, this);
 
     auto *root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(8);
     root->addWidget(toolbar);
-    root->addWidget(m_splitter, 1);
+    root->addWidget(m_drawerSplitter, 1);
 
     m_inspectorTimer.setSingleShot(true);
     m_inspectorTimer.setInterval(0);
     connect(&m_inspectorTimer, &QTimer::timeout, this, &CanvasPage::refreshInspector);
-    m_statusTimer.setSingleShot(true);
-    m_statusTimer.setInterval(7000);
-    connect(&m_statusTimer, &QTimer::timeout, m_status, &QLabel::clear);
+
+    // Drawer: ✕ dan Esc menutup, tombol expand melebarkannya sampai menutupi kanvas
+    connect(drawerClose, &QPushButton::clicked, this, &CanvasPage::hidePanel);
+    auto *escape = new QShortcut(QKeySequence(Qt::Key_Escape), m_drawer);
+    escape->setContext(Qt::WidgetWithChildrenShortcut);
+    connect(escape, &QShortcut::activated, this, &CanvasPage::hidePanel);
+    connect(m_drawerExpand, &QPushButton::clicked, this, [this]() {
+        m_drawerAnimator->setExpanded(!m_drawerAnimator->isExpanded());
+    });
+    connect(m_drawerAnimator, &SplitterPaneAnimator::expandedChanged, this, &CanvasPage::setDrawerExpanded);
+    setDrawerExpanded(false);
 
     // Toolbar
     connect(board, &QPushButton::clicked, this, &CanvasPage::boardRequested);
@@ -206,7 +247,7 @@ CanvasPage::CanvasPage(CanvasModel &model, CanvasAutomation &automation, CanvasC
     connect(zoomIn, &QPushButton::clicked, m_view, &CanvasView::zoomIn);
     connect(fit, &QPushButton::clicked, m_view, &CanvasView::fitAll);
     connect(m_toggleLibrary, &QPushButton::toggled, m_library, &QWidget::setVisible);
-    // Tombol panel yang aktif menutup panel kanan; tombol lainnya berpindah panel
+    // Tombol panel yang aktif menutup drawer; tombol lainnya berpindah panel
     connect(m_toggleInspector, &QPushButton::clicked, this, [this](bool checked) {
         checked ? showPanel(SidePanel::Detail) : hidePanel();
     });
@@ -230,7 +271,7 @@ CanvasPage::CanvasPage(CanvasModel &model, CanvasAutomation &automation, CanvasC
         }
         scheduleInspectorRefresh();
     });
-    connect(m_view, &CanvasView::message, this, &CanvasPage::showMessage);
+    connect(m_view, &CanvasView::message, this, &CanvasPage::message);
     connect(m_view, &CanvasView::sourcesDropped, this, [this](const QList<CanvasSource> &sources, const QPointF &scenePos) {
         emit sourcesDropped(sources, scenePos, true);
     });
@@ -294,7 +335,7 @@ CanvasPage::CanvasPage(CanvasModel &model, CanvasAutomation &automation, CanvasC
             }
         }
         if (existing.isEmpty()) {
-            showMessage(QStringLiteral("Kartu bahan pertanyaan itu sudah tidak ada di kanvas"), true);
+            emit message(QStringLiteral("Kartu bahan pertanyaan itu sudah tidak ada di kanvas"), true);
             return;
         }
         m_view->selectNodes(existing);
@@ -340,17 +381,6 @@ void CanvasPage::setLiveOutput(const QString &stepId, const QString &markdown) {
     if (m_inspector->nodeId() == stepId) {
         m_inspector->setLiveOutput(markdown);
     }
-}
-
-void CanvasPage::showMessage(const QString &text, bool error) {
-    m_status->setText(text);
-    m_status->setToolTip(text);
-    if (m_status->property("error").toBool() != error) {
-        m_status->setProperty("error", error);
-        m_status->style()->unpolish(m_status);
-        m_status->style()->polish(m_status);
-    }
-    m_statusTimer.start();
 }
 
 void CanvasPage::storeView() {
@@ -416,12 +446,13 @@ void CanvasPage::noteFromResult(const QString &stepId) {
     m_model.connectNodes(stepId, note);
     m_model.endMacro();
     m_view->selectNodes({note});
-    showMessage(QStringLiteral("Hasil disalin ke catatan baru yang bisa diedit"));
+    emit message(QStringLiteral("Hasil disalin ke catatan baru yang bisa diedit"), false);
 }
 
 void CanvasPage::showPanel(SidePanel panel) {
     m_side->setCurrentWidget(panel == SidePanel::Chat ? static_cast<QWidget *>(m_chatPanel) : m_inspector);
-    m_side->show();
+    // Lebar terakhir hasil geseran pengguna dipakai lagi; pertama kali sekitar sepertiga halaman
+    m_drawerAnimator->open(qBound(320, m_drawerSplitter->width() * 30 / 100, 520));
     m_toggleInspector->setChecked(panel == SidePanel::Detail);
     m_toggleChat->setChecked(panel == SidePanel::Chat);
     if (panel == SidePanel::Chat) {
@@ -430,13 +461,27 @@ void CanvasPage::showPanel(SidePanel panel) {
 }
 
 void CanvasPage::hidePanel() {
-    m_side->hide();
+    m_inspector->commitText();
+    // Fokus yang tertinggal di drawer kembali ke kanvas supaya pintasan keyboard-nya tetap jalan
+    if (m_drawer->isAncestorOf(QApplication::focusWidget())) {
+        m_view->setFocus(Qt::OtherFocusReason);
+    }
+    m_drawerAnimator->close();
     m_toggleInspector->setChecked(false);
     m_toggleChat->setChecked(false);
 }
 
+void CanvasPage::setDrawerExpanded(bool expanded) {
+    m_drawerExpand->setIcon(Theme::icon(expanded ? QStringLiteral(":/icons/collapse.svg") : QStringLiteral(":/icons/expand.svg")));
+    m_drawerExpand->setToolTip(expanded ? QStringLiteral("Kembalikan ukuran") : QStringLiteral("Perluas"));
+}
+
+bool CanvasPage::isDrawerOpen() const {
+    return m_drawerAnimator->isOpen();
+}
+
 bool CanvasPage::isChatOpen() const {
-    return m_side->isVisible() && m_side->currentWidget() == m_chatPanel;
+    return isDrawerOpen() && m_side->currentWidget() == m_chatPanel;
 }
 
 void CanvasPage::openChat() {
@@ -498,5 +543,5 @@ void CanvasPage::noteFromChat(const QString &answerId) {
     m_model.endMacro();
     m_view->selectNodes({note});
     m_view->centerOnNode(note);
-    showMessage(QStringLiteral("Jawaban chat disalin ke catatan baru di kanvas"));
+    emit message(QStringLiteral("Jawaban chat disalin ke catatan baru di kanvas"), false);
 }

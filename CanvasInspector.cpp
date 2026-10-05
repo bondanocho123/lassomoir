@@ -2,7 +2,6 @@
 #include "CanvasItems.h"
 #include "CanvasWorkflow.h"
 #include "MarkdownView.h"
-#include "RunLogFormatter.h"
 #include "Theme.h"
 
 #include <QComboBox>
@@ -94,33 +93,6 @@ QString kindLabel(const CanvasNode &node) {
                                                        : QStringLiteral("LANGKAH AI");
     }
     return QString();
-}
-
-QString resultStatus(const CanvasNode &node, RunState state) {
-    if (state == RunState::Running) {
-        return QStringLiteral("Berjalan… keluaran agent tampil di bawah.");
-    }
-    if (state == RunState::Queued) {
-        return QStringLiteral("Antre: menunggu giliran atau langkah hulunya selesai.");
-    }
-    if (!node.hasResult()) {
-        return QStringLiteral("Belum dijalankan.");
-    }
-    QStringList parts = {node.result.success ? QStringLiteral("Selesai")
-                                             : QStringLiteral("Gagal (%1)").arg(node.result.outcome)};
-    if (node.finishedAt.isValid()) {
-        parts.append(node.finishedAt.toLocalTime().toString(QStringLiteral("d MMM HH:mm")));
-    }
-    if (node.result.durationMs > 0) {
-        parts.append(RunLogFormatter::formatDuration(node.result.durationMs));
-    }
-    if (node.result.totalTokens > 0) {
-        parts.append(QStringLiteral("%1 tok").arg(RunLogFormatter::formatTokens(node.result.totalTokens)));
-    }
-    if (node.result.costUsd > 0) {
-        parts.append(QStringLiteral("$%1").arg(node.result.costUsd, 0, 'f', 2));
-    }
-    return parts.join(QStringLiteral(" · "));
 }
 
 void repolish(QWidget *widget) {
@@ -273,9 +245,6 @@ CanvasInspector::CanvasInspector(MermaidRenderer *renderer, QWidget *parent) : Q
     runRow->addWidget(m_stepRun);
     runRow->addWidget(m_stepRunUpstream);
     runRow->addStretch(1);
-    m_stepStatus = new QLabel(stepPage);
-    m_stepStatus->setObjectName("canvasStepStatus");
-    m_stepStatus->setWordWrap(true);
     m_stepResult = new MarkdownView(renderer, stepPage);
     m_stepToNote = button(QStringLiteral("Jadikan catatan"), "btnCanvasSecondary", stepPage);
     m_stepToNote->setToolTip(QStringLiteral("Salin hasil ke catatan baru yang bisa diedit, tersambung dari langkah ini"));
@@ -299,7 +268,6 @@ CanvasInspector::CanvasInspector(MermaidRenderer *renderer, QWidget *parent) : Q
     stepLayout->addLayout(tuningRow);
     stepLayout->addWidget(m_stepOutput);
     stepLayout->addLayout(runRow);
-    stepLayout->addWidget(m_stepStatus);
     stepLayout->addWidget(sectionLabel(QStringLiteral("HASIL"), stepPage));
     stepLayout->addWidget(m_stepResult, 1);
     stepLayout->addLayout(resultActions);
@@ -510,12 +478,6 @@ void CanvasInspector::showStep(const CanvasNode &node, bool sameNode, RunState s
         repolish(m_stepRun);
     }
     m_stepRunUpstream->setEnabled(!busy);
-    m_stepStatus->setText(resultStatus(node, state));
-    const bool failed = !busy && node.hasResult() && !node.result.success;
-    if (m_stepStatus->property("error").toBool() != failed) {
-        m_stepStatus->setProperty("error", failed);
-        repolish(m_stepStatus);
-    }
 
     QString markdown;
     if (busy) {
