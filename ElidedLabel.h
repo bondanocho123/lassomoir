@@ -9,6 +9,8 @@
 // Label satu baris yang memotong teksnya dengan "…" mengikuti lebar yang tersedia.
 // Lebar minimumnya 0, jadi tidak pernah mendorong widget di sebelahnya keluar dari baris.
 // Teks lengkap muncul sebagai tooltip hanya ketika teksnya terpotong.
+// Size policy mendatarnya Ignored (mengisi sisa lebar baris). Dengan QSizePolicy::Maximum label
+// selebar teks lengkapnya selama ada ruang, dan baru menyempit saat barisnya kekurangan lebar.
 class ElidedLabel : public QLabel {
     Q_OBJECT
 
@@ -19,6 +21,7 @@ public:
     void setFullText(const QString &text);
     QString fullText() const { return m_fullText; }
 
+    QSize sizeHint() const override;
     QSize minimumSizeHint() const override;
 
 protected:

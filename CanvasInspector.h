@@ -6,6 +6,7 @@
 #include <QList>
 #include <QString>
 #include <QStringList>
+#include <QTimer>
 #include <QWidget>
 
 class MarkdownView;
@@ -19,7 +20,8 @@ class QToolButton;
 
 // Panel kanan kanvas: isi lengkap kartu yang dipilih. Catatan dan instruksi langkah AI diedit di
 // sini (tersimpan saat fokus pindah), dokumen artefak dan hasil langkah AI dibaca sebagai Markdown,
-// dan aksi alur kerja (jalankan, jadikan catatan/task, buat task usulan) ada di sini.
+// dan aksi alur kerja (jalankan, jadikan catatan/task, buat task usulan) ada di sini. Tombol
+// Pratinjau di kepalanya meminta drawer pratinjau Markdown (CanvasPreviewDrawer, milik CanvasPage).
 class CanvasInspector : public QWidget {
     Q_OBJECT
 
@@ -36,7 +38,19 @@ public:
     // Ketikan di editor catatan/instruksi yang belum tersimpan dikirim sekarang (textCommitted)
     void commitText();
 
+    // Bahan drawer pratinjau: isi kartu yang tampil sebagai Markdown. Catatan mengikuti editornya
+    // (juga ketikan yang belum tersimpan), referensi dokumennya, langkah AI hasilnya. Kosong bila
+    // yang tampil bukan satu kartu.
+    QString previewMarkdown() const;
+    QString previewKind() const;
+    QString previewTitle() const;
+    // Tombol Pratinjau mengikuti keadaan drawer yang ditutup dari drawernya sendiri (✕, Esc)
+    void setPreviewOpen(bool open);
+
 signals:
+    void previewToggled(bool open);
+    // Isi previewMarkdown() atau kepalanya mungkin berubah
+    void previewChanged();
     void textCommitted(const QString &id, const QString &text);
     void colorChosen(const QString &id, const QString &color);
     void stepOptionsChosen(const QString &id, const QString &model, const QString &effort, CanvasStepOutput output);
@@ -64,8 +78,10 @@ private:
     CanvasNode m_node;            // kartu yang tampil; id kosong = petunjuk atau banyak kartu
     QStringList m_ids;
     RunState m_state = RunState::Idle;
+    QTimer m_previewTimer;        // pratinjau menyusul setelah ketikan di catatan berhenti sejenak
 
     QLabel *m_kind;
+    QPushButton *m_preview;
     QLabel *m_title;
     QLabel *m_meta;
     QStackedWidget *m_pages;

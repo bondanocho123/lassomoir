@@ -17,6 +17,7 @@ class CanvasChatPanel;
 class CanvasInspector;
 class CanvasLibrary;
 class CanvasModel;
+class CanvasPreviewDrawer;
 class CanvasView;
 class MermaidRenderer;
 class QLabel;
@@ -26,9 +27,11 @@ class QStackedWidget;
 class QToolButton;
 
 // Halaman kanvas satu project: toolbar, pustaka artefak (kiri), kanvas tak terbatas (tengah), dan
-// panel kanan yang bergantian antara detail kartu terpilih dan chat tanya jawab. Perubahan kanvas
-// lewat CanvasModel; aksi yang butuh data di luar kanvas (isi referensi task, folder kerja, task
-// baru, pertanyaan chat) diteruskan lewat sinyal ke CanvasWorkspace.
+// panel kanan yang bergantian antara detail kartu terpilih dan chat tanya jawab. Tombol buat kartu
+// (Catatan, Langkah AI) dan zoom mengambang di sudut kiri kanvas, bukan di toolbar. Tombol Pratinjau
+// di panel detail membuka drawer pratinjau Markdown yang menimpa kanvas dari tepi kanannya, di luar
+// tata letak halaman. Perubahan kanvas lewat CanvasModel; aksi yang butuh data di luar kanvas (isi
+// referensi task, folder kerja, task baru, pertanyaan chat) diteruskan lewat sinyal ke CanvasWorkspace.
 class CanvasPage : public QWidget {
     Q_OBJECT
 
@@ -72,6 +75,8 @@ signals:
 protected:
     void showEvent(QShowEvent *event) override;
     void hideEvent(QHideEvent *event) override;
+    // Kanvas bergeser atau berubah ukuran (jendela, splitter, panel dibuka/ditutup): drawer pratinjau ikut
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
     void scheduleInspectorRefresh();
@@ -83,6 +88,11 @@ private:
     enum class SidePanel { Detail, Chat };
     void showPanel(SidePanel panel);
     void hidePanel();
+    // Drawer pratinjau: isi kartu yang tampil di panel detail, ditempel di tepi kanan kanvas
+    void refreshPreview();
+    void layoutPreview();
+    void openPreview();
+    void closePreview();
 
     CanvasModel &m_model;
     CanvasAutomation &m_automation;
@@ -91,12 +101,13 @@ private:
     CanvasLibrary *m_library;
     CanvasInspector *m_inspector;
     CanvasChatPanel *m_chatPanel;
+    CanvasPreviewDrawer *m_preview;
     QStackedWidget *m_side;
     QSplitter *m_splitter;
     QLabel *m_status;
     QLabel *m_zoomLabel;
-    QPushButton *m_runAll;
-    QPushButton *m_stopAll;
+    QToolButton *m_runAll;
+    QToolButton *m_stopAll;
     QToolButton *m_undo;
     QToolButton *m_redo;
     QPushButton *m_toggleLibrary;

@@ -61,6 +61,10 @@ public:
     // Posisi kursor bila di dalam kanvas, selain itu tengah tampilan
     QPointF insertionPoint() const;
 
+    // Widget yang mengambang di atas kanvas (tombol buat kartu, zoom). Kanvas mengambil alih widget
+    // itu dan menjaganya di sudut yang diminta, juga saat ukuran kanvas atau isi widget berubah.
+    void addOverlay(QWidget *overlay, Qt::Corner corner);
+
 signals:
     void selectionChanged();
     void zoomChanged(qreal zoom);
@@ -72,8 +76,11 @@ signals:
     void openTaskRequested(const QString &taskId);
     // Tanya di chat dengan kartu-kartu ini sebagai bahan; kosong = seluruh kanvas
     void chatRequested(const QStringList &ids);
+    // Isi kartu ini sebagai Markdown jadi di drawer pratinjau
+    void previewRequested(const QString &id);
 
 protected:
+    bool event(QEvent *event) override;
     void drawBackground(QPainter *painter, const QRectF &rect) override;
     void wheelEvent(QWheelEvent *event) override;
     bool viewportEvent(QEvent *event) override;
@@ -97,6 +104,7 @@ private:
     void removeNodeItem(const QString &id);
     void removeEdgeItem(const QString &id);
     void updateEmptyHint();
+    void layoutOverlays();
     void commitMoves();
     void nudgeSelection(const QPointF &delta);
     void applyZoom(qreal zoom, const QPoint &anchor);
@@ -118,6 +126,7 @@ private:
     QHash<QString, RunState> m_runStates;
     ThumbnailProvider m_thumbnails;
     QLabel *m_emptyHint;
+    QHash<QWidget *, Qt::Corner> m_overlays;
     qreal m_zoom = 1.0;
 
     enum class Drag { None, Pan, Connect };

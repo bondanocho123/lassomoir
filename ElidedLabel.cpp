@@ -16,6 +16,18 @@ void ElidedLabel::setFullText(const QString &text) {
     refresh();
 }
 
+QSize ElidedLabel::sizeHint() const {
+    // Lebar teks lengkapnya, bukan potongan yang sedang tampil: tanpa ini label yang sudah
+    // terpotong tidak pernah melebar lagi. Diukur dengan cara QLabel mengukur teksnya.
+    QSize hint = QLabel::sizeHint();
+    const QFontMetrics metrics = fontMetrics();
+    const auto textWidth = [&metrics, this](const QString &text) {
+        return metrics.boundingRect(0, 0, 2000, 2000, int(alignment()), text).width();
+    };
+    hint.rwidth() += textWidth(m_fullText) - textWidth(text());
+    return hint;
+}
+
 QSize ElidedLabel::minimumSizeHint() const {
     return QSize(0, QLabel::minimumSizeHint().height());
 }
