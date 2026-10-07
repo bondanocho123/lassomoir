@@ -416,7 +416,7 @@ void CanvasInspector::showEmpty(const CanvasBoard &board) {
         "<b>Klik dua kali</b> di ruang kosong: catatan baru<br>"
         "<b>N</b> catatan · <b>L</b> langkah AI · <b>C</b> tanya di chat · <b>Del</b> hapus<br>"
         "Seret dari <b>Pustaka</b> di kiri untuk merujuk dokumen hasil stage dan lampiran task lain<br>"
-        "Tarik dari titik <b>●</b> di tepi kanan kartu ke kartu lain untuk menyambungkan. Garis yang "
+        "Tarik dari titik <b>●</b> di tepi kartu ke kartu lain untuk menyambungkan. Garis yang "
         "masuk ke langkah AI menjadi bahan agent<br>"
         "<b>Spasi + seret</b> atau tombol tengah: geser · <b>Ctrl + scroll</b>: zoom · <b>Ctrl + 0</b>: "
         "tampilkan semua<br>"
@@ -547,7 +547,7 @@ void CanvasInspector::showStep(const CanvasNode &node, bool sameNode, RunState s
     } else if (node.hasResult()) {
         markdown = QStringLiteral("**Gagal (%1)**\n\n%2").arg(node.result.outcome, node.result.message);
     } else {
-        markdown = QStringLiteral("_Belum ada hasil. Sambungkan kartu bahan ke titik kiri langkah ini, tulis "
+        markdown = QStringLiteral("_Belum ada hasil. Sambungkan kartu bahan ke langkah ini, tulis "
                                   "instruksinya, lalu tekan ▶ Jalankan._");
     }
     if (m_stepResult->markdown() != markdown) {

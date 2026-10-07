@@ -93,7 +93,7 @@ CanvasView::CanvasView(CanvasModel &model, QWidget *parent)
     connect(&m_pulseTimer, &QTimer::timeout, this, &CanvasView::updatePulse);
 
     rebuild();
-    setTransform(QTransform::fromScale(m_zoom, m_zoom));
+    setZoomLevel(m_zoom);
     centerOn(0, 0);
 }
 
@@ -160,6 +160,7 @@ void CanvasView::addNodeItem(const CanvasNode &node) {
     }
     auto *item = new CanvasNodeItem(node);
     item->setZValue(++m_topZ);
+    item->setViewScale(m_zoom);
     m_scene->addItem(item);
     m_nodes.insert(node.id, item);
     item->setRunState(m_runStates.value(node.id, RunState::Idle));
@@ -185,6 +186,9 @@ void CanvasView::addNodeItem(const CanvasNode &node) {
             }
         }
     });
+    connect(item, &CanvasNodeItem::geometryChanged, this, &CanvasView::scheduleRouting);
+    // Kartu baru bisa berdiri di lorong garis yang sudah ada
+    scheduleRouting();
     updateEmptyHint();
 }
 
@@ -195,6 +199,7 @@ void CanvasView::addEdgeItem(const CanvasEdge &edge) {
         return;
     }
     auto *item = new CanvasEdgeItem(edge, from, to);
+    item->setViewScale(m_zoom);
     m_scene->addItem(item);
     m_edges.insert(edge.id, item);
 }
@@ -227,8 +232,25 @@ void CanvasView::removeNodeItem(const QString &id) {
     m_nodes.remove(id);
     m_runStates.remove(id);
     delete item;
+    // Lorong yang tadinya ditutup kartu ini terbuka lagi
+    scheduleRouting();
     updatePulse();
     updateEmptyHint();
+}
+
+void CanvasView::scheduleRouting() {
+    if (m_routingPending) {
+        return;
+    }
+    m_routingPending = true;
+    QMetaObject::invokeMethod(this, &CanvasView::routeEdges, Qt::QueuedConnection);
+}
+
+void CanvasView::routeEdges() {
+    m_routingPending = false;
+    for (CanvasEdgeItem *edge : std::as_const(m_edges)) {
+        edge->updatePath();
+    }
 }
 
 void CanvasView::updateEmptyHint() {
@@ -457,24 +479,32 @@ void CanvasView::fitAll() {
     const QRectF padded = bounds.adjusted(-60, -60, 60, 60);
     const QSize available = viewport()->size();
     // Kanvas yang kecil tidak diperbesar melewati 100%
-    m_zoom = std::clamp(std::min(available.width() / padded.width(), available.height() / padded.height()), kMinZoom, 1.0);
-    setTransform(QTransform::fromScale(m_zoom, m_zoom));
+    setZoomLevel(std::clamp(std::min(available.width() / padded.width(), available.height() / padded.height()), kMinZoom, 1.0));
     centerOn(padded.center());
     emit zoomChanged(m_zoom);
 }
 
 void CanvasView::restoreView(const QPointF &center, qreal zoom) {
-    m_zoom = std::clamp(zoom, kMinZoom, kMaxZoom);
-    setTransform(QTransform::fromScale(m_zoom, m_zoom));
+    setZoomLevel(std::clamp(zoom, kMinZoom, kMaxZoom));
     centerOn(center);
     emit zoomChanged(m_zoom);
+}
+
+void CanvasView::setZoomLevel(qreal zoom) {
+    m_zoom = zoom;
+    setTransform(QTransform::fromScale(zoom, zoom));
+    for (CanvasNodeItem *item : std::as_const(m_nodes)) {
+        item->setViewScale(zoom);
+    }
+    for (CanvasEdgeItem *edge : std::as_const(m_edges)) {
+        edge->setViewScale(zoom);
+    }
 }
 
 void CanvasView::applyZoom(qreal zoom, const QPoint &anchor) {
     zoom = std::clamp(zoom, kMinZoom, kMaxZoom);
     const QPointF focus = mapToScene(anchor);
-    m_zoom = zoom;
-    setTransform(QTransform::fromScale(zoom, zoom));
+    setZoomLevel(zoom);
     scrollBy(QPointF(mapFromScene(focus) - anchor));
     emit zoomChanged(m_zoom);
 }
@@ -564,8 +594,8 @@ void CanvasView::mousePressEvent(QMouseEvent *event) {
         CanvasNodeItem *node = nodeAt(pos);
         if (node && !node->isEditing()) {
             const QPointF scenePos = mapToScene(pos);
-            // Titik di tepi kanan kartu, atau Alt + seret dari mana saja di kartu: tarik garis baru
-            if (node->hitsOutPort(scenePos, 10.0 / m_zoom) || (event->modifiers() & Qt::AltModifier)) {
+            // Titik di tengah salah satu sisi kartu, atau Alt + seret dari mana saja di kartu: tarik garis baru
+            if (node->hitsPort(scenePos, 9.0 / m_zoom) || (event->modifiers() & Qt::AltModifier)) {
                 m_scene->setFocusItem(nullptr);
                 startConnection(node, scenePos);
                 event->accept();
@@ -975,15 +1005,24 @@ void CanvasView::resizeEvent(QResizeEvent *event) {
 }
 
 CanvasNodeItem *CanvasView::nodeAt(const QPoint &viewportPos) const {
+    // Kartu yang badannya memuat titik itu menang atas kartu lain yang hanya titik sambungnya menjorok ke sana
+    const QPointF scenePos = mapToScene(viewportPos);
+    CanvasNodeItem *nearby = nullptr;
     const QList<QGraphicsItem *> hits = items(viewportPos);
     for (QGraphicsItem *hit : hits) {
         for (QGraphicsItem *item = hit; item; item = item->parentItem()) {
             if (auto *node = qgraphicsitem_cast<CanvasNodeItem *>(item)) {
-                return node;
+                if (node->sceneCardRect().contains(scenePos)) {
+                    return node;
+                }
+                if (!nearby) {
+                    nearby = node;
+                }
+                break;
             }
         }
     }
-    return nullptr;
+    return nearby;
 }
 
 CanvasEdgeItem *CanvasView::edgeAt(const QPoint &viewportPos) const {
@@ -1014,18 +1053,31 @@ void CanvasView::updateConnection(const QPointF &scenePos) {
     if (!m_connectLine || !m_connectFrom) {
         return;
     }
-    QPointF end = scenePos;
+    // Garisnya sudah menempel seperti garis jadinya nanti: di sisi yang menghadap kursor, atau menghadap
+    // kartu yang sedang ditunjuk
     CanvasNodeItem *target = nodeAt(mapFromScene(scenePos));
-    if (target && target != m_connectFrom) {
-        end = target->inPort();
+    if (target == m_connectFrom) {
+        target = nullptr;
     }
-    m_connectLine->setPath(canvasConnectorPath(m_connectFrom->outPort(), end));
+    const QRectF source = m_connectFrom->sceneCardRect();
+    const QRectF goal = target ? target->sceneCardRect() : QRectF(scenePos, QSizeF(0, 0));
+    const CanvasRoute route = connectionRoute(m_connectFrom, goal, target);
+    m_connectLine->setPath(canvasConnectorPath(canvasPort(source, route.from), route.from,
+                                               canvasPort(goal, route.to), route.to));
+}
+
+CanvasRoute CanvasView::connectionRoute(const CanvasNodeItem *from, const QRectF &goal, const CanvasNodeItem *to) const {
+    return canvasRoute(from->sceneCardRect(), goal, [this, from, to](const QRectF &lane) {
+        return canvasLaneOccupied(m_scene, lane, from, to);
+    });
 }
 
 void CanvasView::finishConnection(const QPoint &viewportPos) {
     CanvasNodeItem *from = m_connectFrom;
     CanvasNodeItem *target = nodeAt(viewportPos);
     const QPointF scenePos = mapToScene(viewportPos);
+    // Sisi masuk garis di titik lepasnya, selagi kartu asalnya masih pasti ada
+    const CanvasSide entry = from ? connectionRoute(from, QRectF(scenePos, QSizeF(0, 0)), nullptr).to : CanvasSide::Left;
     cancelConnection();
     if (!from || target == from) {
         return;
@@ -1037,11 +1089,12 @@ void CanvasView::finishConnection(const QPoint &viewportPos) {
         }
         return;
     }
-    // Dilepas di ruang kosong: catatan baru yang langsung tersambung, siap diketik
+    // Dilepas di ruang kosong: catatan baru yang langsung tersambung, siap diketik. Titik lepasnya
+    // menjadi titik tempel garis di catatan itu.
     const QString fromId = from->id();
     const QSizeF size = CanvasNode::defaultSize(CanvasNodeKind::Note);
     m_model.beginMacro();
-    const QString note = m_model.addNote(scenePos - QPointF(0, size.height() / 2), QString(),
+    const QString note = m_model.addNote(scenePos - canvasPort(QRectF(QPointF(0, 0), size), entry), QString(),
                                          CanvasPalette::defaultNoteColor());
     m_model.connectNodes(fromId, note);
     m_model.endMacro();

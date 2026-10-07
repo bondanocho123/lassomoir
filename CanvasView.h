@@ -16,13 +16,15 @@
 class CanvasEdgeItem;
 class CanvasModel;
 class CanvasNodeItem;
+struct CanvasRoute;
 class QGraphicsPathItem;
 class QLabel;
 
 // Kanvas tak terbatas: grid titik tanpa tepi, geser (spasi + seret, tombol tengah, scroll touchpad),
 // zoom di titik kursor (Ctrl + scroll, pinch, tombol), seleksi kotak, dan garis sambungan yang ditarik
-// dari titik di tepi kanan kartu. Tampilan mengikuti CanvasModel lewat sinyalnya; setiap perubahan
-// dari pengguna dikirim sebagai intent ke model, termasuk posisi kartu setelah selesai digeser.
+// dari titik di tepi kartu. Garis menempel di sisi kartu yang menghadap kartu tujuannya dan ditata
+// ulang setiap kali ada kartu yang berpindah. Tampilan mengikuti CanvasModel lewat sinyalnya; setiap
+// perubahan dari pengguna dikirim sebagai intent ke model, termasuk posisi kartu setelah selesai digeser.
 class CanvasView : public QGraphicsView {
     Q_OBJECT
 
@@ -107,6 +109,8 @@ private:
     void layoutOverlays();
     void commitMoves();
     void nudgeSelection(const QPointF &delta);
+    // Satu-satunya tempat zoom berubah: kartu dan garis ikut diberi tahu skalanya
+    void setZoomLevel(qreal zoom);
     void applyZoom(qreal zoom, const QPoint &anchor);
     void scrollBy(const QPointF &delta);
     bool isEditingText() const;
@@ -116,6 +120,12 @@ private:
     void updateConnection(const QPointF &scenePos);
     void finishConnection(const QPoint &viewportPos);
     void cancelConnection();
+    // Sisi tempel garis yang sedang ditarik dari `from` ke `goal` (kartu `to`, atau titik kursor)
+    CanvasRoute connectionRoute(const CanvasNodeItem *from, const QRectF &goal, const CanvasNodeItem *to) const;
+    // Kartu yang berpindah bisa menutup atau membuka lorong garis kartu lain: semua garis ditata ulang
+    // sekali, sesudah rentetan perubahan yang sedang berjalan selesai
+    void scheduleRouting();
+    void routeEdges();
     void updatePulse();
     QStringList selectedStepIds() const;
 
@@ -135,6 +145,7 @@ private:
     bool m_spaceHeld = false;
     CanvasNodeItem *m_connectFrom = nullptr;
     QGraphicsPathItem *m_connectLine = nullptr;
+    bool m_routingPending = false;
 
     QTimer m_pulseTimer;
     QElapsedTimer m_pulseClock;

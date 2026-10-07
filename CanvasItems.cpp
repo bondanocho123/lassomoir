@@ -12,7 +12,7 @@
 #include <QGraphicsSceneMouseEvent>
 #include <QGraphicsView>
 #include <QKeyEvent>
-#include <QLinearGradient>
+#include <QLineF>
 #include <QPainter>
 #include <QPainterPathStroker>
 #include <QRegularExpression>
@@ -21,20 +21,40 @@
 #include <QTextDocument>
 #include <QTextLayout>
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace {
 
 constexpr qreal kRadius = 10.0;
 constexpr qreal kPad = 12.0;
-constexpr qreal kChipHeight = 16.0;
 constexpr qreal kPortRadius = 5.0;
 constexpr qreal kHandle = 14.0;
 constexpr int kNoteFontPx = 13;
 constexpr qreal kArrowLength = 10.0;
-constexpr qreal kArrowHalfWidth = 5.0;
-// Di bawah skala ini huruf kartu (12-13 px) jatuh di bawah ~8 px di layar: kartu dilukis ringkas
-constexpr qreal kFullDetail = 0.6;
+// Titik kendali lengkung garis paling jauh sebegini dari titik tempelnya selama kartunya berdekatan
+constexpr qreal kReach = 60.0;
+// Lorong garis diperiksa sedikit lebih lebar daripada garisnya sendiri
+constexpr qreal kLaneMargin = 12.0;
+// Di bawah skala ini huruf catatan (13 px) tidak nyaman lagi dibaca: catatan dilukis sebagai ringkasan
+constexpr qreal kNoteSummaryScale = 0.72;
+// Baris pertama catatan menjadi judul ringkasannya selama masih sependek judul
+constexpr int kHeadingMaxChars = 90;
+
+// Ukuran huruf di kanvas (px pada zoom 100%) dan batas bawahnya di layar. Saat kanvas diperkecil huruf
+// berhenti mengecil di batas itu: kartu memuat lebih sedikit teks, tetapi teksnya tetap terbaca.
+struct TypeSize {
+    int base;
+    qreal floor;
+};
+constexpr TypeSize kTitleType{13, 10.5};
+constexpr TypeSize kBodyType{12, 9.5};
+constexpr TypeSize kMetaType{11, 9.0};
+constexpr TypeSize kLabelType{10, 8.0};
+constexpr TypeSize kNoteType{13, 10.0};
+// Judul yang tidak muat boleh mengecil sampai sebesar ini di layar sebelum dipotong elipsis
+constexpr qreal kTitleShrinkFloor = 8.0;
 
 // Warna mode terang; dipetakan ke mode gelap lewat Theme
 constexpr QRgb kSurface = 0xffffff;
@@ -44,10 +64,21 @@ constexpr QRgb kNavy = 0x33517a;
 constexpr QRgb kBody = 0x3d3730;
 constexpr QRgb kMuted = 0x6f6557;
 
+constexpr CanvasSide kSides[] = {CanvasSide::Left, CanvasSide::Top, CanvasSide::Right, CanvasSide::Bottom};
+
 struct Chip {
     QString text;
     QRgb background = 0;
     QRgb foreground = 0;
+};
+
+// Pita di puncak kartu referensi dan langkah AI: warna jenisnya, nama jenis, dan status
+struct CardKind {
+    QString label;
+    QString brief;   // nama jenis yang lebih pendek untuk pita sempit; kosong = tidak ada
+    QRgb band = 0;
+    QRgb ink = 0;
+    Chip status;
 };
 
 struct NoteColor {
@@ -102,6 +133,22 @@ QString restOf(const QString &text) {
     return newline < 0 ? QString() : previewOf(text.trimmed().mid(newline + 1));
 }
 
+// Isi sesudah baris yang dipilih CanvasWorkflow::firstLine sebagai judulnya
+QString afterHeading(const QString &text) {
+    qsizetype start = 0;
+    while (start <= text.size()) {
+        qsizetype end = text.indexOf(QLatin1Char('\n'), start);
+        if (end < 0) {
+            end = text.size();
+        }
+        if (!CanvasWorkflow::firstLine(text.mid(start, end - start)).isEmpty()) {
+            return text.mid(end + 1);
+        }
+        start = end + 1;
+    }
+    return QString();
+}
+
 QFont sized(const QFont &base, int pixels, bool bold = false) {
     QFont font = base;
     font.setPixelSize(pixels);
@@ -109,82 +156,314 @@ QFont sized(const QFont &base, int pixels, bool bold = false) {
     return font;
 }
 
-qreal drawChip(QPainter *painter, const QPointF &anchor, const Chip &chip, const QFont &font, bool alignRight) {
-    if (chip.text.isEmpty()) {
-        return 0.0;
+// Satuan tata letak: berapa px kanvas untuk 1 px layar. Sampai zoom ±83% semua ukuran masih memakai
+// nilai dasarnya, jadi tata letak tidak berubah dan kartu sekadar diperbesar/diperkecil. Di bawah itu
+// satuannya dibulatkan ke langkah 4%, supaya teks tidak ditata ulang di setiap bingkai selama zoom.
+qreal layoutUnit(qreal scale) {
+    const qreal unit = 1.0 / qMax(scale, 0.01);
+    if (unit <= 1.2) {
+        return 1.0;
     }
-    const QFontMetricsF metrics(font);
-    const qreal width = metrics.horizontalAdvance(chip.text) + 12.0;
-    const QRectF rect(alignRight ? QPointF(anchor.x() - width, anchor.y()) : anchor, QSizeF(width, kChipHeight));
-    painter->setPen(Qt::NoPen);
-    painter->setBrush(Theme::fill(chip.background));
-    painter->drawRoundedRect(rect, 4.0, 4.0);
-    painter->setPen(Theme::text(chip.foreground));
-    painter->setFont(font);
-    painter->drawText(rect, Qt::AlignCenter, chip.text);
-    return width;
+    static const qreal step = std::log(1.04);
+    return std::exp(std::round(std::log(unit) / step) * step);
 }
 
-// Teks terbungkus di dalam rect; yang tidak muat dipudarkan ke warna latar di bagian bawah
-void drawWrapped(QPainter *painter, const QRectF &rect, const QString &text, const QFont &font, const QColor &color,
-                 const QColor &background) {
-    if (rect.height() < 4.0 || rect.width() < 8.0 || text.isEmpty()) {
-        return;
-    }
-    const int flags = Qt::TextWordWrap | Qt::AlignLeft | Qt::AlignTop;
-    painter->save();
-    painter->setClipRect(rect);
-    painter->setFont(font);
-    painter->setPen(color);
-    painter->drawText(rect, flags, text);
-    const QFontMetricsF metrics(font);
-    if (metrics.boundingRect(rect, flags, text).height() > rect.height()) {
-        const qreal fade = qMin(rect.height(), metrics.height() * 1.6);
-        const QRectF band(rect.left(), rect.bottom() - fade, rect.width(), fade);
-        QLinearGradient gradient(band.topLeft(), band.bottomLeft());
-        QColor clear = background;
-        clear.setAlpha(0);
-        gradient.setColorAt(0.0, clear);
-        gradient.setColorAt(1.0, background);
-        painter->fillRect(band, gradient);
-    }
-    painter->restore();
+int typePx(const TypeSize &type, qreal unit) {
+    return qMax(type.base, qRound(type.floor * unit));
 }
 
-void drawElided(QPainter *painter, const QRectF &rect, const QString &text, const QFont &font, const QColor &color) {
-    const QFontMetricsF metrics(font);
-    painter->setFont(font);
-    painter->setPen(color);
-    painter->drawText(rect, Qt::AlignLeft | Qt::AlignVCenter, metrics.elidedText(text, Qt::ElideRight, rect.width()));
+// Jarak `base` px di kanvas yang tidak pernah lebih kecil dari `screen` px di layar
+qreal atLeast(qreal base, qreal screen, qreal unit) {
+    return qMax(base, screen * unit);
 }
 
-// Judul sampai maxLines baris, dipatahkan di batas kata; sisanya dipotong elipsis di baris terakhir.
-// Kembalikan tinggi yang terpakai.
-qreal drawTitle(QPainter *painter, const QPointF &topLeft, qreal width, const QString &text, const QFont &font,
-                const QColor &color, int maxLines) {
-    QTextLayout layout(text, font);
-    QTextOption option;
-    option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
-    layout.setTextOption(option);
-    QStringList lines;
-    layout.beginLayout();
-    for (QTextLine line = layout.createLine(); line.isValid(); line = layout.createLine()) {
-        line.setLineWidth(width);
-        if (lines.size() == maxLines - 1) {
-            lines.append(text.mid(line.textStart()));
-            break;
+qreal lineHeightOf(const QFont &font) {
+    const QFontMetricsF metrics(font);
+    return std::ceil(metrics.height() + qMax(0.0, metrics.leading()));
+}
+
+// Teks terbungkus yang sudah ditata baris demi baris. Yang tidak muat tidak pernah terpotong di
+// tengah baris: baris terakhir yang muat diakhiri elipsis.
+struct TextFlow {
+    struct Line {
+        QString text;
+        qreal top = 0.0;
+    };
+    // Satu paragraf yang hurufnya sudah dibentuk dan barisnya sudah diberi tempat: melukis ulang
+    // (hover, denyut, kanvas digeser) tidak membentuknya lagi
+    struct Run {
+        std::shared_ptr<QTextLayout> layout;
+        int lines = 0;   // sekian baris pertamanya yang tampil
+    };
+    QList<Line> lines;
+    QList<Run> runs;
+    qreal lineHeight = 0.0;
+    qreal height = 0.0;        // puncak baris pertama sampai dasar baris terakhir
+    bool truncated = false;    // ada teks yang tidak tampil
+    bool brokenWord = false;   // ada kata yang lebih lebar dari barisnya, jadi terpatah di tengah
+
+    bool isEmpty() const { return lines.isEmpty(); }
+};
+
+// Huruf atau angka yang menyatu dengan tetangganya dalam satu kata. Aksara tanpa spasi (Han, kana)
+// memang boleh patah di antara hurufnya, jadi tidak termasuk.
+bool gluedLetter(QChar c) {
+    switch (c.category()) {
+    case QChar::Letter_Uppercase:
+    case QChar::Letter_Lowercase:
+    case QChar::Letter_Titlecase:
+    case QChar::Letter_Modifier:
+    case QChar::Number_DecimalDigit:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// maxHeight < 0 dan maxLines <= 0 berarti tanpa batas. blankLine: tinggi baris kosong antar paragraf
+// sebagai bagian dari tinggi baris (pratinjau memakai setengah baris supaya lebih rapat).
+TextFlow flowText(const QString &text, const QFont &font, qreal width, qreal maxHeight = -1.0, int maxLines = 0,
+                  qreal blankLine = 1.0) {
+    TextFlow flow;
+    const QFontMetricsF metrics(font);
+    flow.lineHeight = lineHeightOf(font);
+    if (text.isEmpty() || width < 1.0) {
+        return flow;
+    }
+    int lineLimit = maxLines > 0 ? maxLines : std::numeric_limits<int>::max();
+    if (maxHeight >= 0.0) {
+        lineLimit = qMin(lineLimit, int((maxHeight + 0.5) / flow.lineHeight));
+    }
+    if (lineLimit <= 0) {
+        flow.truncated = true;
+        return flow;
+    }
+    // Yang jelas tidak akan muat tidak ikut ditata: paragraf panjang dipotong kira-kira seisi kotaknya
+    const qsizetype lineChars = qsizetype(width / qMax(1.0, metrics.averageCharWidth() * 0.4)) + 16;
+    const qsizetype charLimit = lineLimit > 4096 ? -1 : lineChars * (lineLimit + 1);
+
+    QTextOption wrap;
+    wrap.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+    qreal y = 0.0;
+    QString tailSource;   // paragraf baris terakhir yang muat, dan awal baris itu di dalamnya
+    int tailStart = 0;
+    bool more = false;
+    // Paragraf diambil satu per satu: teks panjang tidak dipecah seluruhnya hanya untuk beberapa baris awalnya
+    for (qsizetype position = 0; position <= text.size() && !more;) {
+        qsizetype end = text.indexOf(QLatin1Char('\n'), position);
+        if (end < 0) {
+            end = text.size();
         }
-        lines.append(text.mid(line.textStart(), line.textLength()));
+        QString paragraph = text.mid(position, end - position);
+        position = end + 1;
+        paragraph.replace(QLatin1Char('\t'), QLatin1String("    "));
+        if (paragraph.endsWith(QLatin1Char('\r'))) {
+            paragraph.chop(1);
+        }
+        if (paragraph.trimmed().isEmpty()) {
+            y += flow.lineHeight * blankLine;
+            continue;
+        }
+        const bool cut = charLimit >= 0 && paragraph.size() > charLimit;
+        if (cut) {
+            paragraph.truncate(charLimit);
+        }
+        auto layout = std::make_shared<QTextLayout>(paragraph, font);
+        layout->setCacheEnabled(true);
+        layout->setTextOption(wrap);
+        layout->beginLayout();
+        int shown = 0;
+        for (QTextLine line = layout->createLine(); line.isValid(); line = layout->createLine()) {
+            line.setLineWidth(width);
+            if (flow.lines.size() >= lineLimit || (maxHeight >= 0.0 && y + flow.lineHeight > maxHeight + 0.5)) {
+                more = true;
+                break;
+            }
+            line.setPosition(QPointF(0.0, y));
+            QString piece = paragraph.mid(line.textStart(), line.textLength());
+            while (piece.endsWith(QLatin1Char(' '))) {
+                piece.chop(1);
+            }
+            flow.lines.append({piece, y});
+            ++shown;
+            const int next = line.textStart() + line.textLength();
+            if (next > 0 && next < paragraph.size() && gluedLetter(paragraph.at(next - 1))
+                && gluedLetter(paragraph.at(next))) {
+                flow.brokenWord = true;
+            }
+            tailSource = paragraph;
+            tailStart = line.textStart();
+            y += flow.lineHeight;
+        }
+        layout->endLayout();
+        if (shown > 0) {
+            flow.runs.append({layout, shown});
+        }
+        more = more || cut;
     }
-    layout.endLayout();
+    if (more) {
+        flow.truncated = true;
+        if (!flow.lines.isEmpty()) {
+            // Baris terakhir yang muat diganti sisa paragrafnya sejauh lebarnya, diakhiri elipsis
+            const QString tail = tailSource.mid(tailStart, lineChars).trimmed();
+            QString elided = metrics.elidedText(tail, Qt::ElideRight, width);
+            if (elided == tail) {
+                // Sisa paragrafnya muat: elipsisnya menandai paragraf-paragraf sesudahnya, menggantikan
+                // tanda baca penutupnya ("selesai.…" jadi "selesai…")
+                QString ended = tail;
+                while (!ended.isEmpty() && QStringLiteral(".,:;").contains(ended.back())) {
+                    ended.chop(1);
+                }
+                elided = metrics.elidedText(ended + QChar(0x2026), Qt::ElideRight, width);
+            }
+            flow.lines.last().text = elided;
+            if (--flow.runs.last().lines == 0) {
+                flow.runs.removeLast();
+            }
+            QTextOption single;
+            single.setWrapMode(QTextOption::NoWrap);
+            auto last = std::make_shared<QTextLayout>(flow.lines.constLast().text, font);
+            last->setCacheEnabled(true);
+            last->setTextOption(single);
+            last->beginLayout();
+            QTextLine line = last->createLine();
+            if (line.isValid()) {
+                line.setLineWidth(width);
+                line.setPosition(QPointF(0.0, flow.lines.constLast().top));
+            }
+            last->endLayout();
+            flow.runs.append({last, line.isValid() ? 1 : 0});
+        }
+    }
+    if (!flow.lines.isEmpty()) {
+        flow.height = flow.lines.constLast().top + flow.lineHeight;
+    }
+    return flow;
+}
 
-    const QFontMetricsF metrics(font);
-    qreal y = topLeft.y();
-    for (const QString &line : std::as_const(lines)) {
-        drawElided(painter, QRectF(topLeft.x(), y, width, metrics.height()), line.trimmed(), font, color);
-        y += metrics.height();
+// Judul yang tidak muat dengan hurufnya sendiri, atau katanya terpatah di tengah, ditata dengan huruf
+// kecil; yang tetap tidak muat dipotong elipsis. Hanya dua ukuran, supaya judul kartu-kartu yang
+// berjajar tidak belang-belang.
+TextFlow fitTitle(const QString &text, const QFont &font, int smallPx, qreal width, qreal height) {
+    // Makin kecil makin baik: 0 utuh, 1 ada kata terpatah, 2 terpotong
+    auto flaw = [](const TextFlow &flow) { return flow.truncated ? 2 : flow.brokenWord ? 1 : 0; };
+    const TextFlow normal = flowText(text, font, width, height);
+    if (flaw(normal) == 0 || smallPx >= font.pixelSize()) {
+        return normal;
     }
-    return qMax<qsizetype>(1, lines.size()) * metrics.height();
+    const TextFlow small = flowText(text, sized(font, smallPx, font.bold()), width, height);
+    // Sama-sama terpotong: huruf kecil menampilkan lebih banyak. Selain itu huruf kecil hanya dipakai
+    // bila memang memperbaiki sesuatu.
+    return flaw(small) < flaw(normal) || small.truncated ? small : normal;
+}
+
+void drawFlow(QPainter *painter, const QPointF &topLeft, const TextFlow &flow, const QColor &color) {
+    painter->setPen(color);
+    for (const TextFlow::Run &run : flow.runs) {
+        for (int i = 0; i < run.lines; ++i) {
+            run.layout->lineAt(i).draw(painter, topLeft);
+        }
+    }
+}
+
+CardKind kindOf(const CanvasNode &node, RunState state) {
+    CardKind kind;
+    switch (node.kind) {
+    case CanvasNodeKind::Artifact:
+        kind.label = !node.source.stage.isEmpty() ? node.source.stage
+                     : CanvasWorkflow::isImageReference(node) ? QStringLiteral("FOTO") : QStringLiteral("LAMPIRAN");
+        kind.band = 0xf2e3d1;
+        kind.ink = 0x8a5a2f;
+        break;
+    case CanvasNodeKind::Task:
+        kind.label = QStringLiteral("TASK");
+        kind.band = 0xe3ebf6;
+        kind.ink = 0x2f4b73;
+        if (node.detail.contains(QStringLiteral("menunggu review"))) {
+            kind.status = {QStringLiteral("REVIEW"), 0xfbeccf, 0x7a4a12};
+        } else if (node.detail.contains(QStringLiteral("gagal"))) {
+            kind.status = {QStringLiteral("GAGAL"), 0xf6e0db, 0x9b2c1f};
+        } else if (node.detail.startsWith(QStringLiteral("DONE"))) {
+            kind.status = {QStringLiteral("SELESAI"), 0xe3f0e5, 0x2f7d32};
+        }
+        break;
+    case CanvasNodeKind::Step:
+        kind.label = node.output == CanvasStepOutput::Tasks ? QStringLiteral("LANGKAH AI → TASK")
+                                                            : QStringLiteral("LANGKAH AI");
+        kind.brief = node.output == CanvasStepOutput::Tasks ? QStringLiteral("AI → TASK") : QStringLiteral("AI");
+        kind.band = kNavy;
+        kind.ink = 0xffffff;
+        // Pitanya sendiri navy: status berjalan memakai warna permukaan supaya tetap terlihat
+        if (state == RunState::Running) {
+            kind.status = {QStringLiteral("BERJALAN"), kSurface, kNavy};
+        } else if (state == RunState::Queued) {
+            kind.status = {QStringLiteral("ANTRE"), 0xe3ebf6, 0x2f4b73};
+        } else if (node.hasResult()) {
+            kind.status = node.result.success ? Chip{QStringLiteral("SELESAI"), 0xe3f0e5, 0x2f7d32}
+                                              : Chip{QStringLiteral("GAGAL"), 0xf6e0db, 0x9b2c1f};
+        }
+        break;
+    case CanvasNodeKind::Note:
+        break;
+    }
+    if (node.isReference() && !node.available) {
+        kind.status = {QStringLiteral("TIDAK TERSEDIA"), 0xefe9e1, 0x8a7f70};
+    }
+    return kind;
+}
+
+// Arah tegak lurus sisi itu, menjauhi kartunya
+QPointF sideNormal(CanvasSide side) {
+    switch (side) {
+    case CanvasSide::Left: return QPointF(-1, 0);
+    case CanvasSide::Top: return QPointF(0, -1);
+    case CanvasSide::Right: return QPointF(1, 0);
+    case CanvasSide::Bottom: break;
+    }
+    return QPointF(0, 1);
+}
+
+// Titik sambung: 5 px di kanvas, tetapi di layar tidak lebih kecil dari 4,5 px dan tidak lebih besar dari 6,5 px
+qreal portRadius(qreal scale) {
+    return std::clamp(kPortRadius * scale, 4.5, 6.5) / scale;
+}
+
+// Mata panah: 10 px di kanvas. Saat diperkecil ia tetap ±6,5 px di layar supaya arah garisnya
+// terbaca, tetapi tidak pernah lebih dari sepertiga jarak kedua titik tempelnya.
+qreal arrowLength(qreal scale, qreal span) {
+    return qMax(1.0, qMin(qMax(kArrowLength, 6.5 / scale), span * 0.35));
+}
+
+// Daerah klik garis: 12 px di kanvas, paling sedikit 10 px di layar
+qreal edgeHitWidth(qreal scale) {
+    return qMax(12.0, 10.0 / scale);
+}
+
+// Skala untuk menghitung daerah lukis item. Bagian yang berukuran px layar (titik sambung, mata
+// panah, garis tepi) melebar di kanvas saat diperkecil, tetapi daerah lukis yang berubah di setiap
+// langkah zoom berarti indeks scene diperbarui untuk semua item di setiap langkah. Skalanya
+// dibulatkan ke bawah ke kelipatan 1,5×: daerahnya sedikit lebih luas dari perlu dan hanya berubah
+// beberapa kali di sepanjang rentang zoom.
+qreal boundsScale(qreal scale) {
+    if (scale >= 1.0) {
+        return 1.0;
+    }
+    static const qreal step = std::log(1.5);
+    return std::exp(std::floor(std::log(scale) / step) * step);
+}
+
+// Bagian atas kartu setinggi `height` (paling sedikit sebesar radius): dua pojok atasnya ikut membulat
+QPainterPath bandPath(const QRectF &card, qreal radius, qreal height) {
+    const qreal diameter = 2 * radius;
+    QPainterPath path;
+    path.moveTo(card.left(), card.top() + height);
+    path.lineTo(card.left(), card.top() + radius);
+    path.arcTo(QRectF(card.left(), card.top(), diameter, diameter), 180, -90);
+    path.lineTo(card.right() - radius, card.top());
+    path.arcTo(QRectF(card.right() - diameter, card.top(), diameter, diameter), 90, -90);
+    path.lineTo(card.right(), card.top() + height);
+    path.closeSubpath();
+    return path;
 }
 
 }
@@ -219,11 +498,85 @@ QColor CanvasPalette::noteFill(const QString &key) {
     return Theme::fill(kNoteColors[0].light);
 }
 
-QPainterPath canvasConnectorPath(const QPointF &from, const QPointF &to) {
-    const qreal reach = qMax(60.0, qAbs(to.x() - from.x()) * 0.5);
+QPointF canvasPort(const QRectF &rect, CanvasSide side) {
+    switch (side) {
+    case CanvasSide::Left: return QPointF(rect.left(), rect.center().y());
+    case CanvasSide::Top: return QPointF(rect.center().x(), rect.top());
+    case CanvasSide::Right: return QPointF(rect.right(), rect.center().y());
+    case CanvasSide::Bottom: break;
+    }
+    return QPointF(rect.center().x(), rect.bottom());
+}
+
+CanvasRoute canvasRoute(const QRectF &from, const QRectF &to, const std::function<bool(const QRectF &lane)> &occupied) {
+    const QPointF a = from.center();
+    const QPointF b = to.center();
+    const bool right = b.x() >= a.x();
+    const bool below = b.y() >= a.y();
+    const CanvasRoute across{right ? CanvasSide::Right : CanvasSide::Left, right ? CanvasSide::Left : CanvasSide::Right};
+    const CanvasRoute upright{below ? CanvasSide::Bottom : CanvasSide::Top, below ? CanvasSide::Top : CanvasSide::Bottom};
+    // Celah antara kedua kartu di tiap arah; nol atau negatif = keduanya bertindihan di arah itu
+    const qreal gapX = right ? to.left() - from.right() : from.left() - to.right();
+    const qreal gapY = below ? to.top() - from.bottom() : from.top() - to.bottom();
+    if (gapX > 0.0 && gapY <= 0.0) {
+        return across;
+    }
+    if (gapY > 0.0 && gapX <= 0.0) {
+        return upright;
+    }
+    const qreal shiftX = qAbs(b.x() - a.x());
+    const qreal shiftY = qAbs(b.y() - a.y());
+    if (gapX <= 0.0) {
+        // Kartunya saling menimpa: ikut arah pergeseran yang lebih besar dibanding ukuran kartunya
+        return shiftX * (from.height() + to.height()) >= shiftY * (from.width() + to.width()) ? across : upright;
+    }
+    // Serong: lorong mendatar ada di antara sisi kiri/kanan kedua kartu, lorong tegak di antara sisi
+    // atas/bawahnya; masing-masing selebar rentang kedua titik tempelnya
+    const QRectF laneAcross(QPointF(right ? from.right() : to.right(), qMin(a.y(), b.y()) - kLaneMargin),
+                            QPointF(right ? to.left() : from.left(), qMax(a.y(), b.y()) + kLaneMargin));
+    const QRectF laneUpright(QPointF(qMin(a.x(), b.x()) - kLaneMargin, below ? from.bottom() : to.bottom()),
+                             QPointF(qMax(a.x(), b.x()) + kLaneMargin, below ? to.top() : from.top()));
+    const bool acrossTaken = occupied && occupied(laneAcross);
+    const bool uprightTaken = occupied && occupied(laneUpright);
+    if (acrossTaken != uprightTaken) {
+        return acrossTaken ? upright : across;
+    }
+    // Lebih lurus = bergeser ke samping lebih sedikit dibanding jarak majunya
+    return shiftY * gapY <= shiftX * gapX ? across : upright;
+}
+
+QPainterPath canvasConnectorPath(const QPointF &from, CanvasSide fromSide, const QPointF &to, CanvasSide toSide) {
+    const QPointF out = sideNormal(fromSide);
+    const QPointF in = sideNormal(toSide);
+    const QPointF delta = to - from;
+    // ahead: sejauh apa ujung lainnya di depan sisi ini; across: sejauh apa ia bergeser ke samping
+    auto reach = [](qreal ahead, qreal across) {
+        if (ahead >= 0.0) {
+            // Paling jauh sampai sejajar ujung lainnya, supaya lengkungnya tidak keluar dari lorongnya
+            return qMax(ahead * 0.5, qMin(ahead, kReach));
+        }
+        // Ujung lainnya di belakang sisi ini (kartu bertindihan): memutar secukupnya
+        return qMin(2 * kReach, kReach * 0.5 + (qAbs(ahead) + qAbs(across)) * 0.25);
+    };
+    const qreal aheadFrom = QPointF::dotProduct(delta, out);
+    const qreal aheadTo = -QPointF::dotProduct(delta, in);
+    const qreal acrossFrom = QPointF::dotProduct(delta, QPointF(-out.y(), out.x()));
+    const qreal acrossTo = QPointF::dotProduct(delta, QPointF(-in.y(), in.x()));
     QPainterPath path(from);
-    path.cubicTo(from + QPointF(reach, 0), to - QPointF(reach, 0), to);
+    path.cubicTo(from + out * reach(aheadFrom, acrossFrom), to + in * reach(aheadTo, acrossTo), to);
     return path;
+}
+
+bool canvasLaneOccupied(const QGraphicsScene *scene, const QRectF &lane, const CanvasNodeItem *from,
+                        const CanvasNodeItem *to) {
+    const QList<QGraphicsItem *> items = scene->items(lane, Qt::IntersectsItemBoundingRect);
+    for (const QGraphicsItem *item : items) {
+        const auto *node = qgraphicsitem_cast<const CanvasNodeItem *>(item);
+        if (node && node != from && node != to && node->sceneCardRect().intersects(lane)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 CanvasTextEditor::CanvasTextEditor(QGraphicsItem *parent) : QGraphicsTextItem(parent) {
@@ -262,7 +615,32 @@ void CanvasTextEditor::keyPressEvent(QKeyEvent *event) {
     QGraphicsTextItem::keyPressEvent(event);
 }
 
-CanvasNodeItem::CanvasNodeItem(const CanvasNode &node) : m_node(node), m_size(node.size) {
+// Hasil menata isi kartu untuk satu ukuran kartu dan satu skala tampilan
+struct CanvasNodeItem::Layout {
+    // Kunci: tata letak dihitung ulang hanya bila salah satunya berubah
+    int revision = -1;
+    QSizeF size;
+    qreal unit = 0.0;
+    bool summary = false;
+    QFont base;
+
+    qreal pad = kPad;
+    qreal radius = kRadius;
+    qreal band = 0.0;     // tinggi pita jenis kartu; catatan tidak punya
+    bool label = false;   // pitanya setinggi penuh: memuat nama jenis dan status
+    QFont labelFont;
+    TextFlow title;
+    QPointF titlePos;
+    QString meta;         // kosong = tidak tampil
+    QFont metaFont;
+    QRectF metaRect;
+    TextFlow body;
+    QPointF bodyPos;
+    QRectF image;         // tempat gambar pratinjau kartu foto
+};
+
+CanvasNodeItem::CanvasNodeItem(const CanvasNode &node)
+    : m_node(node), m_size(node.size), m_layout(std::make_unique<Layout>()) {
     setFlags(ItemIsMovable | ItemIsSelectable | ItemSendsGeometryChanges);
     setAcceptHoverEvents(true);
     setPos(node.pos);
@@ -310,6 +688,15 @@ void CanvasNodeItem::setPulse(qreal level) {
     update();
 }
 
+void CanvasNodeItem::setViewScale(qreal scale) {
+    m_viewScale = qMax(scale, 0.01);
+    const qreal bounds = boundsScale(m_viewScale);
+    if (bounds != m_boundsScale) {
+        prepareGeometryChange();
+        m_boundsScale = bounds;
+    }
+}
+
 bool CanvasNodeItem::wantsThumbnail() const {
     return CanvasWorkflow::isImageReference(m_node);
 }
@@ -319,29 +706,42 @@ void CanvasNodeItem::setThumbnail(const QImage &image) {
     update();
 }
 
-QPointF CanvasNodeItem::inPort() const {
-    return mapToScene(QPointF(0, m_size.height() / 2));
+QPointF CanvasNodeItem::port(CanvasSide side) const {
+    return canvasPort(sceneCardRect(), side);
 }
 
-QPointF CanvasNodeItem::outPort() const {
-    return mapToScene(QPointF(m_size.width(), m_size.height() / 2));
-}
-
-bool CanvasNodeItem::hitsOutPort(const QPointF &scenePos, qreal tolerance) const {
-    const QPointF delta = scenePos - outPort();
-    return std::hypot(delta.x(), delta.y()) <= qMax(tolerance, kPortRadius + 2);
+bool CanvasNodeItem::hitsPort(const QPointF &scenePos, qreal tolerance) const {
+    // Pojok kanan bawah milik pegangan ubah ukuran, juga bila daerah titik sambung sampai ke sana
+    if (hitsResizeHandle(mapFromScene(scenePos))) {
+        return false;
+    }
+    // Di kartu yang kecil di layar daerah titiknya ikut mengecil, supaya kartunya masih bisa digeser
+    const qreal reach = qMin(qMax(tolerance, kPortRadius + 2), 0.22 * qMin(m_size.width(), m_size.height()));
+    return std::any_of(std::begin(kSides), std::end(kSides), [&](CanvasSide side) {
+        const QPointF delta = scenePos - port(side);
+        return std::hypot(delta.x(), delta.y()) <= reach;
+    });
 }
 
 void CanvasNodeItem::addEdge(CanvasEdgeItem *edge) {
     if (!m_edges.contains(edge)) {
         m_edges.append(edge);
+        ++m_revision;   // langkah AI menampilkan jumlah bahannya
         update();
     }
 }
 
 void CanvasNodeItem::removeEdge(CanvasEdgeItem *edge) {
     m_edges.removeAll(edge);
+    ++m_revision;
     update();
+}
+
+QFont CanvasNodeItem::baseFont() const {
+    if (scene() && !scene()->views().isEmpty()) {
+        return scene()->views().first()->viewport()->font();
+    }
+    return QApplication::font();
 }
 
 void CanvasNodeItem::beginEdit() {
@@ -349,18 +749,14 @@ void CanvasNodeItem::beginEdit() {
         return;
     }
     auto *editor = new CanvasTextEditor(this);
-    QFont font = QApplication::font();
-    if (scene() && !scene()->views().isEmpty()) {
-        font = scene()->views().first()->viewport()->font();
-    }
-    editor->setFont(sized(font, kNoteFontPx));
+    editor->setFont(sized(baseFont(), kNoteFontPx));
     editor->setDefaultTextColor(Theme::text(kBody));
     editor->setPlainText(m_node.text);
     editor->setTextWidth(m_size.width() - 2 * kPad);
     editor->setPos(kPad, kPad);
     editor->finished = [this]() { finishEdit(); };
     // Kartu ikut memanjang selagi diketik, supaya teksnya tidak keluar dari kertas
-    connect(editor->document(), &QTextDocument::contentsChanged, this, [this]() {
+    auto growToFit = [this]() {
         if (!m_editor) {
             return;
         }
@@ -371,8 +767,12 @@ void CanvasNodeItem::beginEdit() {
             updateEdges();
             update();
         }
-    });
+    };
+    connect(editor->document(), &QTextDocument::contentsChanged, this, growToFit);
     m_editor = editor;
+    // Catatan yang isinya sudah lebih panjang dari kertasnya dibuka seutuhnya; setelah selesai diedit
+    // kartunya memang disimpan sebesar isinya
+    growToFit();
     editor->setFocus(Qt::OtherFocusReason);
     QTextCursor cursor = editor->textCursor();
     cursor.movePosition(QTextCursor::End);
@@ -392,33 +792,45 @@ void CanvasNodeItem::finishEdit() {
     emit edited(m_node.id, text, needed);
 }
 
-qreal CanvasNodeItem::viewScale() const {
-    if (scene() && !scene()->views().isEmpty()) {
-        return scene()->views().first()->transform().m11();
-    }
-    return 1.0;
+qreal CanvasNodeItem::resizeHandleSide() const {
+    // 14 px di layar, tetapi tidak lebih dari sepertiga sisi kartu: kartu yang kecil di layar tetap
+    // punya badan untuk digeser
+    return qMin(qMax(kHandle, kHandle / m_viewScale), 0.3 * qMin(m_size.width(), m_size.height()));
 }
 
 bool CanvasNodeItem::hitsResizeHandle(const QPointF &localPos) const {
-    const qreal side = qMax(kHandle, kHandle / viewScale());
+    const qreal side = resizeHandleSide();
     return QRectF(m_size.width() - side, m_size.height() - side, side, side).contains(localPos);
 }
 
 void CanvasNodeItem::refreshTexts() {
+    ++m_revision;
     m_heading.clear();
     m_meta.clear();
     m_preview.clear();
+    m_summary.clear();
+    // Pratinjau cukup sepanjang yang bisa dimuat kartu sebesar ini
+    const int budget = std::clamp(int(m_size.width() * m_size.height() / 40.0), 900, 24000);
     switch (m_node.kind) {
-    case CanvasNodeKind::Note:
-        m_preview = m_node.text.left(2000);
+    case CanvasNodeKind::Note: {
+        m_preview = m_node.text;
+        const QString first = CanvasWorkflow::firstLine(m_node.text);
+        if (!first.isEmpty() && first.size() <= kHeadingMaxChars) {
+            m_heading = first;
+            m_summary = previewOf(afterHeading(m_node.text), budget);
+        } else {
+            // Paragraf pembuka yang panjang bukan judul: seluruhnya menjadi isi ringkasan
+            m_summary = previewOf(m_node.text, budget);
+        }
         break;
+    }
     case CanvasNodeKind::Artifact:
     case CanvasNodeKind::Task:
         m_heading = m_node.title;
         m_meta = m_node.detail.isEmpty() ? m_node.source.projectId
                                          : QStringLiteral("%1 · %2").arg(m_node.detail, m_node.source.projectId);
         if (!CanvasWorkflow::isImageReference(m_node)) {
-            m_preview = previewOf(m_node.text);
+            m_preview = previewOf(m_node.text, budget);
         }
         break;
     case CanvasNodeKind::Step: {
@@ -440,43 +852,232 @@ void CanvasNodeItem::refreshTexts() {
         } else if (m_runState == RunState::Queued) {
             m_preview = QStringLiteral("Menunggu giliran atau menunggu langkah hulunya selesai.");
         } else if (m_node.result.success) {
-            m_preview = previewOf(m_node.result.message);
+            m_preview = previewOf(m_node.result.message, budget);
         } else if (m_node.hasResult()) {
             m_preview = QStringLiteral("Gagal (%1): %2").arg(m_node.result.outcome, m_node.result.message.left(400));
         } else {
             const QString rest = restOf(m_node.text);
             m_preview = !rest.isEmpty() ? rest
-                                        : QStringLiteral("Sambungkan kartu bahan ke titik kiri kartu ini, lalu jalankan ▶.");
+                                        : QStringLiteral("Sambungkan kartu bahan ke kartu ini, lalu jalankan ▶.");
         }
         break;
     }
     }
 }
 
+const CanvasNodeItem::Layout &CanvasNodeItem::layoutFor(qreal scale, const QFont &base) const {
+    const qreal unit = layoutUnit(scale);
+    const bool summary = m_node.kind == CanvasNodeKind::Note && scale < kNoteSummaryScale;
+    Layout &layout = *m_layout;
+    if (layout.revision == m_revision && layout.size == m_size && layout.unit == unit && layout.summary == summary
+        && layout.base == base) {
+        return layout;
+    }
+    layout = Layout();
+    layout.revision = m_revision;
+    layout.size = m_size;
+    layout.unit = unit;
+    layout.summary = summary;
+    layout.base = base;
+    layout.pad = atLeast(kPad, 5.0, unit);
+    layout.radius = qMin(atLeast(kRadius, 3.0, unit), qMin(m_size.width(), m_size.height()) / 2);
+    if (m_node.kind == CanvasNodeKind::Note) {
+        layoutNote(layout);
+    } else {
+        layoutCard(layout);
+    }
+    return layout;
+}
+
+void CanvasNodeItem::layoutNote(Layout &layout) const {
+    const qreal unit = layout.unit;
+    const bool empty = m_node.text.trimmed().isEmpty();
+    const QString hint = QStringLiteral("Klik dua kali untuk menulis…");
+    if (!layout.summary) {
+        // Teks apa adanya dengan huruf dan jarak tepi editornya, supaya tidak bergeser saat mulai diedit
+        QFont font = sized(layout.base, kNoteFontPx);
+        font.setItalic(empty);
+        layout.body = flowText(empty ? hint : m_preview, font, m_size.width() - 2 * kPad, m_size.height() - 2 * kPad);
+        layout.bodyPos = QPointF(kPad, kPad);
+        return;
+    }
+    // Diperkecil: baris pertama menjadi judul tebal dan sisanya pratinjau, keduanya berhuruf terbaca
+    const qreal inner = m_size.width() - 2 * layout.pad;
+    qreal top = layout.pad;
+    qreal bottom = m_size.height() - layout.pad;
+    QFont bodyFont = sized(layout.base, typePx(kNoteType, unit));
+    if (empty) {
+        bodyFont.setItalic(true);
+        layout.body = flowText(hint, bodyFont, inner, bottom - top);
+        layout.bodyPos = QPointF(layout.pad, top);
+        return;
+    }
+    if (!m_heading.isEmpty()) {
+        const QFont titleFont = sized(layout.base, typePx(kTitleType, unit), true);
+        layout.title = flowText(m_heading, titleFont, inner, bottom - top, 3);
+        if (layout.title.truncated || layout.title.brokenWord) {
+            // Judulnya tidak muat: jarak tepi atas-bawah dirapatkan dan hurufnya mengecil
+            top = atLeast(5.0, 2.0, unit);
+            bottom = m_size.height() - top;
+            layout.title = fitTitle(m_heading, titleFont, qMax(9, qRound(kTitleShrinkFloor * unit)), inner, bottom - top);
+        }
+        layout.titlePos = QPointF(layout.pad, top);
+        if (!layout.title.isEmpty()) {
+            top += layout.title.height + atLeast(6.0, 3.0, unit);
+        }
+    }
+    if (bottom - top >= lineHeightOf(bodyFont)) {
+        layout.body = flowText(m_summary, bodyFont, inner, bottom - top, 0, 0.5);
+        layout.bodyPos = QPointF(layout.pad, top);
+    }
+}
+
+void CanvasNodeItem::layoutCard(Layout &layout) const {
+    const qreal unit = layout.unit;
+    const qreal height = m_size.height();
+    const qreal inner = m_size.width() - 2 * layout.pad;
+
+    layout.labelFont = sized(layout.base, typePx(kLabelType, unit), true);
+    layout.labelFont.setLetterSpacing(QFont::PercentageSpacing, 104);
+    const QFont titleFont = sized(layout.base, typePx(kTitleType, unit), true);
+    const qreal fullBand = lineHeightOf(layout.labelFont) + 2 * atLeast(7.0, 4.0, unit);
+    const qreal strip = qMin(fullBand, qMax(layout.radius, 3.5 * unit));
+    const qreal gap = atLeast(9.0, 4.0, unit);
+    const qreal foot = atLeast(11.0, 4.5, unit);
+
+    TextFlow title = flowText(m_heading, titleFont, inner, -1.0, 3);
+    const qreal titleLine = title.lineHeight;
+    const int wanted = qMax(1, int(title.lines.size()));
+    // Pita mengalah lebih dulu: dua baris judul lebih penting daripada nama jenis kartunya. Pita yang
+    // tidak memuat nama jenis tinggal garis warna, bukan pita kosong setengah tinggi.
+    layout.label = height - (fullBand + gap + foot) >= qMin(wanted, 2) * titleLine;
+    layout.band = layout.label ? fullBand : strip;
+    qreal y = layout.band + gap;
+    qreal room = height - foot - y;
+    if (!layout.label && (title.truncated || title.brokenWord || wanted * titleLine > room + 0.5)) {
+        // Kartu kecil di layar: pitanya tinggal garis warna, jarak tepinya dirapatkan, dan judul mengecil
+        layout.band = strip;
+        const qreal top = strip + atLeast(4.0, 2.0, unit);
+        const qreal space = height - atLeast(5.0, 2.5, unit) - top;
+        const int smallPx = qMax(9, qRound(kTitleShrinkFloor * unit));
+        if (!title.truncated && !title.brokenWord && wanted * titleLine <= space + 0.5) {
+            // Dengan jarak tepi yang rapat judulnya muat tanpa mengecil
+            layout.title = title;
+        } else if (title.truncated && space < 4 * titleLine) {
+            // Butuh lebih dari tiga baris huruf biasa dan ruangnya tidak sebanyak itu: langsung huruf kecil
+            layout.title = flowText(m_heading, sized(titleFont, smallPx, true), inner, space);
+        } else {
+            layout.title = fitTitle(m_heading, titleFont, smallPx, inner, space);
+        }
+        layout.titlePos = QPointF(layout.pad, top);
+        return;
+    }
+    if (wanted * titleLine > room + 0.5) {
+        title = flowText(m_heading, titleFont, inner, room, 3);
+    }
+    layout.title = title;
+    layout.titlePos = QPointF(layout.pad, y);
+    y += title.height;
+    room = height - foot - y;
+
+    QString meta = m_meta;
+    if (m_node.kind == CanvasNodeKind::Step) {
+        const qsizetype inputs = std::count_if(m_edges.cbegin(), m_edges.cend(),
+                                               [this](const CanvasEdgeItem *edge) { return edge->to() == this; });
+        meta = QStringLiteral("%1 bahan · %2").arg(inputs).arg(m_meta);
+    }
+    layout.metaFont = sized(layout.base, typePx(kMetaType, unit));
+    const qreal metaGap = atLeast(2.0, 1.0, unit);
+    const qreal metaLine = lineHeightOf(layout.metaFont);
+    if (!meta.isEmpty() && room >= metaGap + metaLine) {
+        layout.meta = QFontMetricsF(layout.metaFont).elidedText(meta, Qt::ElideRight, inner);
+        layout.metaRect = QRectF(layout.pad, y + metaGap, inner, metaLine);
+        y += metaGap + metaLine;
+        room = height - foot - y;
+    }
+
+    const qreal bodyGap = atLeast(7.0, 3.0, unit);
+    const QFont bodyFont = sized(layout.base, typePx(kBodyType, unit));
+    if (wantsThumbnail()) {
+        if (room - bodyGap >= atLeast(24.0, 20.0, unit)) {
+            layout.image = QRectF(layout.pad, y + bodyGap, inner, room - bodyGap);
+        }
+    } else if (room - bodyGap >= lineHeightOf(bodyFont)) {
+        layout.body = flowText(m_preview, bodyFont, inner, room - bodyGap, 0, 0.5);
+        layout.bodyPos = QPointF(layout.pad, y + bodyGap);
+    }
+}
+
+QStringList CanvasNodeItem::visibleText(qreal scale) const {
+    const Layout &layout = layoutFor(scale, baseFont());
+    QStringList lines;
+    for (const TextFlow::Line &line : layout.title.lines) {
+        lines.append(line.text);
+    }
+    if (!layout.meta.isEmpty()) {
+        lines.append(layout.meta);
+    }
+    for (const TextFlow::Line &line : layout.body.lines) {
+        lines.append(line.text);
+    }
+    return lines;
+}
+
 QRectF CanvasNodeItem::boundingRect() const {
-    return cardRect().adjusted(-6, -6, kPortRadius + 6, 8);
+    // Titik sambung dan garis tepi kosmetik keluar sedikit dari kartu; bayangannya jatuh ke bawah
+    const qreal handles = portRadius(m_boundsScale) + 3.0 / m_boundsScale;
+    const qreal side = qMax(4.0, handles);
+    return cardRect().adjusted(-side, -side, side, qMax(9.0, handles));
 }
 
 QPainterPath CanvasNodeItem::shape() const {
     QPainterPath path;
+    path.setFillRule(Qt::WindingFill);
     path.addRoundedRect(cardRect(), kRadius, kRadius);
-    path.addEllipse(QPointF(m_size.width(), m_size.height() / 2), kPortRadius + 4, kPortRadius + 4);
+    // Titik sambung menonjol sedikit dari tepi: lebih kecil dari jarak antar kartu yang berjajar,
+    // jadi tonjolannya tidak menutupi kartu tetangga
+    for (CanvasSide side : kSides) {
+        path.addEllipse(canvasPort(cardRect(), side), kPortRadius + 4, kPortRadius + 4);
+    }
     return path;
 }
 
 void CanvasNodeItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget) {
-    const qreal detail = option->levelOfDetailFromTransform(painter->worldTransform());
-    const QRectF card = cardRect();
+    const qreal scale = qMax(0.01, option->levelOfDetailFromTransform(painter->worldTransform()));
+    const Layout &layout = layoutFor(scale, widget ? widget->font() : baseFont());
+    const QRectF card = cardRect().adjusted(0.5, 0.5, -0.5, -0.5);
+    const qreal radius = layout.radius;
+    const bool note = m_node.kind == CanvasNodeKind::Note;
     painter->setRenderHint(QPainter::Antialiasing);
     painter->setRenderHint(QPainter::TextAntialiasing);
 
-    painter->setPen(Qt::NoPen);
-    painter->setBrush(QColor(0, 0, 0, Theme::isDark() ? 70 : 20));
-    painter->drawRoundedRect(card.translated(0, 2), kRadius, kRadius);
+    // Bayangan lembut berlapis. Diperkecil jauh ia tinggal sepersekian piksel, jadi dilewati.
+    if (scale >= 0.3) {
+        static const struct {
+            qreal grow;
+            qreal drop;
+            int alpha;
+        } layers[] = {{3.0, 5.0, 5}, {1.5, 2.5, 8}, {0.0, 1.0, 12}};
+        const int strength = Theme::isDark() ? 3 : 1;
+        painter->setPen(Qt::NoPen);
+        for (const auto &layer : layers) {
+            painter->setBrush(QColor(0x24, 0x20, 0x1b, layer.alpha * strength));
+            painter->drawRoundedRect(card.adjusted(-layer.grow, layer.drop - layer.grow, layer.grow, layer.drop + layer.grow),
+                                     radius + layer.grow, radius + layer.grow);
+        }
+    }
 
-    const bool note = m_node.kind == CanvasNodeKind::Note;
     const QColor surface = note ? CanvasPalette::noteFill(m_node.color) : Theme::fill(kSurface);
-    QColor border = Theme::fill(kBorder);
+    painter->setPen(Qt::NoPen);
+    painter->setBrush(surface);
+    painter->drawRoundedRect(card, radius, radius);
+    if (!note) {
+        painter->setBrush(Theme::fill(kindOf(m_node, m_runState).band));
+        painter->drawPath(bandPath(card, radius, layout.band));
+    }
+
+    // Garis tepi catatan senada dengan kertasnya; kartu lain memakai garis krem yang sama
+    QColor border = note ? (Theme::isDark() ? surface.lighter(130) : surface.darker(109)) : Theme::fill(kBorder);
     Qt::PenStyle style = Qt::SolidLine;
     if (m_runState == RunState::Running) {
         border = Theme::fill(kNavy);
@@ -490,18 +1091,25 @@ void CanvasNodeItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *op
         style = Qt::DashLine;
     }
     qreal width = 1.0;
+    painter->setBrush(Qt::NoBrush);
     if (isSelected()) {
         border = Theme::fill(kAccent);
         width = 2.0;
         style = Qt::SolidLine;
+        // Pendar tipis di luar garis pilihan
+        QColor glow = border;
+        glow.setAlpha(60);
+        QPen halo(glow, 5.0);
+        halo.setCosmetic(true);
+        painter->setPen(halo);
+        painter->drawRoundedRect(card, radius, radius);
     } else if (m_hovered) {
         border = Theme::fill(kAccent);
     }
     QPen pen(border, width, style);
     pen.setCosmetic(true);
     painter->setPen(pen);
-    painter->setBrush(surface);
-    painter->drawRoundedRect(card.adjusted(0.5, 0.5, -0.5, -0.5), kRadius, kRadius);
+    painter->drawRoundedRect(card, radius, radius);
 
     if (m_runState == RunState::Running) {
         QColor glow = Theme::text(kNavy);
@@ -512,155 +1120,100 @@ void CanvasNodeItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *op
         pulsePen.setCosmetic(true);
         painter->setPen(pulsePen);
         painter->setBrush(glow);
-        painter->drawRoundedRect(card.adjusted(1, 1, -1, -1), kRadius - 1, kRadius - 1);
+        painter->drawRoundedRect(card.adjusted(0.5, 0.5, -0.5, -0.5), radius - 0.5, radius - 0.5);
     }
 
-    const QFont base = widget ? widget->font() : QApplication::font();
-    if (detail >= kFullDetail) {
-        if (note) {
-            paintNote(painter, base);
-        } else {
-            paintCard(painter, base);
-        }
+    if (note) {
+        paintNote(painter, layout);
     } else {
-        paintOverview(painter, base, detail);
+        paintCard(painter, layout);
     }
-
     if (isSelected() || m_hovered) {
-        QPen portPen(Theme::fill(kAccent), 1.5);
-        portPen.setCosmetic(true);
-        painter->setPen(portPen);
-        painter->setBrush(Theme::fill(kSurface));
-        painter->drawEllipse(QPointF(m_size.width(), m_size.height() / 2), kPortRadius, kPortRadius);
-
-        QPen grip(Theme::text(kMuted), 1.0);
-        grip.setCosmetic(true);
-        painter->setPen(grip);
-        const QPointF corner(m_size.width() - 4, m_size.height() - 4);
-        for (int i = 1; i <= 3; ++i) {
-            const qreal d = 3.0 * i;
-            painter->drawLine(corner - QPointF(d, 0), corner - QPointF(0, d));
-        }
+        paintHandles(painter, scale);
     }
 }
 
-void CanvasNodeItem::paintNote(QPainter *painter, const QFont &base) {
+void CanvasNodeItem::paintNote(QPainter *painter, const Layout &layout) {
     if (m_editor) {
         return;
     }
-    const QRectF area = cardRect().adjusted(kPad, kPad, -kPad, -kPad);
-    if (m_preview.trimmed().isEmpty()) {
-        QFont hint = sized(base, kNoteFontPx);
-        hint.setItalic(true);
-        drawWrapped(painter, area, QStringLiteral("Klik dua kali untuk menulis…"), hint, Theme::text(0x8a7f70),
-                    CanvasPalette::noteFill(m_node.color));
-        return;
-    }
-    drawWrapped(painter, area, m_preview, sized(base, kNoteFontPx), Theme::text(kBody), CanvasPalette::noteFill(m_node.color));
+    const bool empty = m_node.text.trimmed().isEmpty();
+    drawFlow(painter, layout.titlePos, layout.title, Theme::text(kBody));
+    drawFlow(painter, layout.bodyPos, layout.body, Theme::text(empty ? 0x8a7f70 : kBody));
 }
 
-void CanvasNodeItem::paintCard(QPainter *painter, const QFont &base) {
-    const qreal inner = m_size.width() - 2 * kPad;
-    const QFont chipFont = sized(base, 10, true);
-    qreal y = kPad;
-
-    Chip kind;
-    Chip status;
-    switch (m_node.kind) {
-    case CanvasNodeKind::Artifact:
-        kind = {m_node.source.stage.isEmpty() ? (wantsThumbnail() ? QStringLiteral("FOTO") : QStringLiteral("LAMPIRAN"))
-                                              : m_node.source.stage,
-                0xf2e3d1, 0x8a5a2f};
-        break;
-    case CanvasNodeKind::Task:
-        kind = {QStringLiteral("TASK"), 0xe3ebf6, 0x2f4b73};
-        if (m_node.detail.contains(QStringLiteral("menunggu review"))) {
-            status = {QStringLiteral("REVIEW"), 0xfbeccf, 0x7a4a12};
-        } else if (m_node.detail.contains(QStringLiteral("gagal"))) {
-            status = {QStringLiteral("GAGAL"), 0xf6e0db, 0x9b2c1f};
-        } else if (m_node.detail.startsWith(QStringLiteral("DONE"))) {
-            status = {QStringLiteral("SELESAI"), 0xe3f0e5, 0x2f7d32};
+void CanvasNodeItem::paintCard(QPainter *painter, const Layout &layout) {
+    if (layout.label) {
+        const CardKind kind = kindOf(m_node, m_runState);
+        const QFontMetricsF metrics(layout.labelFont);
+        qreal right = m_size.width() - layout.pad;
+        if (!kind.status.text.isEmpty()) {
+            const qreal chipHeight = metrics.height() + 2 * atLeast(1.5, 1.0, layout.unit);
+            const qreal chipWidth = metrics.horizontalAdvance(kind.status.text) + chipHeight * 0.9;
+            const QRectF chip(right - chipWidth, (layout.band - chipHeight) / 2, chipWidth, chipHeight);
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(Theme::fill(kind.status.background));
+            painter->drawRoundedRect(chip, chipHeight * 0.3, chipHeight * 0.3);
+            painter->setPen(Theme::text(kind.status.foreground));
+            painter->setFont(layout.labelFont);
+            painter->drawText(chip, Qt::AlignCenter, kind.status.text);
+            right = chip.left() - chipHeight * 0.5;
         }
-        break;
-    case CanvasNodeKind::Step:
-        kind = {m_node.output == CanvasStepOutput::Tasks ? QStringLiteral("LANGKAH AI → TASK") : QStringLiteral("LANGKAH AI"),
-                kNavy, 0xffffff};
-        if (m_runState == RunState::Running) {
-            status = {QStringLiteral("BERJALAN"), kNavy, 0xffffff};
-        } else if (m_runState == RunState::Queued) {
-            status = {QStringLiteral("ANTRE"), 0xe3ebf6, 0x2f4b73};
-        } else if (m_node.hasResult()) {
-            status = m_node.result.success ? Chip{QStringLiteral("SELESAI"), 0xe3f0e5, 0x2f7d32}
-                                           : Chip{QStringLiteral("GAGAL"), 0xf6e0db, 0x9b2c1f};
+        // Nama jenis yang tidak muat di samping statusnya disingkat; kalau tetap tidak muat dilewati
+        // (warna pitanya sudah menunjukkan jenis kartu), tidak dipotong menjadi "LANG…"
+        const qreal space = right - layout.pad;
+        const QString label = metrics.horizontalAdvance(kind.label) <= space ? kind.label : kind.brief;
+        if (!label.isEmpty() && metrics.horizontalAdvance(label) <= space) {
+            painter->setFont(layout.labelFont);
+            painter->setPen(Theme::text(kind.ink));
+            painter->drawText(QRectF(layout.pad, 0, space, layout.band), Qt::AlignLeft | Qt::AlignVCenter, label);
         }
-        break;
-    case CanvasNodeKind::Note:
-        break;
     }
-    if (m_node.isReference() && !m_node.available) {
-        status = {QStringLiteral("TIDAK TERSEDIA"), 0xefe9e1, 0x8a7f70};
+    drawFlow(painter, layout.titlePos, layout.title, Theme::text(kNavy));
+    if (!layout.meta.isEmpty()) {
+        painter->setFont(layout.metaFont);
+        painter->setPen(Theme::text(kMuted));
+        painter->drawText(layout.metaRect, Qt::AlignLeft | Qt::AlignVCenter, layout.meta);
     }
-    drawChip(painter, QPointF(kPad, y), kind, chipFont, false);
-    drawChip(painter, QPointF(m_size.width() - kPad, y), status, chipFont, true);
-    y += kChipHeight + 8;
-
-    // Judul dua baris selama kartunya cukup tinggi untuk tetap menyisakan ruang pratinjau
-    const int titleLines = m_size.height() >= 120 ? 2 : 1;
-    y += drawTitle(painter, QPointF(kPad, y), inner, m_heading, sized(base, 13, true), Theme::text(kNavy), titleLines) + 2;
-
-    QString meta = m_meta;
-    if (m_node.kind == CanvasNodeKind::Step) {
-        int inputs = 0;
-        for (const CanvasEdgeItem *edge : m_edges) {
-            inputs += edge->to() == this ? 1 : 0;
-        }
-        meta = QStringLiteral("%1 bahan · %2").arg(inputs).arg(m_meta);
-    }
-    const QFont metaFont = sized(base, 11);
-    const qreal metaHeight = QFontMetricsF(metaFont).height();
-    drawElided(painter, QRectF(kPad, y, inner, metaHeight), meta, metaFont, Theme::text(kMuted));
-    y += metaHeight + 8;
-
-    const QRectF body(kPad, y, inner, m_size.height() - y - kPad);
-    if (wantsThumbnail()) {
-        if (!m_thumbnail.isNull() && body.height() > 8) {
-            const QSizeF fitted = QSizeF(m_thumbnail.size()).scaled(body.size(), Qt::KeepAspectRatio);
-            const QRectF target(body.left() + (body.width() - fitted.width()) / 2, body.top(), fitted.width(), fitted.height());
-            QPainterPath clip;
-            clip.addRoundedRect(target, 6, 6);
-            painter->save();
-            painter->setClipPath(clip, Qt::IntersectClip);
-            painter->setRenderHint(QPainter::SmoothPixmapTransform);
-            painter->drawImage(target, m_thumbnail);
-            painter->restore();
-        }
-        return;
+    if (!layout.image.isEmpty() && !m_thumbnail.isNull()) {
+        const QSizeF fitted = QSizeF(m_thumbnail.size()).scaled(layout.image.size(), Qt::KeepAspectRatio);
+        const QRectF target(layout.image.left() + (layout.image.width() - fitted.width()) / 2, layout.image.top(),
+                            fitted.width(), fitted.height());
+        QPainterPath clip;
+        clip.addRoundedRect(target, 6, 6);
+        painter->save();
+        painter->setClipPath(clip, Qt::IntersectClip);
+        painter->setRenderHint(QPainter::SmoothPixmapTransform);
+        painter->drawImage(target, m_thumbnail);
+        painter->restore();
     }
     const bool failed = m_node.kind == CanvasNodeKind::Step && m_node.hasResult() && !m_node.result.success
                         && m_runState == RunState::Idle;
-    drawWrapped(painter, body, m_preview, sized(base, 12), Theme::text(failed ? 0x9b2c1f : kBody), Theme::fill(kSurface));
+    drawFlow(painter, layout.bodyPos, layout.body, Theme::text(failed ? 0x9b2c1f : kBody));
 }
 
-// Diperkecil jauh: rincian kartu tidak terbaca lagi. Tinggal pita warna jenisnya dan judul berhuruf
-// ~11 px di layar, supaya papan besar tetap bisa dibaca sebagai peta ide.
-void CanvasNodeItem::paintOverview(QPainter *painter, const QFont &base, qreal detail) {
-    const bool note = m_node.kind == CanvasNodeKind::Note;
-    qreal top = 0.0;
-    if (!note) {
-        painter->setPen(Qt::NoPen);
-        painter->setBrush(Theme::fill(m_node.kind == CanvasNodeKind::Step ? kNavy
-                                      : m_node.kind == CanvasNodeKind::Task ? 0xe3ebf6 : 0xf2e3d1));
-        painter->drawRoundedRect(QRectF(0, 0, m_size.width(), 28).adjusted(1, 1, -1, 0), kRadius - 1, kRadius - 1);
-        top = 28.0;
+void CanvasNodeItem::paintHandles(QPainter *painter, qreal scale) {
+    // Empat titik sambung, satu di tengah tiap sisi. Ukurannya tetap di layar saat diperkecil, kecuali
+    // di kartu yang sudah sangat kecil: di sana ikut mengecil seperti daerah kliknya (hitsPort).
+    QPen portPen(Theme::fill(kAccent), 1.5);
+    portPen.setCosmetic(true);
+    painter->setPen(portPen);
+    painter->setBrush(Theme::fill(kSurface));
+    const qreal radius = qMin(portRadius(scale), 0.18 * qMin(m_size.width(), m_size.height()));
+    for (CanvasSide side : kSides) {
+        painter->drawEllipse(canvasPort(cardRect(), side), radius, radius);
     }
-    const QRectF area = QRectF(0, top, m_size.width(), m_size.height() - top).adjusted(kPad, kPad / 2, -kPad, -kPad / 2);
-    const qreal scale = qMax(detail, 0.01);
-    const int pixels = int(qMin(11.0 / scale, area.height() * 0.45));
-    if (pixels * scale < 5.0) {
-        return;
+
+    // Pegangan ubah ukuran di pojok kanan bawah, sebesar daerah kliknya
+    QPen grip(Theme::text(kMuted), 1.0);
+    grip.setCosmetic(true);
+    painter->setPen(grip);
+    const qreal grain = resizeHandleSide() / kHandle;
+    const QPointF corner(m_size.width() - 4 * grain, m_size.height() - 4 * grain);
+    for (int i = 1; i <= 3; ++i) {
+        const qreal d = 3.0 * grain * i;
+        painter->drawLine(corner - QPointF(d, 0), corner - QPointF(0, d));
     }
-    drawWrapped(painter, area, note ? CanvasWorkflow::firstLine(m_preview) : m_heading, sized(base, pixels, true),
-                Theme::text(note ? kBody : kNavy), note ? CanvasPalette::noteFill(m_node.color) : Theme::fill(kSurface));
 }
 
 QVariant CanvasNodeItem::itemChange(GraphicsItemChange change, const QVariant &value) {
@@ -681,7 +1234,7 @@ void CanvasNodeItem::hoverEnterEvent(QGraphicsSceneHoverEvent *event) {
 void CanvasNodeItem::hoverMoveEvent(QGraphicsSceneHoverEvent *event) {
     if (hitsResizeHandle(event->pos())) {
         setCursor(Qt::SizeFDiagCursor);
-    } else if (hitsOutPort(event->scenePos(), 10.0 / viewScale())) {
+    } else if (hitsPort(event->scenePos(), 9.0 / m_viewScale)) {
         setCursor(Qt::CrossCursor);
     } else {
         unsetCursor();
@@ -743,6 +1296,7 @@ void CanvasNodeItem::updateEdges() {
     for (CanvasEdgeItem *edge : std::as_const(m_edges)) {
         edge->updatePath();
     }
+    emit geometryChanged();
 }
 
 CanvasEdgeItem::CanvasEdgeItem(const CanvasEdge &edge, CanvasNodeItem *from, CanvasNodeItem *to)
@@ -756,29 +1310,88 @@ CanvasEdgeItem::CanvasEdgeItem(const CanvasEdge &edge, CanvasNodeItem *from, Can
 }
 
 void CanvasEdgeItem::updatePath() {
+    const QRectF from = m_from->sceneCardRect();
+    const QRectF to = m_to->sceneCardRect();
+    const QGraphicsScene *canvas = scene();
+    const CanvasRoute route = canvasRoute(from, to, [this, canvas](const QRectF &lane) {
+        return canvas && canvasLaneOccupied(canvas, lane, m_from, m_to);
+    });
+    const QPointF start = canvasPort(from, route.from);
+    const QPointF tip = canvasPort(to, route.to);
+    if (!m_path.isEmpty() && route == m_route && start == m_start && tip == m_tip) {
+        return;
+    }
     prepareGeometryChange();
-    const QPointF start = m_from->outPort();
-    const QPointF tip = m_to->inPort();
-    // Garis berhenti di pangkal panah supaya ujungnya tidak menembus mata panah
-    m_path = canvasConnectorPath(start, tip - QPointF(kArrowLength - 1, 0));
-    m_arrow = QPolygonF({tip, tip + QPointF(-kArrowLength, -kArrowHalfWidth), tip + QPointF(-kArrowLength, kArrowHalfWidth)});
+    m_route = route;
+    m_start = start;
+    m_tip = tip;
+    rebuild();
+}
+
+void CanvasEdgeItem::setViewScale(qreal scale) {
+    scale = qMax(scale, 0.01);
+    if (qFuzzyCompare(scale, m_viewScale)) {
+        return;
+    }
+    const qreal bounds = boundsScale(scale);
+    if (bounds != m_boundsScale) {
+        prepareGeometryChange();
+        m_boundsScale = bounds;
+    }
+    m_viewScale = scale;
+    rebuild();
+    update();
+}
+
+void CanvasEdgeItem::rebuild() {
+    const qreal span = QLineF(m_start, m_tip).length();
+    const QPointF away = sideNormal(m_route.to);
+    const QPointF across(-away.y(), away.x());
+    auto arrowAt = [&](qreal length) {
+        const QPointF base = m_tip + away * length;
+        return QPolygonF({m_tip, base + across * (length * 0.42), base - across * (length * 0.42)});
+    };
+    // Garis berhenti sedikit di dalam pangkal panah supaya ujungnya tidak menembus mata panah
+    auto lineTo = [&](qreal length) {
+        return canvasConnectorPath(m_start, m_route.from, m_tip + away * (length * 0.9), m_route.to);
+    };
+    const qreal length = arrowLength(m_viewScale, span);
+    m_arrow = arrowAt(length);
+    m_path = lineTo(length);
+    m_shape = QPainterPath();
+
+    // Daerah lukis berlaku untuk seluruh rentang zoom yang dibulatkan ke m_boundsScale: mata panahnya
+    // paling panjang di sana, dan garisnya ada di antara garis tanpa panah dan garis berpanah terpanjang itu
+    const qreal longest = arrowLength(m_boundsScale, span);
+    const qreal margin = edgeHitWidth(m_boundsScale) / 2 + 2.0 / m_boundsScale;
+    m_bounds = lineTo(0.0).controlPointRect().united(lineTo(longest).controlPointRect())
+                   .united(arrowAt(longest).boundingRect()).adjusted(-margin, -margin, margin, margin);
 }
 
 QRectF CanvasEdgeItem::boundingRect() const {
-    return m_path.controlPointRect().united(m_arrow.boundingRect()).adjusted(-8, -8, 8, 8);
+    return m_bounds;
 }
 
 QPainterPath CanvasEdgeItem::shape() const {
-    QPainterPathStroker stroker;
-    stroker.setWidth(12);
-    QPainterPath path = stroker.createStroke(m_path);
-    path.addPolygon(m_arrow);
-    return path;
+    // Dihitung saat pertama kali ditanyakan sesudah garisnya berubah: selama kartu diseret atau kanvas
+    // di-zoom semua garis berubah, tetapi hanya yang di bawah kursor yang ditanyai bentuknya
+    if (m_shape.isEmpty()) {
+        QPainterPathStroker stroker;
+        stroker.setWidth(edgeHitWidth(m_viewScale));
+        stroker.setCapStyle(Qt::FlatCap);
+        QPainterPath arrow;
+        arrow.addPolygon(m_arrow);
+        arrow.closeSubpath();
+        // Disatukan sungguhan: dua bentuk yang sekadar ditumpuk saling meniadakan di tempat bertemunya,
+        // dan pangkal mata panah jadi tidak bisa diklik
+        m_shape = stroker.createStroke(m_path).united(arrow);
+    }
+    return m_shape;
 }
 
 void CanvasEdgeItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget) {
-    Q_UNUSED(option);
     Q_UNUSED(widget);
+    const qreal scale = option->levelOfDetailFromTransform(painter->worldTransform());
     // Garis yang masuk ke langkah AI = bahan untuk agent: navy; garis lain sekadar keterkaitan ide
     const bool feedsStep = m_to->node().kind == CanvasNodeKind::Step;
     QColor color = feedsStep ? Theme::fill(kNavy) : Theme::fill(0xb3a898);
@@ -786,14 +1399,26 @@ void CanvasEdgeItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *op
         color = Theme::fill(kAccent);
     }
     painter->setRenderHint(QPainter::Antialiasing);
-    QPen pen(color, isSelected() ? 2.5 : 1.6);
+    // Tebalnya dalam px layar; menipis saat diperkecil supaya garis yang berjajar rapat tidak menggumpal
+    const qreal width = 1.1 + 0.5 * std::clamp((scale - 0.25) / 0.45, 0.0, 1.0) + (isSelected() ? 0.9 : 0.0);
+    QPen pen(color, width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
     pen.setCosmetic(true);
     painter->setPen(pen);
     painter->setBrush(Qt::NoBrush);
     painter->drawPath(m_path);
-    painter->setPen(Qt::NoPen);
+    // Mata panah bersudut tumpul: isiannya digaris tipis dengan sambungan bulat
+    pen.setWidthF(1.0);
+    painter->setPen(pen);
     painter->setBrush(color);
     painter->drawPolygon(m_arrow);
+}
+
+QVariant CanvasEdgeItem::itemChange(GraphicsItemChange change, const QVariant &value) {
+    // Baru setelah berada di scene garis ini tahu kartu lain di sekitar kedua kartunya
+    if (change == ItemSceneHasChanged && scene()) {
+        updatePath();
+    }
+    return QGraphicsItem::itemChange(change, value);
 }
 
 void CanvasEdgeItem::hoverEnterEvent(QGraphicsSceneHoverEvent *event) {
