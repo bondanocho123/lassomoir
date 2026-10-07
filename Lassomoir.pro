@@ -28,6 +28,7 @@ SOURCES += \
     CanvasLibrary.cpp \
     CanvasModel.cpp \
     CanvasPage.cpp \
+    CanvasPreviewDrawer.cpp \
     CanvasView.cpp \
     CanvasWorkflow.cpp \
     CanvasWorkspace.cpp \
@@ -102,6 +103,7 @@ HEADERS += \
     CanvasLibrary.h \
     CanvasModel.h \
     CanvasPage.h \
+    CanvasPreviewDrawer.h \
     CanvasView.h \
     CanvasWorkflow.h \
     CanvasWorkspace.h \

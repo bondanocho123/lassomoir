@@ -9,6 +9,7 @@
 #include <QCursor>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QGraphicsDropShadowEffect>
 #include <QGraphicsPathItem>
 #include <QGraphicsScene>
 #include <QKeyEvent>
@@ -38,6 +39,8 @@ constexpr qreal kGrid = 24.0;
 constexpr qreal kScrollPixelsPerNotch = 60.0;
 constexpr int kPulsePeriodMs = 1200;
 constexpr qreal kZoomSteps[] = {0.1, 0.25, 0.33, 0.5, 0.67, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0};
+// Jarak widget mengambang dari tepi kanvas
+constexpr int kOverlayInset = 12;
 
 }
 
@@ -230,6 +233,40 @@ void CanvasView::removeNodeItem(const QString &id) {
 
 void CanvasView::updateEmptyHint() {
     m_emptyHint->setVisible(m_nodes.isEmpty());
+}
+
+void CanvasView::addOverlay(QWidget *overlay, Qt::Corner corner) {
+    // Anak view, bukan anak viewport: isi viewport ikut bergeser saat kanvas digeser. Klik di sela
+    // tombolnya juga tidak sampai ke kanvas, karena kanvas hanya menerima klik lewat viewport.
+    overlay->setParent(this);
+    // Bayangan tipis: tombolnya terlihat melayang di atas kartu yang lewat di bawahnya
+    auto *shadow = new QGraphicsDropShadowEffect(overlay);
+    shadow->setBlurRadius(14);
+    shadow->setOffset(0, 2);
+    shadow->setColor(QColor(0x24, 0x20, 0x1b, 60));
+    overlay->setGraphicsEffect(shadow);
+    m_overlays.insert(overlay, corner);
+    overlay->show();
+    overlay->raise();
+    layoutOverlays();
+}
+
+void CanvasView::layoutOverlays() {
+    const QRect area = viewport()->geometry().adjusted(kOverlayInset, kOverlayInset, -kOverlayInset, -kOverlayInset);
+    QSize needed(0, kOverlayInset);
+    for (auto it = m_overlays.cbegin(); it != m_overlays.cend(); ++it) {
+        const QSize size = it.key()->sizeHint();
+        const bool right = it.value() == Qt::TopRightCorner || it.value() == Qt::BottomRightCorner;
+        const bool bottom = it.value() == Qt::BottomLeftCorner || it.value() == Qt::BottomRightCorner;
+        it.key()->setGeometry(right ? area.right() + 1 - size.width() : area.left(),
+                              bottom ? area.bottom() + 1 - size.height() : area.top(), size.width(), size.height());
+        needed = QSize(qMax(needed.width(), size.width() + 2 * kOverlayInset),
+                       needed.height() + size.height() + kOverlayInset);
+    }
+    // Kanvas tidak menyempit sampai widget mengambangnya saling menimpa atau terpotong
+    if (!m_overlays.isEmpty() && minimumSize() != needed) {
+        setMinimumSize(needed);
+    }
 }
 
 QStringList CanvasView::selectedNodeIds() const {
@@ -445,6 +482,14 @@ void CanvasView::applyZoom(qreal zoom, const QPoint &anchor) {
 void CanvasView::scrollBy(const QPointF &delta) {
     horizontalScrollBar()->setValue(horizontalScrollBar()->value() + qRound(delta.x()));
     verticalScrollBar()->setValue(verticalScrollBar()->value() + qRound(delta.y()));
+}
+
+bool CanvasView::event(QEvent *event) {
+    // Isi widget mengambang berubah ukuran (font berganti, persen zoom melebar): pasang lagi di sudutnya
+    if (event->type() == QEvent::LayoutRequest) {
+        layoutOverlays();
+    }
+    return QGraphicsView::event(event);
 }
 
 void CanvasView::drawBackground(QPainter *painter, const QRectF &rect) {
@@ -822,6 +867,8 @@ void CanvasView::contextMenuEvent(QContextMenuEvent *event) {
         const QString id = data.id;
         if (data.kind == CanvasNodeKind::Note) {
             menu->addAction(QStringLiteral("Edit catatan\tF2"), this, [this, id]() { editNode(id); });
+            menu->addAction(Theme::icon(":/icons/preview.svg"), QStringLiteral("Pratinjau Markdown"), this,
+                            [this, id]() { emit previewRequested(id); });
             QMenu *colors = menu->addMenu(QStringLiteral("Warna kertas"));
             colors->setObjectName("canvasContextMenu");
             const QStringList keys = CanvasPalette::noteColors();
@@ -924,6 +971,7 @@ void CanvasView::dropEvent(QDropEvent *event) {
 void CanvasView::resizeEvent(QResizeEvent *event) {
     QGraphicsView::resizeEvent(event);
     m_emptyHint->setGeometry(viewport()->rect().adjusted(40, 40, -40, -40));
+    layoutOverlays();
 }
 
 CanvasNodeItem *CanvasView::nodeAt(const QPoint &viewportPos) const {

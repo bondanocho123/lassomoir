@@ -6,7 +6,3 @@ QComboBox#branchSelector::down-arrow,
 QComboBox#branchCompareSelector::down-arrow {
     image: url(:/icons/dark/chevron-down.svg);
 }
-
-QToolButton#btnCanvasAddStep::menu-arrow {
-    image: url(:/icons/dark/chevron-down.svg);
-}

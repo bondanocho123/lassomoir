@@ -1,11 +1,17 @@
 #include "AgentAccess.h"
 #include "AppFonts.h"
 #include "BranchViewer.h"
+#include "CanvasInspector.h"
+#include "CanvasLibrary.h"
+#include "CanvasPage.h"
+#include "CanvasPreviewDrawer.h"
+#include "CanvasView.h"
 #include "CodeMetrics.h"
 #include "ConsolePanelWidget.h"
 #include "ConsoleTaskCard.h"
 #include "DiagramViewer.h"
 #include "DiffView.h"
+#include "ElidedLabel.h"
 #include "FakeAgentRuntime.h"
 #include "FolderLauncher.h"
 #include "GitSandbox.h"
@@ -44,6 +50,7 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFontDatabase>
+#include <QGraphicsItem>
 #include <QGraphicsView>
 #include <QImage>
 #include <QInputDialog>
@@ -68,6 +75,7 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSet>
+#include <QShortcut>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QStandardPaths>
@@ -281,6 +289,16 @@ private slots:
     // Panel yang tampil sementara bertahan selama seretan yang berawal di atasnya (seleksi teks,
     // scrollbar), tetapi tidak ditahan seretan yang berawal di luar (kartu kanban)
     void lieutenantFlyoutSurvivesDragStartedInside();
+
+    // Kanvas brainstorm: ▶ / ■ di toolbar tinggal ikon; Catatan dan Langkah AI jadi tombol bulat yang
+    // mengambang di pojok kiri atas kanvas, zoom dan Paskan di pojok kiri bawahnya
+    void canvasFloatsCreateAndZoomButtons();
+    // Halaman kanvas muat di antara sidebar dan panel Lieutenant yang terpasang: jendela tidak dipaksa
+    // lebih lebar dari ukurannya (isi yang terpotong saat jendela dimaksimalkan)
+    void canvasFitsBesidePinnedLieutenant();
+    // Tombol Pratinjau di panel detail: isi kartu terpilih sebagai Markdown jadi di drawer yang
+    // menimpa kanvas dari tepi kanannya, mengikuti ketikan dan pilihan kartu
+    void canvasPreviewsMarkdownInDrawer();
 
     // Notice Claude Code: belum terpasang / perlu update / belum login, dengan tombol buka link atau batal
     void runtimeCheckShowsNotice_data();
@@ -3690,6 +3708,426 @@ void TestGui::lieutenantFlyoutSurvivesDragStartedInside() {
     QTRY_VERIFY(!console->isVisible());
     QTest::mouseRelease(outside, Qt::LeftButton);
     QVERIFY(QGuiApplication::mouseButtons() == Qt::NoButton);
+}
+
+void TestGui::canvasFloatsCreateAndZoomButtons() {
+    // Ukuran dan bentuk tombol bergantung pada styles.qss, yang biasanya tidak dimuat test
+    QFile qss(QStringLiteral(":/styles.qss"));
+    QVERIFY(qss.open(QIODevice::ReadOnly));
+    qApp->setStyleSheet(QString::fromUtf8(qss.readAll()));
+    const auto resetStyle = qScopeGuard([]() { qApp->setStyleSheet(QString()); });
+
+    QAction *canvas = fileAction(QStringLiteral("actionCanvas"));
+    QVERIFY(canvas);
+    canvas->trigger();
+    auto *page = m_window->findChild<CanvasPage *>();
+    QVERIFY(page);
+    CanvasView *view = page->view();
+    auto *toolbar = page->findChild<QWidget *>(QStringLiteral("canvasToolbar"));
+    QVERIFY(view && toolbar);
+    QTRY_VERIFY(view->isVisible() && view->width() > 300 && view->height() > 300);
+
+    // Toolbar: ▶ Jalankan alur dan ■ Hentikan tinggal ikon, hijau dan merah seperti tombol run kartu task
+    auto *run = toolbar->findChild<QToolButton *>(QStringLiteral("btnCanvasRunAll"));
+    auto *stop = toolbar->findChild<QToolButton *>(QStringLiteral("btnCanvasStopAll"));
+    QVERIFY(run && stop);
+    auto iconColor = [](const QAbstractButton *button) {
+        return button->icon().pixmap(QSize(24, 24)).toImage().pixelColor(12, 12);
+    };
+    QVERIFY(run->text().isEmpty() && !run->icon().isNull());
+    QVERIFY(stop->text().isEmpty() && !stop->icon().isNull());
+    const QColor play = iconColor(run);
+    QVERIFY2(play.green() > play.red() && play.green() > play.blue(), qPrintable(play.name()));
+    const QColor square = iconColor(stop);
+    QVERIFY2(square.red() > square.green() && square.red() > square.blue(), qPrintable(square.name()));
+    // Tanpa teks, artinya dijelaskan tooltip
+    QVERIFY(run->toolTip().startsWith(QStringLiteral("Jalankan")));
+    QVERIFY(stop->toolTip().startsWith(QStringLiteral("Hentikan")));
+    QVERIFY(run->isEnabled());
+    QVERIFY(!stop->isEnabled());   // belum ada langkah AI yang berjalan
+
+    // Tombol buat kartu dan zoom pindah dari toolbar ke atas kanvas
+    auto floating = [page, view, toolbar](const char *name) -> QAbstractButton * {
+        auto *button = page->findChild<QAbstractButton *>(QLatin1String(name));
+        return button && view->isAncestorOf(button) && !toolbar->isAncestorOf(button) ? button : nullptr;
+    };
+    QAbstractButton *note = floating("btnCanvasAddNote");
+    QAbstractButton *step = floating("btnCanvasAddStep");
+    QAbstractButton *zoomOut = floating("btnCanvasZoomOut");
+    QAbstractButton *zoomIn = floating("btnCanvasZoomIn");
+    QAbstractButton *fit = floating("btnCanvasFit");
+    auto *level = page->findChild<QLabel *>(QStringLiteral("canvasZoomLevel"));
+    QVERIFY(note && step && zoomOut && zoomIn && fit && level);
+    QVERIFY(view->isAncestorOf(level));
+    auto inView = [view](const QWidget *widget) { return QRect(widget->mapTo(view, QPoint(0, 0)), widget->size()); };
+    auto describe = [](const QRect &rect) {
+        return QStringLiteral("%1,%2 %3x%4").arg(rect.left()).arg(rect.top()).arg(rect.width()).arg(rect.height());
+    };
+
+    // Catatan dan Langkah AI: tombol bulat tanpa teks di pojok kiri atas, tidak saling menimpa
+    QTRY_VERIFY(note->isVisible() && step->isVisible());
+    for (const QAbstractButton *button : {note, step}) {
+        QVERIFY(button->text().isEmpty() && !button->icon().isNull() && !button->toolTip().isEmpty());
+        QCOMPARE(button->width(), button->height());
+        const QRect rect = inView(button);
+        QVERIFY2(rect.left() >= 4 && rect.left() <= 32 && rect.top() >= 4 && rect.bottom() <= 140,
+                 qPrintable(describe(rect)));
+    }
+    QVERIFY(!inView(note).intersects(inView(step)));
+    // Lingkaran: isian putihnya tidak sampai ke pojok kotak tombol, di sana kanvasnya yang terlihat
+    {
+        const QImage shot = view->grab().toImage();
+        for (const QAbstractButton *button : {note, step}) {
+            const QRect rect = inView(button);
+            const QColor fill = shot.pixelColor(rect.center().x(), rect.top() + 4);
+            QCOMPARE(fill.name(), QStringLiteral("#ffffff"));
+            QVERIFY2(shot.pixelColor(rect.left() + 1, rect.top() + 1) != fill, qPrintable(describe(rect)));
+            QVERIFY2(shot.pixelColor(rect.right() - 1, rect.bottom() - 1) != fill, qPrintable(describe(rect)));
+        }
+    }
+
+    // Zoom dan Paskan: satu baris di pojok kiri bawah
+    QTRY_VERIFY(zoomOut->isVisible() && zoomIn->isVisible() && fit->isVisible() && level->isVisible());
+    QCOMPARE(fit->text(), QStringLiteral("Paskan"));
+    for (const QWidget *widget : {static_cast<const QWidget *>(zoomOut), static_cast<const QWidget *>(level),
+                                  static_cast<const QWidget *>(zoomIn), static_cast<const QWidget *>(fit)}) {
+        const QRect rect = inView(widget);
+        QVERIFY2(rect.left() >= 4 && view->height() - rect.bottom() <= 40 && view->height() - rect.bottom() >= 4,
+                 qPrintable(QStringLiteral("%1 di kanvas setinggi %2").arg(describe(rect)).arg(view->height())));
+    }
+    QVERIFY(inView(zoomOut).right() < inView(level).left());
+    QVERIFY(inView(level).right() < inView(zoomIn).left());
+    QVERIFY(inView(zoomIn).right() < inView(fit).left());
+    QVERIFY2(inView(zoomOut).left() <= 32, qPrintable(describe(inView(zoomOut))));
+
+    // Tetap di sudutnya saat kanvas berubah ukuran
+    const QRect noteBefore = inView(note);
+    const int zoomGap = view->height() - inView(fit).bottom();
+    m_window->resize(m_window->width() - 120, m_window->height() - 90);
+    QTRY_COMPARE(view->height() - inView(fit).bottom(), zoomGap);
+    QCOMPARE(inView(note), noteBefore);
+
+    // Catatan: kartu baru di tengah tampilan, terpilih
+    QVERIFY(view->selectedNodeIds().isEmpty());
+    note->click();
+    QCOMPARE(view->selectedNodeIds().size(), 1);
+    const QString noteId = view->selectedNodeIds().first();
+    view->finishEditing();
+    // Langkah AI: klik = langkah berkeluaran dokumen; menunya memilih jenis keluaran
+    step->click();
+    QCOMPARE(view->selectedNodeIds().size(), 1);
+    const QString stepId = view->selectedNodeIds().first();
+    QVERIFY(stepId != noteId);
+    auto *stepButton = qobject_cast<QToolButton *>(step);
+    QVERIFY(stepButton && stepButton->menu());
+    QCOMPARE(stepButton->menu()->actions().size(), 2);
+    stepButton->menu()->actions().at(1)->trigger();
+    QCOMPARE(view->selectedNodeIds().size(), 1);
+    QVERIFY(view->selectedNodeIds().first() != stepId);
+
+    // Zoom bertahap, persentasenya tampil di antara − dan +
+    QCOMPARE(level->text(), QStringLiteral("100%"));
+    zoomIn->click();
+    QCOMPARE(level->text(), QStringLiteral("125%"));
+    QCOMPARE(view->zoom(), 1.25);
+    zoomOut->click();
+    zoomOut->click();
+    QCOMPARE(level->text(), QStringLiteral("75%"));
+    zoomIn->click();
+    zoomIn->click();
+    zoomIn->click();
+    QCOMPARE(level->text(), QStringLiteral("150%"));
+    // Paskan: semua kartu terlihat, tidak diperbesar melewati 100%
+    fit->click();
+    QVERIFY2(view->zoom() <= 1.0, qPrintable(QString::number(view->zoom())));
+    QCOMPARE(level->text(), QStringLiteral("%1%").arg(qRound(view->zoom() * 100)));
+
+    // Klik dua kali di atas tombol mengambang bukan klik dua kali di ruang kosong kanvas: tidak
+    // membuat catatan baru
+    const qsizetype items = view->scene()->items().size();
+    QTest::mouseDClick(level, Qt::LeftButton);
+    QTest::mouseDClick(level->parentWidget(), Qt::LeftButton, {}, QPoint(2, 2));
+    QCOMPARE(view->scene()->items().size(), items);
+}
+
+void TestGui::canvasFitsBesidePinnedLieutenant() {
+    // Lebar toolbar bergantung pada styles.qss, yang biasanya tidak dimuat test
+    QFile qss(QStringLiteral(":/styles.qss"));
+    QVERIFY(qss.open(QIODevice::ReadOnly));
+    qApp->setStyleSheet(QString::fromUtf8(qss.readAll()));
+    const auto resetStyle = qScopeGuard([]() { qApp->setStyleSheet(QString()); });
+
+    // Jendela selebar layar 1920 px pada skala 150% (1280 px logis), seperti saat dimaksimalkan di sana
+    const QSize size(1280, 720);
+    m_window.reset();
+    m_tasks.reset();
+    createWindow(size);
+
+    auto *splitter = m_window->findChild<QSplitter *>(QStringLiteral("mainSplitter"));
+    auto *content = m_window->findChild<QWidget *>(QStringLiteral("contentWidget"));
+    auto *rail = m_window->findChild<QWidget *>(QStringLiteral("consoleRail"));
+    auto *pin = m_window->findChild<QPushButton *>(QStringLiteral("btnConsolePin"));
+    QAction *canvas = fileAction(QStringLiteral("actionCanvas"));
+    ConsolePanelWidget *console = consolePanel();
+    QVERIFY(splitter && content && rail && pin && canvas && console);
+
+    QTest::qWait(50);   // ukuran splitter awal sudah diterapkan
+    QTRY_VERIFY(console->isVisible());
+    QVERIFY(console->isPinned());
+
+    canvas->trigger();
+    auto *page = m_window->findChild<CanvasPage *>();
+    QVERIFY(page);
+    auto *toolbar = page->findChild<QWidget *>(QStringLiteral("canvasToolbar"));
+    QVERIFY(toolbar);
+    QTRY_VERIFY(page->isVisible() && toolbar->isVisible());
+
+    // Seluruh isi jendela di dalam jendela: panel Lieutenant sampai tepi kanannya, dan tombol
+    // toolbar kanvas tidak ada yang terdorong keluar
+    auto overflow = [&]() -> QString {
+        if (m_window->size() != size) {
+            return QStringLiteral("jendela %1x%2").arg(m_window->width()).arg(m_window->height());
+        }
+        if (content->width() > m_window->width() || splitter->geometry().right() >= content->width()) {
+            return QStringLiteral("isi %1, splitter sampai %2").arg(content->width()).arg(splitter->geometry().right());
+        }
+        const QRect panel = console->geometry();
+        if (!console->isVisible() || panel.width() < 200 || panel.right() >= content->width()) {
+            return QStringLiteral("panel %1..%2 di isi selebar %3").arg(panel.left()).arg(panel.right()).arg(content->width());
+        }
+        const QList<QAbstractButton *> buttons = toolbar->findChildren<QAbstractButton *>();
+        for (const QAbstractButton *button : buttons) {
+            const QRect rect(button->mapTo(page, QPoint(0, 0)), button->size());
+            if (button->isVisible() && (rect.left() < 0 || rect.right() >= page->width()
+                                        || button->width() < button->minimumSizeHint().width())) {
+                return QStringLiteral("%1 di %2..%3, halaman selebar %4")
+                    .arg(button->objectName()).arg(rect.left()).arg(rect.right()).arg(page->width());
+            }
+        }
+        return QString();
+    };
+    QTest::qWait(300);
+    QVERIFY2(overflow().isEmpty(), qPrintable(overflow()));
+
+    // Nama project yang panjang memotong judul ("…", nama lengkap di tooltip), bukan mendorong
+    // tombol keluar dari toolbar; judul pendek kembali utuh
+    auto *title = toolbar->findChild<ElidedLabel *>(QStringLiteral("canvasTitle"));
+    QVERIFY(title);
+    const QString shortTitle = title->fullText();
+    QCOMPARE(shortTitle, QStringLiteral("Kanvas · Demo"));
+    QTRY_COMPARE(title->text(), shortTitle);
+    title->setFullText(QStringLiteral("Kanvas · ") + QString(200, QLatin1Char('W')));
+    QTRY_VERIFY(title->text().endsWith(QChar(0x2026)) && title->text().size() > 12);
+    QCOMPARE(title->toolTip(), title->fullText());
+    QTest::qWait(100);
+    QVERIFY2(overflow().isEmpty(), qPrintable(overflow()));
+    title->setFullText(shortTitle);
+    QTRY_COMPARE(title->text(), shortTitle);
+
+    // Pin dilepas lalu dipasang lagi selagi kanvas tampil
+    pin->click();
+    QTRY_VERIFY(!console->isPinned() && rail->minimumWidth() > 0 && rail->minimumWidth() == rail->maximumWidth());
+    pin->click();
+    QVERIFY(console->isPinned());
+    QTRY_VERIFY(rail->maximumWidth() == QWIDGETSIZE_MAX);
+    QTest::qWait(100);
+    QVERIFY2(overflow().isEmpty(), qPrintable(overflow()));
+}
+
+void TestGui::canvasPreviewsMarkdownInDrawer() {
+    QAction *canvas = fileAction(QStringLiteral("actionCanvas"));
+    QVERIFY(canvas);
+    canvas->trigger();
+    auto *page = m_window->findChild<CanvasPage *>();
+    QVERIFY(page);
+    CanvasView *view = page->view();
+    auto *splitter = page->findChild<QSplitter *>(QStringLiteral("canvasSplitter"));
+    auto *inspector = page->findChild<CanvasInspector *>();
+    auto *drawer = page->findChild<CanvasPreviewDrawer *>();
+    QVERIFY(view && splitter && inspector && drawer);
+    auto *toggle = inspector->findChild<QPushButton *>(QStringLiteral("btnCanvasPreview"));
+    auto *rendered = drawer->findChild<MarkdownView *>();
+    auto *kind = drawer->findChild<QLabel *>(QStringLiteral("canvasPanelTitle"));
+    auto *expand = drawer->findChild<QPushButton *>(QStringLiteral("btnCanvasPreviewExpand"));
+    auto *close = drawer->findChild<QPushButton *>(QStringLiteral("btnCanvasPreviewClose"));
+    auto *escape = drawer->findChild<QShortcut *>();
+    QVERIFY(toggle && rendered && kind && expand && close && escape);
+    QTRY_VERIFY(view->isVisible() && inspector->isVisible() && view->width() > 300);
+
+    auto inPage = [page](const QWidget *widget) { return QRect(widget->mapTo(page, QPoint(0, 0)), widget->size()); };
+    auto describe = [](const QRect &rect) {
+        return QStringLiteral("%1,%2 %3x%4").arg(rect.left()).arg(rect.top()).arg(rect.width()).arg(rect.height());
+    };
+    // Tempat drawer selama tidak diperluas: menempel di tepi kanan kanvas, setinggi halaman di bawah
+    // toolbar. Lebarnya 55% ruang di kiri panel kanan dalam batas 420..720 px, atau seluruh ruang itu
+    // bila lebih sempit atau sisanya kurang dari 120 px; pita bayangan (paling lebar 8 px) menambah
+    // sisi kirinya bila masih ada ruang.
+    auto docked = [&]() -> QString {
+        const QRect area = inPage(splitter);
+        const QRect canvasRect = inPage(view);
+        const QRect rect = drawer->geometry();
+        const int available = canvasRect.right() + 1 - area.left();
+        int width = qMin(available, qBound(420, available * 55 / 100, 720));
+        if (available - width < 120) {
+            width = available;
+        }
+        const int shadow = qMin(8, available - width);
+        if (!drawer->isVisible() || rect.right() != canvasRect.right() || rect.top() != area.top()
+            || rect.height() != area.height() || rect.width() != width + shadow) {
+            return QStringLiteral("drawer %1, kanvas %2, halaman %3, lebar seharusnya %4")
+                .arg(describe(rect), describe(canvasRect), describe(area)).arg(width + shadow);
+        }
+        return QString();
+    };
+
+    // Tanpa kartu terpilih tidak ada yang dipratinjau
+    QVERIFY(!toggle->isVisible());
+    QVERIFY(!drawer->isVisible() && !drawer->isOpen());
+
+    // Catatan berisi Markdown mentah, diketik di editor panel detail
+    const QString noteId = view->addNoteAt(view->centerScenePos(), false);
+    QTRY_COMPARE(inspector->nodeId(), noteId);
+    QPlainTextEdit *editor = nullptr;
+    const QList<QPlainTextEdit *> editors = inspector->findChildren<QPlainTextEdit *>(QStringLiteral("canvasInspectorText"));
+    for (QPlainTextEdit *candidate : editors) {
+        if (candidate->isVisible()) {
+            editor = candidate;
+        }
+    }
+    QVERIFY(editor);
+    const QString markdown = QStringLiteral("# Cek WSL\n\n- **NAME**: distro yang terpasang\n- `wsl -l -v`\n\n"
+                                            "```powershell\nwsl --status\n```\n");
+    editor->setPlainText(markdown);
+    inspector->commitText();
+    QTRY_VERIFY(toggle->isVisible());
+    QCOMPARE(toggle->text(), QStringLiteral("Pratinjau"));
+    QVERIFY(!toggle->icon().isNull() && !toggle->toolTip().isEmpty());
+    QVERIFY(toggle->isCheckable() && !toggle->isChecked());
+    QVERIFY(inspector->isAncestorOf(toggle));
+
+    // Tombol Pratinjau: drawer meluncur keluar di tepi kanan kanvas dan menimpanya, tata letak
+    // halaman tidak bergeser dan panel detail tetap terlihat
+    const QRect canvasBefore = view->geometry();
+    const QRect inspectorBefore = inPage(inspector);
+    toggle->click();
+    QVERIFY(drawer->isOpen() && toggle->isChecked());
+    QTRY_VERIFY2(docked().isEmpty(), qPrintable(docked()));
+    QCOMPARE(view->geometry(), canvasBefore);
+    QCOMPARE(inPage(inspector), inspectorBefore);
+    QVERIFY2(!drawer->geometry().intersects(inspectorBefore), qPrintable(describe(drawer->geometry())));
+    QVERIFY(drawer->geometry().intersects(inPage(view)));
+
+    // Isinya dalam bentuk jadi: judul, daftar, dan blok kode tanpa tanda Markdown-nya
+    QCOMPARE(kind->text(), QStringLiteral("PRATINJAU · CATATAN"));
+    QCOMPARE(rendered->markdown(), markdown);
+    const QString text = rendered->document()->toPlainText();
+    QVERIFY2(text.startsWith(QStringLiteral("Cek WSL")) && text.contains(QStringLiteral("wsl --status")), qPrintable(text));
+    QVERIFY2(!text.contains(QLatin1Char('#')) && !text.contains(QStringLiteral("**"))
+                 && !text.contains(QStringLiteral("```")), qPrintable(text));
+    QCOMPARE(rendered->document()->begin().blockFormat().headingLevel(), 1);
+
+    // Pratinjau mengikuti ketikan di editor, tanpa menunggu catatannya tersimpan
+    const QString retyped = QStringLiteral("## Langkah berikutnya\n\nPasang distro Ubuntu.");
+    editor->setPlainText(retyped);
+    QTRY_COMPARE(rendered->markdown(), retyped);
+    QVERIFY(rendered->document()->toPlainText().startsWith(QStringLiteral("Langkah berikutnya")));
+    QCOMPARE(rendered->document()->begin().blockFormat().headingLevel(), 2);
+    inspector->commitText();
+
+    // Perluas: menutupi seluruh halaman di bawah toolbar; sekali lagi kembali ke tempat semula
+    expand->click();
+    QVERIFY(drawer->isExpanded());
+    QTRY_COMPARE(drawer->geometry(), inPage(splitter));
+    expand->click();
+    QVERIFY(!drawer->isExpanded());
+    QTRY_VERIFY2(docked().isEmpty(), qPrintable(docked()));
+
+    // Tetap menempel di tepi kanan kanvas saat jendela berubah ukuran
+    m_window->resize(m_window->width() - 90, m_window->height() - 60);
+    QTRY_VERIFY2(docked().isEmpty(), qPrintable(docked()));
+    // Ruang di kiri panel detail sempit (kanvas terjepit Pustaka dan panel detail): drawer memakai
+    // seluruh ruang itu, Pustaka ikut tertutup, panel detail tidak
+    const QList<int> sizes = splitter->sizes();
+    QCOMPARE(sizes.size(), 3);
+    splitter->setSizes({180, 190, sizes.at(0) + sizes.at(1) + sizes.at(2) - 370});
+    QTRY_VERIFY2(docked().isEmpty(), qPrintable(docked()));
+    QVERIFY2(inPage(view).right() + 1 - inPage(splitter).left() < 420, qPrintable(describe(inPage(view))));
+    QCOMPARE(drawer->geometry().left(), inPage(splitter).left());
+    QVERIFY(drawer->geometry().contains(inPage(page->library())));
+    QVERIFY(!drawer->geometry().intersects(inPage(inspector)));
+
+    // Pilihan kosong: drawer tetap terbuka dengan petunjuk, tombolnya bertahan supaya bisa menutupnya
+    view->selectNodes({});
+    QTRY_VERIFY(rendered->markdown().contains(QStringLiteral("Pilih satu kartu")));
+    QCOMPARE(kind->text(), QStringLiteral("PRATINJAU"));
+    QVERIFY(toggle->isVisible() && toggle->isChecked());
+    // Kartu lain terpilih: isinya yang tampil; kembali ke catatan, catatannya lagi
+    view->addStepAt(view->centerScenePos());
+    QTRY_COMPARE(kind->text(), QStringLiteral("PRATINJAU · LANGKAH AI"));
+    QVERIFY2(rendered->markdown().contains(QStringLiteral("Belum ada hasil")), qPrintable(rendered->markdown()));
+    view->selectNodes({noteId});
+    QTRY_COMPARE(rendered->markdown(), retyped);
+    QCOMPARE(kind->text(), QStringLiteral("PRATINJAU · CATATAN"));
+
+    // ✕ menutup drawer dan mematikan tombolnya; tombol membukanya lagi di tempat yang sama
+    close->click();
+    QVERIFY(!drawer->isOpen() && !toggle->isChecked());
+    QTRY_VERIFY(!drawer->isVisible());
+    toggle->click();
+    QVERIFY(drawer->isOpen() && toggle->isChecked());
+    QTRY_VERIFY2(docked().isEmpty(), qPrintable(docked()));
+    QCOMPARE(rendered->markdown(), retyped);
+    // Esc di dalam drawer menutupnya, juga selagi diperluas; dibuka lagi dengan lebar biasanya
+    QCOMPARE(escape->key(), QKeySequence(Qt::Key_Escape));
+    expand->click();
+    QTRY_COMPARE(drawer->geometry(), inPage(splitter));
+    emit escape->activated();
+    QVERIFY(!drawer->isOpen() && !drawer->isExpanded() && !toggle->isChecked());
+    QTRY_VERIFY(!drawer->isVisible());
+    toggle->click();
+    QTRY_VERIFY2(docked().isEmpty(), qPrintable(docked()));
+    // Tombol yang menyala menutupnya
+    toggle->click();
+    QVERIFY(!drawer->isOpen());
+    QTRY_VERIFY(!drawer->isVisible());
+
+    // Klik kanan catatan > Pratinjau Markdown: catatan itu terpilih dan drawernya terbuka
+    view->selectNodes({noteId});
+    view->centerOnNode(noteId);
+    QCOMPARE(view->scene()->selectedItems().size(), 1);
+    const QPoint onNote = view->mapFromScene(view->scene()->selectedItems().first()->sceneBoundingRect().center());
+    QVERIFY(view->viewport()->rect().contains(onNote));
+    view->selectNodes({});
+    QTRY_VERIFY(inspector->nodeId().isEmpty());
+    QContextMenuEvent rightClick(QContextMenuEvent::Mouse, onNote, view->viewport()->mapToGlobal(onNote));
+    QApplication::sendEvent(view->viewport(), &rightClick);
+    QAction *previewAction = nullptr;
+    QMenu *contextMenu = nullptr;
+    const QList<QMenu *> menus = view->findChildren<QMenu *>(QStringLiteral("canvasContextMenu"));
+    for (QMenu *menu : menus) {
+        const QList<QAction *> actions = menu->actions();
+        for (QAction *action : actions) {
+            if (menu->isVisible() && action->text() == QStringLiteral("Pratinjau Markdown")) {
+                previewAction = action;
+                contextMenu = menu;
+            }
+        }
+    }
+    QVERIFY(previewAction && contextMenu);
+    QCOMPARE(view->selectedNodeIds(), QStringList{noteId});
+    previewAction->trigger();
+    contextMenu->close();
+    QVERIFY(drawer->isOpen());
+    QCOMPARE(inspector->nodeId(), noteId);
+    QCOMPARE(rendered->markdown(), retyped);
+    QTRY_VERIFY2(docked().isEmpty(), qPrintable(docked()));
+    QVERIFY(toggle->isChecked());
+    close->click();
+    QTRY_VERIFY(!drawer->isVisible());
+
+    // Tanpa kartu terpilih dan tanpa drawer, tombolnya hilang lagi
+    view->selectNodes({});
+    QTRY_VERIFY(!toggle->isVisible());
 }
 
 QDialog *TestGui::runtimeNotice() const {

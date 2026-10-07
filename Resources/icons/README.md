@@ -55,3 +55,4 @@ Kalau tetap pakai akun gratis, catat sumber tiap ikon di sini supaya nggak lupa 
 | `redo.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
 | `pinned.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
 | `unpinned.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
+| `preview.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |

@@ -136,6 +136,19 @@ CanvasInspector::CanvasInspector(MermaidRenderer *renderer, QWidget *parent) : Q
 
     m_kind = new QLabel(this);
     m_kind->setObjectName("canvasPanelTitle");
+    m_preview = button(QStringLiteral("Pratinjau"), "btnCanvasPreview", this);
+    m_preview->setIcon(Theme::icon(QStringLiteral(":/icons/preview.svg")));
+    m_preview->setIconSize(QSize(14, 14));
+    m_preview->setCheckable(true);
+    // Tidak mengambil fokus: editor catatan tetap bisa diketik, pratinjaunya mengikuti
+    m_preview->setFocusPolicy(Qt::NoFocus);
+    m_preview->setToolTip(QStringLiteral("Pratinjau Markdown: isi kartu ini dalam bentuk jadi (judul, daftar, tabel, "
+                                         "kode, diagram) di drawer di samping panel"));
+    connect(m_preview, &QPushButton::clicked, this, &CanvasInspector::previewToggled);
+    m_preview->hide();
+    m_previewTimer.setSingleShot(true);
+    m_previewTimer.setInterval(200);
+    connect(&m_previewTimer, &QTimer::timeout, this, &CanvasInspector::previewChanged);
     m_title = new QLabel(this);
     m_title->setObjectName("canvasInspectorTitle");
     m_title->setWordWrap(true);
@@ -166,6 +179,7 @@ CanvasInspector::CanvasInspector(MermaidRenderer *renderer, QWidget *parent) : Q
     m_noteText->setObjectName("canvasInspectorText");
     m_noteText->setPlaceholderText(QStringLiteral("Tulis ide, pertanyaan, atau keputusan…"));
     m_noteText->installEventFilter(this);
+    connect(m_noteText, &QPlainTextEdit::textChanged, &m_previewTimer, qOverload<>(&QTimer::start));
     auto *swatchRow = new QHBoxLayout();
     swatchRow->setSpacing(4);
     const QStringList colors = CanvasPalette::noteColors();
@@ -325,10 +339,14 @@ CanvasInspector::CanvasInspector(MermaidRenderer *renderer, QWidget *parent) : Q
     manyLayout->addStretch(1);
     m_pages->addWidget(manyPage);
 
+    auto *kindRow = new QHBoxLayout();
+    kindRow->setSpacing(6);
+    kindRow->addWidget(m_kind, 1);
+    kindRow->addWidget(m_preview);
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(12, 12, 12, 12);
     layout->setSpacing(4);
-    layout->addWidget(m_kind);
+    layout->addLayout(kindRow);
     layout->addWidget(m_title);
     layout->addWidget(m_meta);
     layout->addSpacing(6);
@@ -367,21 +385,25 @@ void CanvasInspector::showSelection(const CanvasBoard &board, const QStringList 
         } else {
             showMany(board, ids);
         }
-        return;
+    } else {
+        m_node = *single;
+        switch (single->kind) {
+        case CanvasNodeKind::Note:
+            showNote(*single, sameNode);
+            break;
+        case CanvasNodeKind::Artifact:
+        case CanvasNodeKind::Task:
+            showReference(*single);
+            break;
+        case CanvasNodeKind::Step:
+            showStep(*single, sameNode, stepState, live);
+            break;
+        }
     }
-    m_node = *single;
-    switch (single->kind) {
-    case CanvasNodeKind::Note:
-        showNote(*single, sameNode);
-        break;
-    case CanvasNodeKind::Artifact:
-    case CanvasNodeKind::Task:
-        showReference(*single);
-        break;
-    case CanvasNodeKind::Step:
-        showStep(*single, sameNode, stepState, live);
-        break;
-    }
+    // Tanpa satu kartu tidak ada yang dipratinjau; tombolnya bertahan selama drawernya terbuka,
+    // supaya tetap bisa ditutup dari sini
+    m_preview->setVisible(single || m_preview->isChecked());
+    emit previewChanged();
 }
 
 void CanvasInspector::showEmpty(const CanvasBoard &board) {
@@ -552,6 +574,38 @@ void CanvasInspector::setLiveOutput(const QString &markdown) {
     }
     m_stepResult->showMarkdown(markdown.isEmpty() ? QStringLiteral("_Menunggu keluaran agent…_") : markdown);
     m_stepResult->verticalScrollBar()->setValue(m_stepResult->verticalScrollBar()->maximum());
+    emit previewChanged();
+}
+
+QString CanvasInspector::previewMarkdown() const {
+    if (m_node.id.isEmpty()) {
+        return QString();
+    }
+    switch (m_node.kind) {
+    case CanvasNodeKind::Note: {
+        const QString text = m_noteText->toPlainText();
+        return text.trimmed().isEmpty() ? QStringLiteral("_Catatan ini masih kosong._") : text;
+    }
+    case CanvasNodeKind::Artifact:
+    case CanvasNodeKind::Task:
+        return m_referenceView->markdown();
+    case CanvasNodeKind::Step:
+        return m_stepResult->markdown();
+    }
+    return QString();
+}
+
+QString CanvasInspector::previewKind() const {
+    return m_kind->text();
+}
+
+QString CanvasInspector::previewTitle() const {
+    return m_title->text();
+}
+
+void CanvasInspector::setPreviewOpen(bool open) {
+    m_preview->setChecked(open);
+    m_preview->setVisible(open || !m_node.id.isEmpty());
 }
 
 bool CanvasInspector::eventFilter(QObject *watched, QEvent *event) {

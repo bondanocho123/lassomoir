@@ -6,9 +6,13 @@
 #include "CanvasItems.h"
 #include "CanvasLibrary.h"
 #include "CanvasModel.h"
+#include "CanvasPreviewDrawer.h"
 #include "CanvasView.h"
+#include "ElidedLabel.h"
 #include "Theme.h"
 
+#include <QApplication>
+#include <QEvent>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMenu>
@@ -22,14 +26,23 @@
 
 namespace {
 
-QPushButton *toolbarButton(const QString &text, const char *name, const char *variant, QWidget *parent,
-                           const QString &icon = QString()) {
+// Sisi tombol bulat yang mengambang di kanvas; border-radius-nya di styles.qss separuh dari ini
+constexpr int kRoundButtonSide = 40;
+
+QPushButton *textButton(const QString &text, const char *name, const QString &tip, QWidget *parent) {
     auto *button = new QPushButton(text, parent);
     button->setObjectName(QLatin1String(name));
-    button->setProperty("variant", QLatin1String(variant));
+    button->setToolTip(tip);
     button->setCursor(Qt::PointingHandCursor);
     // Tombol tidak mengambil fokus: pintasan keyboard tetap diterima kanvas
     button->setFocusPolicy(Qt::NoFocus);
+    return button;
+}
+
+QPushButton *toolbarButton(const QString &text, const char *name, const char *variant, const QString &tip,
+                           QWidget *parent, const QString &icon = QString()) {
+    QPushButton *button = textButton(text, name, tip, parent);
+    button->setProperty("variant", QLatin1String(variant));
     if (!icon.isEmpty()) {
         button->setIcon(Theme::icon(icon));
         button->setIconSize(QSize(14, 14));
@@ -37,14 +50,20 @@ QPushButton *toolbarButton(const QString &text, const char *name, const char *va
     return button;
 }
 
-QToolButton *iconButton(const QString &icon, const char *name, const QString &tip, QWidget *parent) {
+QToolButton *iconButton(const QString &icon, const char *name, const QString &tip, QWidget *parent, int iconSide = 15) {
     auto *button = new QToolButton(parent);
     button->setObjectName(QLatin1String(name));
     button->setIcon(Theme::icon(icon));
-    button->setIconSize(QSize(15, 15));
+    button->setIconSize(QSize(iconSide, iconSide));
     button->setToolTip(tip);
     button->setCursor(Qt::PointingHandCursor);
     button->setFocusPolicy(Qt::NoFocus);
+    return button;
+}
+
+QToolButton *roundButton(const QString &icon, const char *name, const QString &tip, QWidget *parent) {
+    QToolButton *button = iconButton(icon, name, tip, parent, 18);
+    button->setFixedSize(kRoundButtonSide, kRoundButtonSide);
     return button;
 }
 
@@ -78,33 +97,21 @@ CanvasPage::CanvasPage(CanvasModel &model, CanvasAutomation &automation, CanvasC
     auto *toolbar = new QWidget(this);
     toolbar->setObjectName("canvasToolbar");
     toolbar->setAttribute(Qt::WA_StyledBackground, true);
-    auto *board = toolbarButton(QStringLiteral("Board"), "btnCanvasBoard", "secondary", toolbar, QStringLiteral(":/icons/board.svg"));
-    board->setToolTip(QStringLiteral("Kembali ke board kanban project ini"));
-    auto *title = new QLabel(QStringLiteral("Kanvas · %1").arg(model.projectId()), toolbar);
+    auto *board = toolbarButton(QStringLiteral("Board"), "btnCanvasBoard", "secondary",
+                                QStringLiteral("Kembali ke board kanban project ini"), toolbar,
+                                QStringLiteral(":/icons/board.svg"));
+    // Judul menyempit (terpotong "…") lebih dulu daripada mendorong tombol keluar dari toolbar
+    auto *title = new ElidedLabel(QStringLiteral("Kanvas · %1").arg(model.projectId()), toolbar);
     title->setObjectName("canvasTitle");
-    auto *addNote = toolbarButton(QStringLiteral("Catatan"), "btnCanvasAddNote", "secondary", toolbar,
-                                  QStringLiteral(":/icons/note.svg"));
-    addNote->setToolTip(QStringLiteral("Catatan baru di tengah tampilan (N, atau klik dua kali di ruang kosong)"));
-    auto *addStep = new QToolButton(toolbar);
-    addStep->setObjectName("btnCanvasAddStep");
-    addStep->setText(QStringLiteral("Langkah AI"));
-    addStep->setIcon(Theme::icon(QStringLiteral(":/icons/spark.svg")));
-    addStep->setIconSize(QSize(14, 14));
-    addStep->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    addStep->setPopupMode(QToolButton::MenuButtonPopup);
-    addStep->setCursor(Qt::PointingHandCursor);
-    addStep->setFocusPolicy(Qt::NoFocus);
-    addStep->setToolTip(QStringLiteral("Langkah AI baru (L): agent mengolah kartu yang tersambung ke langkah ini"));
-    auto *stepMenu = new QMenu(addStep);
-    stepMenu->setObjectName("canvasContextMenu");
-    QAction *documentStep = stepMenu->addAction(QStringLiteral("Langkah AI: dokumen Markdown"));
-    QAction *tasksStep = stepMenu->addAction(QStringLiteral("Langkah AI: pecah jadi task untuk pipeline"));
-    addStep->setMenu(stepMenu);
+    title->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
 
-    m_runAll = toolbarButton(QStringLiteral("▶ Jalankan alur"), "btnCanvasRunAll", "primary", toolbar);
-    m_runAll->setToolTip(QStringLiteral("Jalankan semua langkah AI berurutan: langkah hulu dulu, hasilnya jadi bahan langkah berikutnya"));
-    m_stopAll = toolbarButton(QStringLiteral("■ Hentikan"), "btnCanvasStopAll", "secondary", toolbar);
-    m_stopAll->setToolTip(QStringLiteral("Hentikan semua langkah AI yang antre atau berjalan"));
+    // Ikon saja, seperti tombol run kartu task: play hijau dan kotak merah
+    m_runAll = iconButton(QStringLiteral(":/icons/run.svg"), "btnCanvasRunAll",
+                          QStringLiteral("Jalankan alur: semua langkah AI berurutan, langkah hulu dulu, hasilnya jadi "
+                                         "bahan langkah berikutnya"),
+                          toolbar, 16);
+    m_stopAll = iconButton(QStringLiteral(":/icons/stop.svg"), "btnCanvasStopAll",
+                           QStringLiteral("Hentikan semua langkah AI yang antre atau berjalan"), toolbar, 16);
     m_undo = iconButton(QStringLiteral(":/icons/undo.svg"), "btnCanvasUndo", QStringLiteral("Urungkan (Ctrl+Z)"), toolbar);
     m_redo = iconButton(QStringLiteral(":/icons/redo.svg"), "btnCanvasRedo", QStringLiteral("Ulangi (Ctrl+Y)"), toolbar);
 
@@ -112,28 +119,18 @@ CanvasPage::CanvasPage(CanvasModel &model, CanvasAutomation &automation, CanvasC
     m_status->setObjectName("canvasStatus");
     m_status->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
 
-    auto *zoomOut = toolbarButton(QStringLiteral("−"), "btnCanvasZoomOut", "secondary", toolbar);
-    zoomOut->setToolTip(QStringLiteral("Perkecil (−)"));
-    zoomOut->setFixedSize(28, 26);
-    m_zoomLabel = new QLabel(QStringLiteral("100%"), toolbar);
-    m_zoomLabel->setObjectName("canvasZoomLevel");
-    m_zoomLabel->setAlignment(Qt::AlignCenter);
-    auto *zoomIn = toolbarButton(QStringLiteral("+"), "btnCanvasZoomIn", "secondary", toolbar);
-    zoomIn->setToolTip(QStringLiteral("Perbesar (+)"));
-    zoomIn->setFixedSize(28, 26);
-    auto *fit = toolbarButton(QStringLiteral("Paskan"), "btnCanvasFit", "secondary", toolbar);
-    fit->setToolTip(QStringLiteral("Tampilkan semua kartu (Ctrl+0)"));
-    m_toggleLibrary = toolbarButton(QStringLiteral("Pustaka"), "btnCanvasToggleLibrary", "toggle", toolbar);
+    m_toggleLibrary = toolbarButton(QStringLiteral("Pustaka"), "btnCanvasToggleLibrary", "toggle",
+                                    QStringLiteral("Tampilkan/sembunyikan pustaka artefak"), toolbar);
     m_toggleLibrary->setCheckable(true);
     m_toggleLibrary->setChecked(true);
-    m_toggleLibrary->setToolTip(QStringLiteral("Tampilkan/sembunyikan pustaka artefak"));
-    m_toggleInspector = toolbarButton(QStringLiteral("Detail"), "btnCanvasToggleInspector", "toggle", toolbar);
+    m_toggleInspector = toolbarButton(QStringLiteral("Detail"), "btnCanvasToggleInspector", "toggle",
+                                      QStringLiteral("Tampilkan/sembunyikan detail kartu terpilih"), toolbar);
     m_toggleInspector->setCheckable(true);
     m_toggleInspector->setChecked(true);
-    m_toggleInspector->setToolTip(QStringLiteral("Tampilkan/sembunyikan detail kartu terpilih"));
-    m_toggleChat = toolbarButton(QStringLiteral("Chat"), "btnCanvasToggleChat", "toggle", toolbar);
+    m_toggleChat = toolbarButton(QStringLiteral("Chat"), "btnCanvasToggleChat", "toggle",
+                                 QStringLiteral("Tanya jawab dengan agent tentang kartu terpilih atau seluruh kanvas (C)"),
+                                 toolbar);
     m_toggleChat->setCheckable(true);
-    m_toggleChat->setToolTip(QStringLiteral("Tanya jawab dengan agent tentang kartu terpilih atau seluruh kanvas (C)"));
 
     auto *tools = new QHBoxLayout(toolbar);
     tools->setContentsMargins(10, 6, 10, 6);
@@ -142,9 +139,6 @@ CanvasPage::CanvasPage(CanvasModel &model, CanvasAutomation &automation, CanvasC
     tools->addWidget(title);
     tools->addSpacing(4);
     tools->addWidget(separator(toolbar));
-    tools->addWidget(addNote);
-    tools->addWidget(addStep);
-    tools->addWidget(separator(toolbar));
     tools->addWidget(m_runAll);
     tools->addWidget(m_stopAll);
     tools->addWidget(separator(toolbar));
@@ -152,14 +146,56 @@ CanvasPage::CanvasPage(CanvasModel &model, CanvasAutomation &automation, CanvasC
     tools->addWidget(m_redo);
     tools->addSpacing(6);
     tools->addWidget(m_status, 1);
-    tools->addWidget(zoomOut);
-    tools->addWidget(m_zoomLabel);
-    tools->addWidget(zoomIn);
-    tools->addWidget(fit);
-    tools->addWidget(separator(toolbar));
     tools->addWidget(m_toggleLibrary);
     tools->addWidget(m_toggleInspector);
     tools->addWidget(m_toggleChat);
+
+    // Buat kartu: dua tombol bulat yang mengambang di pojok kiri atas kanvas
+    auto *createBar = new QWidget;
+    createBar->setObjectName("canvasCreateBar");
+    auto *addNote = roundButton(QStringLiteral(":/icons/note.svg"), "btnCanvasAddNote",
+                                QStringLiteral("Catatan baru di tengah tampilan (N, atau klik dua kali di ruang kosong)"),
+                                createBar);
+    auto *addStep = roundButton(QStringLiteral(":/icons/spark.svg"), "btnCanvasAddStep",
+                                QStringLiteral("Langkah AI baru (L): agent mengolah kartu yang tersambung ke langkah ini.\n"
+                                               "Tahan atau klik kanan untuk memilih jenis keluarannya."),
+                                createBar);
+    // Klik = langkah berkeluaran dokumen; menunya muncul saat tombol ditahan atau diklik kanan
+    auto *stepMenu = new QMenu(addStep);
+    stepMenu->setObjectName("canvasContextMenu");
+    QAction *documentStep = stepMenu->addAction(QStringLiteral("Langkah AI: dokumen Markdown"));
+    QAction *tasksStep = stepMenu->addAction(QStringLiteral("Langkah AI: pecah jadi task untuk pipeline"));
+    addStep->setMenu(stepMenu);
+    addStep->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(addStep, &QWidget::customContextMenuRequested, addStep, &QToolButton::showMenu);
+    auto *createLayout = new QVBoxLayout(createBar);
+    createLayout->setContentsMargins(0, 0, 0, 0);
+    createLayout->setSpacing(8);
+    createLayout->addWidget(addNote);
+    createLayout->addWidget(addStep);
+    m_view->addOverlay(createBar, Qt::TopLeftCorner);
+
+    // Zoom dan Paskan: pil yang mengambang di pojok kiri bawah kanvas
+    auto *zoomBar = new QFrame;
+    zoomBar->setObjectName("canvasZoomBar");
+    auto *zoomOut = textButton(QStringLiteral("−"), "btnCanvasZoomOut", QStringLiteral("Perkecil (−)"), zoomBar);
+    zoomOut->setFixedSize(28, 26);
+    m_zoomLabel = new QLabel(QStringLiteral("100%"), zoomBar);
+    m_zoomLabel->setObjectName("canvasZoomLevel");
+    m_zoomLabel->setAlignment(Qt::AlignCenter);
+    auto *zoomIn = textButton(QStringLiteral("+"), "btnCanvasZoomIn", QStringLiteral("Perbesar (+)"), zoomBar);
+    zoomIn->setFixedSize(28, 26);
+    auto *fit = textButton(QStringLiteral("Paskan"), "btnCanvasFit", QStringLiteral("Tampilkan semua kartu (Ctrl+0)"),
+                           zoomBar);
+    auto *zoomLayout = new QHBoxLayout(zoomBar);
+    zoomLayout->setContentsMargins(6, 3, 8, 3);
+    zoomLayout->setSpacing(2);
+    zoomLayout->addWidget(zoomOut);
+    zoomLayout->addWidget(m_zoomLabel);
+    zoomLayout->addWidget(zoomIn);
+    zoomLayout->addWidget(separator(zoomBar));
+    zoomLayout->addWidget(fit);
+    m_view->addOverlay(zoomBar, Qt::BottomLeftCorner);
 
     m_splitter = new QSplitter(Qt::Horizontal, this);
     m_splitter->setObjectName("canvasSplitter");
@@ -177,6 +213,11 @@ CanvasPage::CanvasPage(CanvasModel &model, CanvasAutomation &automation, CanvasC
     root->addWidget(toolbar);
     root->addWidget(m_splitter, 1);
 
+    // Drawer pratinjau Markdown: di luar tata letak, menimpa kanvas dan mengikuti tepi kanannya
+    m_preview = new CanvasPreviewDrawer(renderer, this);
+    m_view->installEventFilter(this);
+    m_splitter->installEventFilter(this);
+
     m_inspectorTimer.setSingleShot(true);
     m_inspectorTimer.setInterval(0);
     connect(&m_inspectorTimer, &QTimer::timeout, this, &CanvasPage::refreshInspector);
@@ -184,9 +225,9 @@ CanvasPage::CanvasPage(CanvasModel &model, CanvasAutomation &automation, CanvasC
     m_statusTimer.setInterval(7000);
     connect(&m_statusTimer, &QTimer::timeout, m_status, &QLabel::clear);
 
-    // Toolbar
+    // Toolbar dan tombol mengambang
     connect(board, &QPushButton::clicked, this, &CanvasPage::boardRequested);
-    connect(addNote, &QPushButton::clicked, this, [this]() {
+    connect(addNote, &QToolButton::clicked, this, [this]() {
         const QSizeF size = CanvasNode::defaultSize(CanvasNodeKind::Note);
         m_view->addNoteAt(m_view->centerScenePos() - QPointF(size.width() / 2, size.height() / 2), true);
     });
@@ -198,8 +239,8 @@ CanvasPage::CanvasPage(CanvasModel &model, CanvasAutomation &automation, CanvasC
     connect(addStep, &QToolButton::clicked, this, [addStepAtCenter]() { addStepAtCenter(CanvasStepOutput::Document); });
     connect(documentStep, &QAction::triggered, this, [addStepAtCenter]() { addStepAtCenter(CanvasStepOutput::Document); });
     connect(tasksStep, &QAction::triggered, this, [addStepAtCenter]() { addStepAtCenter(CanvasStepOutput::Tasks); });
-    connect(m_runAll, &QPushButton::clicked, this, &CanvasPage::runAllRequested);
-    connect(m_stopAll, &QPushButton::clicked, this, [this]() { m_automation.cancelAll(); });
+    connect(m_runAll, &QToolButton::clicked, this, &CanvasPage::runAllRequested);
+    connect(m_stopAll, &QToolButton::clicked, this, [this]() { m_automation.cancelAll(); });
     connect(m_undo, &QToolButton::clicked, this, [this]() { m_model.undo(); });
     connect(m_redo, &QToolButton::clicked, this, [this]() { m_model.redo(); });
     connect(zoomOut, &QPushButton::clicked, m_view, &CanvasView::zoomOut);
@@ -283,6 +324,22 @@ CanvasPage::CanvasPage(CanvasModel &model, CanvasAutomation &automation, CanvasC
         m_model.removeNodes(ids);
     });
 
+    // Pratinjau Markdown
+    connect(m_inspector, &CanvasInspector::previewToggled, this, [this](bool open) {
+        open ? openPreview() : closePreview();
+    });
+    // Klik kanan catatan > Pratinjau Markdown: catatan itu saja yang terpilih, lalu drawernya dibuka
+    connect(m_view, &CanvasView::previewRequested, this, [this](const QString &id) {
+        if (m_view->selectedNodeIds() != QStringList{id}) {
+            m_view->selectNodes({id});
+        }
+        refreshInspector();
+        openPreview();
+    });
+    connect(m_inspector, &CanvasInspector::previewChanged, this, &CanvasPage::refreshPreview);
+    connect(m_preview, &CanvasPreviewDrawer::closeRequested, this, &CanvasPage::closePreview);
+    connect(m_preview, &CanvasPreviewDrawer::openChanged, m_inspector, &CanvasInspector::setPreviewOpen);
+
     // Chat
     connect(m_chatPanel, &CanvasChatPanel::askRequested, this, &CanvasPage::chatAskRequested);
     connect(m_chatPanel, &CanvasChatPanel::noteRequested, this, &CanvasPage::noteFromChat);
@@ -314,8 +371,11 @@ CanvasPage::CanvasPage(CanvasModel &model, CanvasAutomation &automation, CanvasC
 CanvasPage::~CanvasPage() {
     // Anak halaman dibongkar QWidget sesudah anggota halaman ini hilang: sinyal mereka, juga sinyal
     // model dan automation yang hidup lebih lama, tidak boleh lagi sampai ke halaman yang setengah hancur
+    m_view->removeEventFilter(this);
+    m_splitter->removeEventFilter(this);
     m_view->blockSignals(true);
     m_inspector->blockSignals(true);
+    m_preview->blockSignals(true);
     m_chatPanel->blockSignals(true);
     m_library->blockSignals(true);
     disconnect(&m_model, nullptr, this, nullptr);
@@ -383,6 +443,14 @@ void CanvasPage::hideEvent(QHideEvent *event) {
     QWidget::hideEvent(event);
 }
 
+bool CanvasPage::eventFilter(QObject *watched, QEvent *event) {
+    if ((watched == m_view || watched == m_splitter)
+        && (event->type() == QEvent::Resize || event->type() == QEvent::Move)) {
+        layoutPreview();
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
 void CanvasPage::scheduleInspectorRefresh() {
     // Banyak sinyal model bisa datang beruntun (macro, undo): detail cukup disegarkan sekali
     m_inspectorTimer.start();
@@ -433,6 +501,41 @@ void CanvasPage::hidePanel() {
     m_side->hide();
     m_toggleInspector->setChecked(false);
     m_toggleChat->setChecked(false);
+}
+
+void CanvasPage::refreshPreview() {
+    if (!m_preview->isOpen()) {
+        return;
+    }
+    const QString id = m_inspector->nodeId();
+    if (id.isEmpty()) {
+        m_preview->showDocument(QString(), QStringLiteral("PRATINJAU"), QString(),
+                                QStringLiteral("_Pilih satu kartu di kanvas untuk melihat pratinjaunya._"));
+        return;
+    }
+    m_preview->showDocument(id, QStringLiteral("PRATINJAU · %1").arg(m_inspector->previewKind()),
+                            m_inspector->previewTitle(), m_inspector->previewMarkdown());
+}
+
+void CanvasPage::layoutPreview() {
+    // Tepi kanan kanvas: di sebelah panel kanan, atau tepi halaman bila panel itu disembunyikan
+    const QRect area = m_splitter->geometry();
+    m_preview->setBounds(area, area.left() + m_view->geometry().right() + 1);
+}
+
+void CanvasPage::openPreview() {
+    layoutPreview();
+    m_preview->slideIn();
+    refreshPreview();
+}
+
+void CanvasPage::closePreview() {
+    // Fokus yang ada di dalam drawer kembali ke kanvas: pintasan keyboardnya tetap bekerja
+    const QWidget *focused = QApplication::focusWidget();
+    if (focused && m_preview->isAncestorOf(focused)) {
+        m_view->setFocus(Qt::OtherFocusReason);
+    }
+    m_preview->slideOut();
 }
 
 bool CanvasPage::isChatOpen() const {

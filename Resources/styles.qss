@@ -1843,10 +1843,9 @@ QFrame#canvasToolbarSeparator {
     margin: 4px 2px;
 }
 
-/* Tombol toolbar: varian lewat dynamic property "variant" (secondary, toggle, primary) */
+/* Tombol toolbar: varian lewat dynamic property "variant" (secondary, toggle) */
 QWidget#canvasToolbar QPushButton[variant="secondary"],
-QWidget#canvasToolbar QPushButton[variant="toggle"],
-QToolButton#btnCanvasAddStep {
+QWidget#canvasToolbar QPushButton[variant="toggle"] {
     background-color: #ffffff;
     color: #33517a;
     border: 1px solid #b9c6da;
@@ -1857,14 +1856,12 @@ QToolButton#btnCanvasAddStep {
 }
 
 QWidget#canvasToolbar QPushButton[variant="secondary"]:hover,
-QWidget#canvasToolbar QPushButton[variant="toggle"]:hover,
-QToolButton#btnCanvasAddStep:hover {
+QWidget#canvasToolbar QPushButton[variant="toggle"]:hover {
     background-color: #eef2f8;
     border: 1px solid #33517a;
 }
 
-QWidget#canvasToolbar QPushButton[variant="secondary"]:pressed,
-QToolButton#btnCanvasAddStep:pressed {
+QWidget#canvasToolbar QPushButton[variant="secondary"]:pressed {
     background-color: #dfe7f2;
 }
 
@@ -1879,47 +1876,21 @@ QWidget#canvasToolbar QPushButton[variant="toggle"]:checked {
     border: 1px solid #33517a;
 }
 
-QWidget#canvasToolbar QPushButton[variant="primary"] {
-    background-color: #8f5f31;
-    color: #ffffff;
-    border: 1px solid #8f5f31;
-    border-radius: 4px;
-    padding: 4px 12px;
-    font-size: 11px;
-    font-weight: bold;
-}
-
-QWidget#canvasToolbar QPushButton[variant="primary"]:hover {
-    background-color: #7a5024;
-    border: 1px solid #7a5024;
-}
-
-QWidget#canvasToolbar QPushButton[variant="primary"]:pressed {
-    background-color: #6a441f;
-    border: 1px solid #6a441f;
-}
-
-QPushButton#btnCanvasZoomOut,
-QPushButton#btnCanvasZoomIn {
-    padding: 0px;
-    font-size: 15px;
-}
-
-/* Ruang untuk panah menu "Langkah AI" (dokumen / pecah jadi task) */
-QToolButton#btnCanvasAddStep {
-    padding-right: 20px;
-}
-
-QToolButton#btnCanvasAddStep::menu-button {
+/* Jalankan alur (play hijau) dan Hentikan (kotak merah): ikon saja, seperti tombol run kartu task */
+QToolButton#btnCanvasRunAll,
+QToolButton#btnCanvasStopAll {
+    background: transparent;
     border: none;
-    border-left: 1px solid #dfe5ee;
-    width: 16px;
+    border-radius: 4px;
+    padding: 4px;
 }
 
-QToolButton#btnCanvasAddStep::menu-arrow {
-    image: url(:/icons/chevron-down.svg);
-    width: 9px;
-    height: 9px;
+QToolButton#btnCanvasRunAll:hover {
+    background-color: #e3ebe6;
+}
+
+QToolButton#btnCanvasStopAll:hover {
+    background-color: #f6e0db;
 }
 
 QToolButton#btnCanvasUndo,
@@ -1947,17 +1918,74 @@ QLabel#canvasStatus[error="true"] {
     color: #9b2c1f;
 }
 
+/* Kanvas tak terbatas: latar dan grid titiknya dilukis CanvasView */
+QGraphicsView#canvasView {
+    border: 1px solid #e2d5c1;
+}
+
+/* Tombol bulat yang mengambang di pojok kiri atas kanvas: Catatan dan Langkah AI.
+   border-radius = separuh sisi tombol (kRoundButtonSide di CanvasPage.cpp). */
+QToolButton#btnCanvasAddNote,
+QToolButton#btnCanvasAddStep {
+    background-color: #ffffff;
+    border: 1px solid #e2d5c1;
+    border-radius: 20px;
+    padding: 0px;
+}
+
+QToolButton#btnCanvasAddNote:hover,
+QToolButton#btnCanvasAddStep:hover {
+    background-color: #eef2f8;
+    border: 1px solid #33517a;
+}
+
+QToolButton#btnCanvasAddNote:pressed,
+QToolButton#btnCanvasAddStep:pressed {
+    background-color: #dfe7f2;
+}
+
+/* Menu jenis keluaran muncul saat tombol ditahan atau diklik kanan: tanpa panah di sudut lingkaran */
+QToolButton#btnCanvasAddStep::menu-indicator {
+    image: none;
+}
+
+/* Zoom dan Paskan: pil yang mengambang di pojok kiri bawah kanvas */
+QFrame#canvasZoomBar {
+    background-color: #ffffff;
+    border: 1px solid #e2d5c1;
+    border-radius: 17px;
+}
+
+QFrame#canvasZoomBar QPushButton {
+    background: transparent;
+    color: #33517a;
+    border: none;
+    border-radius: 12px;
+    padding: 4px 8px;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+QFrame#canvasZoomBar QPushButton:hover {
+    background-color: #eef2f8;
+}
+
+QFrame#canvasZoomBar QPushButton:pressed {
+    background-color: #dfe7f2;
+}
+
+QFrame#canvasZoomBar QPushButton#btnCanvasZoomOut,
+QFrame#canvasZoomBar QPushButton#btnCanvasZoomIn {
+    padding: 0px;
+    font-size: 15px;
+}
+
 QLabel#canvasZoomLevel {
     background: transparent;
     min-width: 42px;
     font-size: 11px;
     font-weight: bold;
     color: #3d3730;
-}
-
-/* Kanvas tak terbatas: latar dan grid titiknya dilukis CanvasView */
-QGraphicsView#canvasView {
-    border: 1px solid #e2d5c1;
 }
 
 QLabel#canvasEmptyHint {
@@ -1988,7 +2016,8 @@ QLabel#canvasPanelHint {
     color: #8a7f70;
 }
 
-QLabel#canvasInspectorTitle {
+QLabel#canvasInspectorTitle,
+QLabel#canvasPreviewTitle {
     background: transparent;
     font-size: 14px;
     font-weight: bold;
@@ -2142,6 +2171,49 @@ QPushButton#btnCanvasSecondary:hover {
 QPushButton#btnCanvasSecondary:disabled {
     color: #b3aa9c;
     border: 1px solid #dfe5ee;
+}
+
+/* Pratinjau di kepala panel detail: menyala selama drawer pratinjaunya terbuka */
+QPushButton#btnCanvasPreview {
+    background-color: #ffffff;
+    color: #33517a;
+    border: 1px solid #b9c6da;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+QPushButton#btnCanvasPreview:hover {
+    background-color: #eef2f8;
+    border: 1px solid #33517a;
+}
+
+QPushButton#btnCanvasPreview:checked {
+    background-color: #dfe7f2;
+    border: 1px solid #33517a;
+}
+
+/* Drawer pratinjau Markdown: menimpa kanvas dari tepi kanannya, garis tepinya sedikit lebih tegas
+   daripada panel yang terpasang */
+QFrame#canvasPreviewPanel {
+    background-color: #fbf8f3;
+    border: 1px solid #d9cdbb;
+    border-radius: 8px;
+}
+
+QPushButton#btnCanvasPreviewClose,
+QPushButton#btnCanvasPreviewExpand {
+    background: transparent;
+    border: none;
+    color: #6f6557;
+    font-size: 14px;
+}
+
+QPushButton#btnCanvasPreviewClose:hover,
+QPushButton#btnCanvasPreviewExpand:hover {
+    background-color: #f1e8da;
+    border-radius: 4px;
 }
 
 QPushButton#btnCanvasDanger {

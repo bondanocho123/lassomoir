@@ -163,7 +163,8 @@ Konvensi nama sinyal di kode sudah tepat dan dipertahankan: **peristiwa** dalam 
 | `RunLogFormatter` ✅ | View | Teks baris konsol untuk kejadian run | — |
 | `SidePanelDock` · `VerticalTabButton` ✅ | View | Tiga keadaan panel Lieutenant di pane kanan `mainSplitter`: terpasang (pin), tab tegak di rel tepi kanan, atau disembunyikan (lihat §6.6 Konsol) | Tahu isi panelnya |
 | `CanvasWorkspace` ✅ | View | Satu kanvas brainstorm per project (§3.6): muat/simpan `canvas.json` lewat `FileManager`, segarkan kartu referensi saat task berubah, rakit `AgentLaunch` langkah AI, buat task usulan lewat `TaskManager` | Mengubah task tanpa `TaskManager` |
-| `CanvasPage` · `CanvasInspector` · `CanvasLibrary` ✅ | View | Halaman kanvas: toolbar, Pustaka artefak lintas project (sumber drag), panel Detail kartu terpilih | Menyimpan data kanvas sendiri |
+| `CanvasPage` · `CanvasInspector` · `CanvasLibrary` ✅ | View | Halaman kanvas: toolbar, tombol mengambang di kanvas (buat kartu, zoom), Pustaka artefak lintas project (sumber drag), panel Detail kartu terpilih | Menyimpan data kanvas sendiri |
+| `CanvasPreviewDrawer` ✅ | View | Drawer pratinjau Markdown kartu terpilih, menimpa kanvas dari tepi kanannya (§3.6) | Tahu kartu atau model kanvas (isi datang dari `CanvasPage`) |
 | `CanvasChatPanel` ✅ | View | Panel chat tanya jawab (bergantian dengan Detail): gelembung pesan, jawaban Markdown, keluaran live, bahan = kartu terpilih | Menjalankan agent sendiri (kirim intent) |
 | `CanvasChat` ✅ | Infra | Percakapan satu kanvas: pesan + metrik, satu pertanyaan pada satu waktu lewat `AgentRuntime`, JSON untuk `canvas.json` | Mengubah kartu kanvas |
 | `CanvasView` · `CanvasNodeItem` · `CanvasEdgeItem` ✅ | View | Kanvas tak terbatas (`QGraphicsView`): geser, zoom di kursor, seleksi, sambungan titik → kartu; semua perubahan dikirim sebagai intent ke `CanvasModel` | Mengubah kartu tanpa model |
@@ -197,25 +198,26 @@ Konvensi nama sinyal di kode sudah tepat dan dipertahankan: **peristiwa** dalam 
 
 Ruang brainstorm pribadi per project berupa kanvas tak terbatas. Isinya ide sendiri dan artefak dari banyak task, juga dari project lain yang sedang terbuka. Langkah AI di kanvas mengolah bahan yang disambungkan ke sana menjadi dokumen atau task baru untuk pipeline.
 
-Dibuka lewat tombol **Kanvas** di header swimlane atau **View › Kanvas Brainstorm** (`Ctrl+Shift+K`). Tombol **Board** kembali ke kanban. Tata letaknya: toolbar di atas, **Pustaka artefak** di kiri, kanvas di tengah, **Detail** kartu terpilih di kanan.
+Dibuka lewat tombol **Kanvas** di header swimlane atau **View › Kanvas Brainstorm** (`Ctrl+Shift+K`). Tombol **Board** kembali ke kanban. Tata letaknya: toolbar di atas, **Pustaka artefak** di kiri, kanvas di tengah, **Detail** kartu terpilih di kanan. Tombol yang bekerja pada kanvas mengambang di atasnya: dua tombol bulat **Catatan** dan **Langkah AI** di pojok kiri atas, zoom (− / persen / +) dan **Paskan** di pojok kiri bawah. Toolbar tinggal memuat Board, judul (terpotong "…" bila sempit), ▶ / ■, undo/redo, pesan status, dan tombol panel, sehingga halaman kanvas tetap muat di antara sidebar dan panel Lieutenant yang terpasang.
 
 | Kartu | Isi | Asal |
 |---|---|---|
-| Catatan | Teks bebas; 5 warna kertas | Klik dua kali di ruang kosong, `N`, tombol **Catatan** |
+| Catatan | Teks bebas; 5 warna kertas | Klik dua kali di ruang kosong, `N`, tombol bulat **Catatan** |
 | Artefak | Dokumen hasil satu stage (run sukses terakhir) atau satu lampiran task; foto tampil sebagai gambar | Seret dari Pustaka, atau klik dua kali di sana |
 | Task | Judul, stage, dan status task | Seret baris task dari Pustaka; task usulan |
-| Langkah AI | Instruksi + model/effort; keluaran **dokumen Markdown** atau **task untuk pipeline** | `L`, tombol **Langkah AI** |
+| Langkah AI | Instruksi + model/effort; keluaran **dokumen Markdown** atau **task untuk pipeline** | `L`, tombol bulat **Langkah AI** (ditahan atau klik kanan: pilih jenis keluaran) |
 
 Aturan:
 
 1. **Sambungan berarah.** Tarik dari titik ● di tepi kanan kartu ke kartu lain. Dilepas di ruang kosong, sambungan membuat catatan baru. Garis yang masuk ke langkah AI adalah bahan agent. Garis yang membuat putaran ditolak (`CanvasModel::connectNodes`), jadi langkah AI selalu bisa diurutkan.
 2. **Referensi hidup.** Kartu artefak dan task disegarkan setiap kali task sumbernya berubah. Bila sumbernya hilang (task dihapus, project ditutup), salinan terakhir tetap dipakai dan kartunya ditandai *tidak tersedia*.
-3. **Menjalankan.** **▶ Jalankan** menjalankan satu langkah, **Jalankan + hulunya** menyertakan langkah hulu, dan **▶ Jalankan alur** di toolbar menjalankan semua langkah. Urutannya mengikuti dependensi, dengan paling banyak 2 agent paralel. Hasil langkah hulu menjadi bahan langkah hilir. Hulu yang gagal membuat hilirnya dilewati (`skipped`), bukan dijalankan dengan bahan kurang.
+3. **Menjalankan.** **▶ Jalankan** menjalankan satu langkah, **Jalankan + hulunya** menyertakan langkah hulu, dan ikon **▶** hijau di toolbar (*Jalankan alur*) menjalankan semua langkah; ikon **■** merah di sebelahnya menghentikan semua langkah yang antre atau berjalan. Urutannya mengikuti dependensi, dengan paling banyak 2 agent paralel. Hasil langkah hulu menjadi bahan langkah hilir. Hulu yang gagal membuat hilirnya dilewati (`skipped`), bukan dijalankan dengan bahan kurang.
 4. **Agent baca-saja.** `claude -p` berjalan di folder kerja project dengan tool `Read`, `Grep`, `Glob` saja dan prompt peran `:/prompts/BRAINSTORM.md`. Bawaannya sonnet/medium. Bahan dibatasi 24 000 karakter per kartu dan 90 000 per langkah. Foto lampiran ikut sebagai blok gambar.
 5. **Hasil ke pipeline.** Hasil langkah bisa disalin menjadi catatan. **Jadikan task…** membuka form *New Task* yang sudah berisi judul dan ringkasan bahan yang tersambung. Langkah berkeluaran *task* menjawab dengan blok ` ```json ` berisi `[{title, category, instructions}]` (maks. 12). **Buat N task di WAITING** menambahkannya lewat `TaskManager`, lalu kartu task-nya muncul di kanvas, tersambung ke langkahnya.
 6. **Undo/redo** (`Ctrl+Z` / `Ctrl+Y`, 200 langkah) mencakup kartu, garis, posisi, dan isi. Hasil langkah AI dan salinan isi referensi tidak ikut di-undo, supaya run yang sudah dibayar tidak hilang.
 7. **Penempatan.** Kartu yang posisinya tidak dipilih pengguna (dari Pustaka lewat klik dua kali, task usulan, hasil yang dijadikan catatan) ditaruh di tempat lapang terdekat (`CanvasBoard::openSpot`), tidak menimpa kartu lain.
 8. **Zoom.** Di bawah 60% kartu dilukis ringkas: pita warna jenisnya dan judul berhuruf ±11 px di layar, supaya papan besar tetap terbaca sebagai peta.
+9. **Pratinjau Markdown.** Tombol **Pratinjau** di kepala panel Detail, atau klik kanan catatan › **Pratinjau Markdown**, membuka drawer (`CanvasPreviewDrawer`) berisi isi kartu terpilih dalam bentuk jadi: catatan (mengikuti ketikan di editor, juga yang belum tersimpan), dokumen artefak, atau hasil langkah AI. Drawer meluncur dari tepi kanan kanvas dan menimpanya tanpa menggeser tata letak; lebarnya 55% ruang di kiri panel kanan (420–720 px), atau seluruh ruang itu bila sempit, sehingga Pustaka ikut tertutup. Tombol perluas menutupi seluruh halaman di bawah toolbar; ✕, `Esc` di dalam drawer, atau tombol Pratinjau menutupnya.
 
 #### Chat tanya jawab
 

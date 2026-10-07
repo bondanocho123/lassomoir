@@ -21,11 +21,14 @@ SOURCES += \
     ../../BranchViewer.cpp \
     ../../CanvasAutomation.cpp \
     ../../CanvasBoard.cpp \
+    ../../CanvasChat.cpp \
+    ../../CanvasChatPanel.cpp \
     ../../CanvasInspector.cpp \
     ../../CanvasItems.cpp \
     ../../CanvasLibrary.cpp \
     ../../CanvasModel.cpp \
     ../../CanvasPage.cpp \
+    ../../CanvasPreviewDrawer.cpp \
     ../../CanvasView.cpp \
     ../../CanvasWorkflow.cpp \
     ../../CanvasWorkspace.cpp \
@@ -93,11 +96,14 @@ HEADERS += \
     ../../BranchViewer.h \
     ../../CanvasAutomation.h \
     ../../CanvasBoard.h \
+    ../../CanvasChat.h \
+    ../../CanvasChatPanel.h \
     ../../CanvasInspector.h \
     ../../CanvasItems.h \
     ../../CanvasLibrary.h \
     ../../CanvasModel.h \
     ../../CanvasPage.h \
+    ../../CanvasPreviewDrawer.h \
     ../../CanvasView.h \
     ../../CanvasWorkflow.h \
     ../../CanvasWorkspace.h \
