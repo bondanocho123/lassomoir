@@ -1,6 +1,9 @@
 #include "AgentAccess.h"
 #include "AppFonts.h"
 #include "BranchViewer.h"
+#include "CanvasAutomation.h"
+#include "CanvasChat.h"
+#include "CanvasChatPanel.h"
 #include "CanvasInspector.h"
 #include "CanvasItems.h"
 #include "CanvasLibrary.h"
@@ -301,6 +304,7 @@ private slots:
     // Tombol Pratinjau di panel detail: isi kartu terpilih sebagai Markdown jadi di drawer yang
     // menimpa kanvas dari tepi kanannya, mengikuti ketikan dan pilihan kartu
     void canvasPreviewsMarkdownInDrawer();
+    void canvasChatAnswerExpandsIntoDrawer();
     // Garis menempel di sisi kartu yang menghadap tujuannya (bukan selalu kanan ke kiri), menghindari
     // lorong yang diisi kartu lain, dan ditata ulang saat kartu mana pun berpindah
     void canvasEdgesAttachToFacingSides();
@@ -4138,6 +4142,106 @@ void TestGui::canvasPreviewsMarkdownInDrawer() {
     // Tanpa kartu terpilih dan tanpa drawer, tombolnya hilang lagi
     view->selectNodes({});
     QTRY_VERIFY(!toggle->isVisible());
+}
+
+void TestGui::canvasChatAnswerExpandsIntoDrawer() {
+    CanvasModel model(QStringLiteral("proj-chat"));
+    CanvasAutomation automation(model, m_runtime, [](const QString &, QString *) { return std::nullopt; });
+    CanvasChat chat(model, m_runtime, [](const QStringList &, QString *) { return std::nullopt; });
+    CanvasPage page(model, automation, chat, &m_mermaid);
+    page.resize(1280, 720);
+    page.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&page));
+
+    auto message = [](const char *id, CanvasChatMessage::Role role, const QString &text) {
+        CanvasChatMessage result;
+        result.id = QLatin1String(id);
+        result.role = role;
+        result.text = text;
+        result.at = QDateTime::currentDateTimeUtc();
+        return result;
+    };
+    const QString markdown = QStringLiteral("## Ringkasan\n\n| Risiko | Dampak |\n|---|---|\n| Token habis | Tinggi |\n");
+    CanvasChatMessage question = message("q1", CanvasChatMessage::Role::User, QStringLiteral("Apa   risikonya?"));
+    question.contextLabel = QStringLiteral("Seluruh kanvas");
+    CanvasChatMessage answer = message("a1", CanvasChatMessage::Role::Agent, markdown);
+    answer.replyTo = question.id;
+    answer.outcome = QStringLiteral("success");
+    CanvasChatMessage failed = message("a2", CanvasChatMessage::Role::Agent, QStringLiteral("belum login"));
+    failed.replyTo = question.id;
+    failed.outcome = QStringLiteral("error");
+    chat.load({question, answer, failed});
+
+    auto *panel = page.findChild<CanvasChatPanel *>();
+    auto *inspector = page.findChild<CanvasInspector *>();
+    auto *drawer = page.findChild<CanvasPreviewDrawer *>();
+    auto *toggleChat = page.findChild<QPushButton *>(QStringLiteral("btnCanvasToggleChat"));
+    QVERIFY(panel && inspector && drawer && toggleChat);
+    toggleChat->click();
+    QTRY_VERIFY(panel->isVisible());
+
+    // Hanya jawaban yang berhasil punya tombol Perluas, di samping Jadikan catatan dan Salin
+    auto expandButtons = [panel]() {
+        QList<QPushButton *> result;
+        const QList<QPushButton *> buttons = panel->findChildren<QPushButton *>(QStringLiteral("btnCanvasChatAction"));
+        for (QPushButton *button : buttons) {
+            if (button->text() == QStringLiteral("Perluas")) {
+                result.append(button);
+            }
+        }
+        return result;
+    };
+    QCOMPARE(expandButtons().size(), 1);
+    QPushButton *expand = expandButtons().first();
+    QTRY_VERIFY(expand->isVisible());
+    QVERIFY(!expand->icon().isNull() && !expand->toolTip().isEmpty());
+
+    // Perluas: drawer terbuka di kiri panel chat dengan jawaban itu, pertanyaannya jadi judul
+    auto *rendered = drawer->findChild<MarkdownView *>();
+    auto *kind = drawer->findChild<QLabel *>(QStringLiteral("canvasPanelTitle"));
+    auto *title = drawer->findChild<ElidedLabel *>(QStringLiteral("canvasPreviewTitle"));
+    auto *close = drawer->findChild<QPushButton *>(QStringLiteral("btnCanvasPreviewClose"));
+    auto *toggle = inspector->findChild<QPushButton *>(QStringLiteral("btnCanvasPreview"));
+    QVERIFY(rendered && kind && title && close && toggle);
+    QVERIFY(!drawer->isOpen());
+    expand->click();
+    QVERIFY(drawer->isOpen());
+    QCOMPARE(kind->text(), QStringLiteral("JAWABAN AGENT"));
+    QCOMPARE(title->fullText(), QStringLiteral("Apa risikonya?"));
+    QCOMPARE(rendered->markdown(), markdown);
+    QVERIFY(rendered->document()->toPlainText().startsWith(QStringLiteral("Ringkasan")));
+    QTRY_VERIFY(drawer->isVisible() && drawer->width() >= 420);
+    const QRect panelRect(panel->mapTo(&page, QPoint(0, 0)), panel->size());
+    QTRY_VERIFY(!drawer->geometry().intersects(panelRect) && panel->isVisible());
+
+    // Memilih kartu tidak mengganti jawaban yang sedang dibaca; tombol Pratinjau kartu tidak menyala
+    CanvasView *view = page.view();
+    const QString noteId = view->addNoteAt(view->centerScenePos(), false);
+    QTRY_COMPARE(inspector->nodeId(), noteId);
+    QTest::qWait(250);
+    QCOMPARE(rendered->markdown(), markdown);
+    QVERIFY(!toggle->isChecked());
+    // Pratinjau kartu mengambil alih drawer yang sama; Perluas mengembalikan jawabannya
+    toggle->click();
+    QVERIFY(drawer->isOpen() && toggle->isChecked());
+    QCOMPARE(kind->text(), QStringLiteral("PRATINJAU · CATATAN"));
+    expand->click();
+    QCOMPARE(rendered->markdown(), markdown);
+    QVERIFY(drawer->isOpen() && !toggle->isChecked());
+
+    // ✕ menutup; sesudahnya pratinjau kartu kembali seperti biasa
+    close->click();
+    QVERIFY(!drawer->isOpen());
+    QTRY_VERIFY(!drawer->isVisible());
+    toggle->click();
+    QCOMPARE(kind->text(), QStringLiteral("PRATINJAU · CATATAN"));
+
+    // Percakapan dimulai ulang selagi jawabannya tampil: drawer ikut tertutup
+    expandButtons().first()->click();
+    QCOMPARE(kind->text(), QStringLiteral("JAWABAN AGENT"));
+    QVERIFY(chat.clear());
+    QVERIFY(!drawer->isOpen());
+    QVERIFY(expandButtons().isEmpty());
 }
 
 namespace {
