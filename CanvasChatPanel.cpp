@@ -436,8 +436,15 @@ QWidget *CanvasChatPanel::agentBubble(const CanvasChatMessage &message) {
         auto *copy = smallButton(QStringLiteral("Salin"), bubble);
         const QString text = message.text;
         connect(copy, &QPushButton::clicked, this, [text]() { QGuiApplication::clipboard()->setText(text); });
+        // Panel chat sempit: jawaban panjang, tabel, dan diagram lebih enak dibaca di drawer pratinjau
+        auto *expand = smallButton(QStringLiteral("Perluas"), bubble);
+        expand->setIcon(Theme::icon(QStringLiteral(":/icons/expand.svg")));
+        expand->setIconSize(QSize(11, 11));
+        expand->setToolTip(QStringLiteral("Buka jawaban ini di drawer pratinjau yang lebih lebar"));
+        connect(expand, &QPushButton::clicked, this, [this, answerId]() { emit expandRequested(answerId); });
         actions->addWidget(toNote);
         actions->addWidget(copy);
+        actions->addWidget(expand);
     } else {
         const QString reason = cancelled ? QStringLiteral("Dihentikan sebelum ada jawaban.")
                                          : QStringLiteral("Gagal (%1): %2").arg(message.outcome, message.text);

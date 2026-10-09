@@ -338,11 +338,17 @@ CanvasPage::CanvasPage(CanvasModel &model, CanvasAutomation &automation, CanvasC
     });
     connect(m_inspector, &CanvasInspector::previewChanged, this, &CanvasPage::refreshPreview);
     connect(m_preview, &CanvasPreviewDrawer::closeRequested, this, &CanvasPage::closePreview);
-    connect(m_preview, &CanvasPreviewDrawer::openChanged, m_inspector, &CanvasInspector::setPreviewOpen);
+    // Tombol Pratinjau di panel detail hanya menyala selagi drawer menampilkan kartu, bukan jawaban chat
+    connect(m_preview, &CanvasPreviewDrawer::openChanged, this, [this](bool open) {
+        m_inspector->setPreviewOpen(open && m_previewAnswerId.isEmpty());
+    });
 
     // Chat
     connect(m_chatPanel, &CanvasChatPanel::askRequested, this, &CanvasPage::chatAskRequested);
     connect(m_chatPanel, &CanvasChatPanel::noteRequested, this, &CanvasPage::noteFromChat);
+    connect(m_chatPanel, &CanvasChatPanel::expandRequested, this, &CanvasPage::openChatPreview);
+    // Percakapan dimulai ulang: jawaban yang sedang tampil di drawer ikut hilang
+    connect(&m_chat, &CanvasChat::messagesReset, this, &CanvasPage::refreshPreview);
     connect(m_chatPanel, &CanvasChatPanel::contextActivated, this, [this](const QStringList &ids) {
         QStringList existing;
         for (const QString &id : ids) {
@@ -507,6 +513,17 @@ void CanvasPage::refreshPreview() {
     if (!m_preview->isOpen()) {
         return;
     }
+    if (!m_previewAnswerId.isEmpty()) {
+        const CanvasChatMessage *answer = m_chat.message(m_previewAnswerId);
+        if (!answer) {
+            closePreview();
+            return;
+        }
+        const CanvasChatMessage *question = m_chat.message(answer->replyTo);
+        m_preview->showDocument(answer->id, QStringLiteral("JAWABAN AGENT"),
+                                question ? question->text.simplified() : QString(), answer->text);
+        return;
+    }
     const QString id = m_inspector->nodeId();
     if (id.isEmpty()) {
         m_preview->showDocument(QString(), QStringLiteral("PRATINJAU"), QString(),
@@ -524,9 +541,22 @@ void CanvasPage::layoutPreview() {
 }
 
 void CanvasPage::openPreview() {
+    m_previewAnswerId.clear();
     layoutPreview();
     m_preview->slideIn();
     refreshPreview();
+    m_inspector->setPreviewOpen(true);
+}
+
+void CanvasPage::openChatPreview(const QString &answerId) {
+    if (!m_chat.message(answerId)) {
+        return;
+    }
+    m_previewAnswerId = answerId;
+    layoutPreview();
+    m_preview->slideIn();
+    refreshPreview();
+    m_inspector->setPreviewOpen(false);
 }
 
 void CanvasPage::closePreview() {
@@ -536,6 +566,7 @@ void CanvasPage::closePreview() {
         m_view->setFocus(Qt::OtherFocusReason);
     }
     m_preview->slideOut();
+    m_previewAnswerId.clear();
 }
 
 bool CanvasPage::isChatOpen() const {

@@ -1,8 +1,13 @@
 #include "AgentAccess.h"
 #include "AppFonts.h"
 #include "BranchViewer.h"
+#include "CanvasAutomation.h"
+#include "CanvasChat.h"
+#include "CanvasChatPanel.h"
 #include "CanvasInspector.h"
+#include "CanvasItems.h"
 #include "CanvasLibrary.h"
+#include "CanvasModel.h"
 #include "CanvasPage.h"
 #include "CanvasPreviewDrawer.h"
 #include "CanvasView.h"
@@ -299,6 +304,15 @@ private slots:
     // Tombol Pratinjau di panel detail: isi kartu terpilih sebagai Markdown jadi di drawer yang
     // menimpa kanvas dari tepi kanannya, mengikuti ketikan dan pilihan kartu
     void canvasPreviewsMarkdownInDrawer();
+    void canvasChatAnswerExpandsIntoDrawer();
+    // Garis menempel di sisi kartu yang menghadap tujuannya (bukan selalu kanan ke kiri), menghindari
+    // lorong yang diisi kartu lain, dan ditata ulang saat kartu mana pun berpindah
+    void canvasEdgesAttachToFacingSides();
+    // Titik sambung ada di keempat sisi kartu: garis baru bisa ditarik dari sisi mana pun
+    void canvasConnectsFromAnySide();
+    // Kartu menampilkan teks yang masih terbaca di zoom berapa pun: yang tidak muat berakhir elipsis,
+    // dan titik sambung serta daerah klik garis tidak ikut mengecil
+    void canvasCardsShowWhatFitsAtAnyZoom();
 
     // Notice Claude Code: belum terpasang / perlu update / belum login, dengan tombol buka link atau batal
     void runtimeCheckShowsNotice_data();
@@ -4128,6 +4142,489 @@ void TestGui::canvasPreviewsMarkdownInDrawer() {
     // Tanpa kartu terpilih dan tanpa drawer, tombolnya hilang lagi
     view->selectNodes({});
     QTRY_VERIFY(!toggle->isVisible());
+}
+
+void TestGui::canvasChatAnswerExpandsIntoDrawer() {
+    CanvasModel model(QStringLiteral("proj-chat"));
+    CanvasAutomation automation(model, m_runtime, [](const QString &, QString *) { return std::nullopt; });
+    CanvasChat chat(model, m_runtime, [](const QStringList &, QString *) { return std::nullopt; });
+    CanvasPage page(model, automation, chat, &m_mermaid);
+    page.resize(1280, 720);
+    page.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&page));
+
+    auto message = [](const char *id, CanvasChatMessage::Role role, const QString &text) {
+        CanvasChatMessage result;
+        result.id = QLatin1String(id);
+        result.role = role;
+        result.text = text;
+        result.at = QDateTime::currentDateTimeUtc();
+        return result;
+    };
+    const QString markdown = QStringLiteral("## Ringkasan\n\n| Risiko | Dampak |\n|---|---|\n| Token habis | Tinggi |\n");
+    CanvasChatMessage question = message("q1", CanvasChatMessage::Role::User, QStringLiteral("Apa   risikonya?"));
+    question.contextLabel = QStringLiteral("Seluruh kanvas");
+    CanvasChatMessage answer = message("a1", CanvasChatMessage::Role::Agent, markdown);
+    answer.replyTo = question.id;
+    answer.outcome = QStringLiteral("success");
+    CanvasChatMessage failed = message("a2", CanvasChatMessage::Role::Agent, QStringLiteral("belum login"));
+    failed.replyTo = question.id;
+    failed.outcome = QStringLiteral("error");
+    chat.load({question, answer, failed});
+
+    auto *panel = page.findChild<CanvasChatPanel *>();
+    auto *inspector = page.findChild<CanvasInspector *>();
+    auto *drawer = page.findChild<CanvasPreviewDrawer *>();
+    auto *toggleChat = page.findChild<QPushButton *>(QStringLiteral("btnCanvasToggleChat"));
+    QVERIFY(panel && inspector && drawer && toggleChat);
+    toggleChat->click();
+    QTRY_VERIFY(panel->isVisible());
+
+    // Hanya jawaban yang berhasil punya tombol Perluas, di samping Jadikan catatan dan Salin
+    auto expandButtons = [panel]() {
+        QList<QPushButton *> result;
+        const QList<QPushButton *> buttons = panel->findChildren<QPushButton *>(QStringLiteral("btnCanvasChatAction"));
+        for (QPushButton *button : buttons) {
+            if (button->text() == QStringLiteral("Perluas")) {
+                result.append(button);
+            }
+        }
+        return result;
+    };
+    QCOMPARE(expandButtons().size(), 1);
+    QPushButton *expand = expandButtons().first();
+    QTRY_VERIFY(expand->isVisible());
+    QVERIFY(!expand->icon().isNull() && !expand->toolTip().isEmpty());
+
+    // Perluas: drawer terbuka di kiri panel chat dengan jawaban itu, pertanyaannya jadi judul
+    auto *rendered = drawer->findChild<MarkdownView *>();
+    auto *kind = drawer->findChild<QLabel *>(QStringLiteral("canvasPanelTitle"));
+    auto *title = drawer->findChild<ElidedLabel *>(QStringLiteral("canvasPreviewTitle"));
+    auto *close = drawer->findChild<QPushButton *>(QStringLiteral("btnCanvasPreviewClose"));
+    auto *toggle = inspector->findChild<QPushButton *>(QStringLiteral("btnCanvasPreview"));
+    QVERIFY(rendered && kind && title && close && toggle);
+    QVERIFY(!drawer->isOpen());
+    expand->click();
+    QVERIFY(drawer->isOpen());
+    QCOMPARE(kind->text(), QStringLiteral("JAWABAN AGENT"));
+    QCOMPARE(title->fullText(), QStringLiteral("Apa risikonya?"));
+    QCOMPARE(rendered->markdown(), markdown);
+    QVERIFY(rendered->document()->toPlainText().startsWith(QStringLiteral("Ringkasan")));
+    QTRY_VERIFY(drawer->isVisible() && drawer->width() >= 420);
+    const QRect panelRect(panel->mapTo(&page, QPoint(0, 0)), panel->size());
+    QTRY_VERIFY(!drawer->geometry().intersects(panelRect) && panel->isVisible());
+
+    // Memilih kartu tidak mengganti jawaban yang sedang dibaca; tombol Pratinjau kartu tidak menyala
+    CanvasView *view = page.view();
+    const QString noteId = view->addNoteAt(view->centerScenePos(), false);
+    QTRY_COMPARE(inspector->nodeId(), noteId);
+    QTest::qWait(250);
+    QCOMPARE(rendered->markdown(), markdown);
+    QVERIFY(!toggle->isChecked());
+    // Pratinjau kartu mengambil alih drawer yang sama; Perluas mengembalikan jawabannya
+    toggle->click();
+    QVERIFY(drawer->isOpen() && toggle->isChecked());
+    QCOMPARE(kind->text(), QStringLiteral("PRATINJAU · CATATAN"));
+    expand->click();
+    QCOMPARE(rendered->markdown(), markdown);
+    QVERIFY(drawer->isOpen() && !toggle->isChecked());
+
+    // ✕ menutup; sesudahnya pratinjau kartu kembali seperti biasa
+    close->click();
+    QVERIFY(!drawer->isOpen());
+    QTRY_VERIFY(!drawer->isVisible());
+    toggle->click();
+    QCOMPARE(kind->text(), QStringLiteral("PRATINJAU · CATATAN"));
+
+    // Percakapan dimulai ulang selagi jawabannya tampil: drawer ikut tertutup
+    expandButtons().first()->click();
+    QCOMPARE(kind->text(), QStringLiteral("JAWABAN AGENT"));
+    QVERIFY(chat.clear());
+    QVERIFY(!drawer->isOpen());
+    QVERIFY(expandButtons().isEmpty());
+}
+
+namespace {
+
+// Sisi keluar dan sisi masuk sebuah garis, mis. "kanan>kiri"
+QString sidesOf(const CanvasRoute &route) {
+    static const char *const names[] = {"kiri", "atas", "kanan", "bawah"};
+    return QStringLiteral("%1>%2").arg(QLatin1String(names[int(route.from)]), QLatin1String(names[int(route.to)]));
+}
+
+CanvasNodeItem *canvasNode(const CanvasView &view, const QString &id) {
+    const QList<QGraphicsItem *> items = view.scene()->items();
+    for (QGraphicsItem *item : items) {
+        auto *node = qgraphicsitem_cast<CanvasNodeItem *>(item);
+        if (node && node->id() == id) {
+            return node;
+        }
+    }
+    return nullptr;
+}
+
+CanvasEdgeItem *canvasEdge(const CanvasView &view, const QString &from, const QString &to) {
+    const QList<QGraphicsItem *> items = view.scene()->items();
+    for (QGraphicsItem *item : items) {
+        auto *edge = qgraphicsitem_cast<CanvasEdgeItem *>(item);
+        if (edge && edge->from()->id() == from && edge->to()->id() == to) {
+            return edge;
+        }
+    }
+    return nullptr;
+}
+
+}
+
+void TestGui::canvasEdgesAttachToFacingSides() {
+    // Aturan rutenya sendiri. Tujuan di kanan, kiri, bawah, atas: dua sisi yang saling berhadapan
+    const QRectF origin(0, 0, 220, 150);
+    auto towards = [&origin](const QRectF &target) { return sidesOf(canvasRoute(origin, target)); };
+    QCOMPARE(towards(QRectF(500, 20, 220, 150)), QStringLiteral("kanan>kiri"));
+    QCOMPARE(towards(QRectF(-500, -20, 220, 150)), QStringLiteral("kiri>kanan"));
+    QCOMPARE(towards(QRectF(30, 400, 220, 150)), QStringLiteral("bawah>atas"));
+    QCOMPARE(towards(QRectF(-30, -400, 220, 150)), QStringLiteral("atas>bawah"));
+    // Serong: lorong yang garisnya lebih lurus; seri = mendatar, arah baca kanvas
+    QCOMPARE(towards(QRectF(500, 300, 220, 150)), QStringLiteral("kanan>kiri"));
+    QCOMPARE(towards(QRectF(250, 600, 220, 150)), QStringLiteral("bawah>atas"));
+    QCOMPARE(towards(QRectF(-470, -600, 220, 150)), QStringLiteral("atas>bawah"));
+    QCOMPARE(sidesOf(canvasRoute(QRectF(0, 0, 200, 200), QRectF(400, 400, 200, 200))), QStringLiteral("kanan>kiri"));
+    // Titik (kursor selagi garis ditarik) diperlakukan seperti kartu berukuran nol
+    QCOMPARE(towards(QRectF(QPointF(110, 500), QSizeF(0, 0))), QStringLiteral("bawah>atas"));
+    QCOMPARE(towards(QRectF(QPointF(-300, 60), QSizeF(0, 0))), QStringLiteral("kiri>kanan"));
+
+    // Lorong yang diisi kartu lain dihindari; bila dua-duanya terisi, kembali ke yang lebih lurus
+    auto around = [&origin](const QRectF &target, const QList<QRectF> &cards) {
+        return sidesOf(canvasRoute(origin, target, [&cards](const QRectF &lane) {
+            return std::any_of(cards.cbegin(), cards.cend(), [&lane](const QRectF &card) { return card.intersects(lane); });
+        }));
+    };
+    const QRectF below(250, 600, 220, 150);
+    const QRectF inUpright(-20, 300, 220, 150);   // di antara kedua kartu, di kiri lorong mendatarnya
+    const QRectF inAcross(225, 80, 20, 60);       // di lorong mendatar, di atas lorong tegaknya
+    QCOMPARE(around(below, {}), QStringLiteral("bawah>atas"));
+    QCOMPARE(around(below, {inUpright}), QStringLiteral("kanan>kiri"));
+    QCOMPARE(around(below, {inUpright, inAcross}), QStringLiteral("bawah>atas"));
+    const QRectF beside(500, 300, 220, 150);
+    QCOMPARE(around(beside, {QRectF(300, 70, 100, 70)}), QStringLiteral("bawah>atas"));
+
+    // Jalurnya: dari titik tempel ke titik tempel, meninggalkan kartu tegak lurus sisinya, dan tidak
+    // melengkung keluar dari lorong di antara kedua kartu, juga bila lorongnya sempit
+    const QPainterPath path = canvasConnectorPath(QPointF(220, 75), CanvasSide::Right, QPointF(500, 300), CanvasSide::Left);
+    QCOMPARE(path.pointAtPercent(0), QPointF(220, 75));
+    QCOMPARE(path.pointAtPercent(1), QPointF(500, 300));
+    const QPointF leaving = path.pointAtPercent(0.03) - path.pointAtPercent(0);
+    QVERIFY2(leaving.x() > 0 && qAbs(leaving.y()) < leaving.x() * 0.3,
+             qPrintable(QStringLiteral("%1,%2").arg(leaving.x()).arg(leaving.y())));
+    QVERIFY(path.boundingRect().left() >= 219.5 && path.boundingRect().right() <= 500.5);
+    const QRectF tight = canvasConnectorPath(QPointF(220, 75), CanvasSide::Right, QPointF(240, 700), CanvasSide::Left)
+                             .boundingRect();
+    QVERIFY2(tight.left() >= 219.5 && tight.right() <= 240.5,
+             qPrintable(QStringLiteral("%1..%2").arg(tight.left()).arg(tight.right())));
+    const QPainterPath down = canvasConnectorPath(QPointF(110, 150), CanvasSide::Bottom, QPointF(360, 600), CanvasSide::Top);
+    const QPointF dropping = down.pointAtPercent(0.03) - down.pointAtPercent(0);
+    QVERIFY(dropping.y() > 0 && qAbs(dropping.x()) < dropping.y() * 0.3);
+
+    // Di kanvas: garis mengikuti kartunya
+    CanvasModel model(QStringLiteral("Demo"));
+    CanvasView view(model);
+    view.resize(900, 600);
+    view.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&view));
+    const QString color = CanvasPalette::defaultNoteColor();
+    const QString a = model.addNote(QPointF(0, 0), QStringLiteral("asal"), color);
+    const QString b = model.addNote(QPointF(500, 20), QStringLiteral("tujuan"), color);
+    QVERIFY(!model.connectNodes(a, b).isEmpty());
+    CanvasEdgeItem *edge = canvasEdge(view, a, b);
+    QVERIFY(edge && canvasNode(view, a) && canvasNode(view, b));
+    QCOMPARE(sidesOf(edge->route()), QStringLiteral("kanan>kiri"));
+    QCOMPARE(edge->start(), canvasNode(view, a)->port(CanvasSide::Right));
+    QCOMPARE(edge->tip(), canvasNode(view, b)->port(CanvasSide::Left));
+    QCOMPARE(edge->tip(), QPointF(500, 95));
+    // Tujuan pindah ke bawah, ke kiri, lalu ke atas: sisi tempelnya ikut pindah
+    model.moveNodes({{b, QPointF(30, 400)}});
+    QCOMPARE(sidesOf(edge->route()), QStringLiteral("bawah>atas"));
+    QCOMPARE(edge->start(), QPointF(110, 150));
+    QCOMPARE(edge->tip(), QPointF(140, 400));
+    // Mata panahnya menghadap ke bawah: badannya di atas ujungnya, di luar kartu tujuan
+    // Seluruh mata panah bisa diklik, juga pangkalnya tempat ia bertemu garisnya
+    for (qreal back : {1.0, 4.0, 8.0, 9.5, 12.0}) {
+        QVERIFY2(edge->shape().contains(edge->tip() - QPointF(0, back)), qPrintable(QString::number(back)));
+    }
+    QVERIFY(!canvasNode(view, b)->sceneCardRect().contains(edge->tip() - QPointF(0, 4)));
+    model.moveNodes({{b, QPointF(-500, -20)}});
+    QCOMPARE(sidesOf(edge->route()), QStringLiteral("kiri>kanan"));
+    QCOMPARE(edge->tip(), canvasNode(view, b)->port(CanvasSide::Right));
+    model.moveNodes({{b, QPointF(-30, -400)}});
+    QCOMPARE(sidesOf(edge->route()), QStringLiteral("atas>bawah"));
+    // Selagi kartu diseret (posisinya belum dikirim ke model) garisnya sudah ikut
+    canvasNode(view, b)->setPos(500, 20);
+    QCOMPARE(sidesOf(edge->route()), QStringLiteral("kanan>kiri"));
+    QCOMPARE(edge->tip(), QPointF(500, 95));
+
+    // Kipas: langkah AI dengan kolom task di kanannya. Task yang jauh di bawah letaknya lebih tegak
+    // daripada mendatar, tetapi lorong tegaknya diisi task-task di atasnya: semua garis tetap masuk
+    // dari kiri, tidak terjepit di sela kartu yang berjajar
+    const QString step = model.addStep(QPointF(1000, 0), QStringLiteral("Pecah jadi task"), CanvasStepOutput::Tasks);
+    QStringList tasks;
+    for (int i = 0; i < 6; ++i) {
+        const CanvasSource source{QStringLiteral("Demo"), QStringLiteral("k%1").arg(i), QString(), QString()};
+        tasks.append(model.addReference(source, QPointF(1420, i * 156), QStringLiteral("Task %1").arg(i + 1),
+                                        QStringLiteral("WAITING"), QString()));
+        QVERIFY(!model.connectNodes(step, tasks.last()).isEmpty());
+    }
+    QCoreApplication::processEvents();
+    for (const QString &task : std::as_const(tasks)) {
+        QVERIFY(canvasEdge(view, step, task));
+        QCOMPARE(sidesOf(canvasEdge(view, step, task)->route()), QStringLiteral("kanan>kiri"));
+    }
+    // Tanpa kolom itu, task terakhir saja disambung dari sisi bawah langkahnya
+    QCOMPARE(sidesOf(canvasRoute(QRectF(1000, 0, 300, 200), QRectF(1420, 780, 260, 132))), QStringLiteral("bawah>atas"));
+
+    // Kartu lain yang masuk ke lorong sebuah garis membuat garis itu pindah lorong, dan kembali
+    // setelah kartunya pergi: semua garis ditata ulang saat kartu mana pun berpindah
+    const QString c = model.addNote(QPointF(0, 1000), QStringLiteral("asal serong"), color);
+    const QString d = model.addNote(QPointF(250, 1600), QStringLiteral("tujuan serong"), color);
+    QVERIFY(!model.connectNodes(c, d).isEmpty());
+    CanvasEdgeItem *diagonal = canvasEdge(view, c, d);
+    QVERIFY(diagonal);
+    QCOMPARE(sidesOf(diagonal->route()), QStringLiteral("bawah>atas"));
+    const QString blocker = model.addNote(QPointF(-20, 1300), QStringLiteral("penghalang"), color);
+    QTRY_COMPARE(sidesOf(diagonal->route()), QStringLiteral("kanan>kiri"));
+    model.moveNodes({{blocker, QPointF(-600, 1300)}});
+    QTRY_COMPARE(sidesOf(diagonal->route()), QStringLiteral("bawah>atas"));
+    canvasNode(view, blocker)->setPos(-20, 1300);   // diseret kembali ke lorong, belum dilepas
+    QTRY_COMPARE(sidesOf(diagonal->route()), QStringLiteral("kanan>kiri"));
+    model.moveNodes({{blocker, QPointF(-20, 1300)}});
+    model.removeNodes({blocker});
+    QTRY_COMPARE(sidesOf(diagonal->route()), QStringLiteral("bawah>atas"));
+
+    // Undo membangun ulang semua kartu dan garis: rutenya tetap dihitung dari letak kartu
+    QVERIFY(model.undo());
+    QVERIFY(canvasNode(view, blocker));
+    QTRY_VERIFY(canvasEdge(view, c, d));
+    QTRY_COMPARE(sidesOf(canvasEdge(view, c, d)->route()), QStringLiteral("kanan>kiri"));
+    for (const QString &task : std::as_const(tasks)) {
+        QCOMPARE(sidesOf(canvasEdge(view, step, task)->route()), QStringLiteral("kanan>kiri"));
+    }
+}
+
+void TestGui::canvasConnectsFromAnySide() {
+    CanvasModel model(QStringLiteral("Demo"));
+    CanvasView view(model);
+    view.resize(900, 600);
+    view.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&view));
+    view.restoreView(QPointF(0, 0), 1.0);
+    const QString color = CanvasPalette::defaultNoteColor();
+    const QString a = model.addNote(QPointF(-110, -75), QStringLiteral("asal"), color);
+    CanvasNodeItem *origin = canvasNode(view, a);
+    QVERIFY(origin);
+    QWidget *canvas = view.viewport();
+
+    // Titik sambung di tengah keempat sisi; tengah kartu dan pojoknya bukan titik sambung
+    for (CanvasSide side : {CanvasSide::Left, CanvasSide::Top, CanvasSide::Right, CanvasSide::Bottom}) {
+        QVERIFY2(origin->hitsPort(origin->port(side), 9.0), qPrintable(QString::number(int(side))));
+        // Juga sedikit di luar tepi kartu, tempat separuh titiknya dilukis, dan sedikit di dalamnya
+        const QPointF outward = (origin->port(side) - origin->sceneCardRect().center()) * 0.03;
+        QVERIFY(origin->shape().contains(origin->mapFromScene(origin->port(side) + outward)));
+        QVERIFY(origin->shape().contains(origin->mapFromScene(origin->port(side) - outward)));
+    }
+    QVERIFY(!origin->hitsPort(origin->sceneCardRect().center(), 9.0));
+    QVERIFY(!origin->hitsPort(origin->sceneCardRect().topLeft(), 9.0));
+
+    // Tarik dari titik bawah ke ruang kosong di bawahnya: catatan baru yang tersambung. Garisnya turun
+    // dari sisi bawah, dan titik lepasnya menjadi tengah sisi atas catatan baru itu
+    const QPoint bottomPort = view.mapFromScene(origin->port(CanvasSide::Bottom));
+    const QPoint drop = view.mapFromScene(QPointF(30, 250));
+    QTest::mousePress(canvas, Qt::LeftButton, {}, bottomPort);
+    QTest::mouseMove(canvas, (bottomPort + drop) / 2);
+    QTest::mouseMove(canvas, drop);
+    QTest::mouseRelease(canvas, Qt::LeftButton, {}, drop);
+    view.finishEditing();
+    QCOMPARE(model.board().nodes.size(), 2);
+    QCOMPARE(model.board().edges.size(), 1);
+    const CanvasNode created = model.board().nodes.last();
+    QCOMPARE(model.board().edges.first().from, a);
+    QCOMPARE(model.board().edges.first().to, created.id);
+    QCOMPARE(created.pos, view.mapToScene(drop) - QPointF(created.size.width() / 2, 0));
+    QVERIFY(canvasEdge(view, a, created.id));
+    QCOMPARE(sidesOf(canvasEdge(view, a, created.id)->route()), QStringLiteral("bawah>atas"));
+    // Kartu asalnya tidak ikut bergeser
+    QCOMPARE(model.node(a)->pos, QPointF(-110, -75));
+
+    // Dari titik kiri ke kartu di sebelah kirinya. Selagi ditarik, garisnya sudah menempel di sisi
+    // kanan kartu yang ditunjuk; dilepas di sana keduanya tersambung
+    const QString left = model.addNote(QPointF(-440, -60), QStringLiteral("kiri"), color);
+    CanvasNodeItem *target = canvasNode(view, left);
+    QVERIFY(target);
+    const QPoint onTarget = view.mapFromScene(target->sceneCardRect().center());
+    QTest::mousePress(canvas, Qt::LeftButton, {}, view.mapFromScene(origin->port(CanvasSide::Left)));
+    QTest::mouseMove(canvas, view.mapFromScene(QPointF(-200, 10)));
+    QTest::mouseMove(canvas, onTarget);
+    const QGraphicsPathItem *preview = nullptr;
+    const QList<QGraphicsItem *> items = view.scene()->items();
+    for (const QGraphicsItem *item : items) {
+        if (item->type() == QGraphicsPathItem::Type) {
+            preview = static_cast<const QGraphicsPathItem *>(item);
+        }
+    }
+    QVERIFY(preview);
+    QCOMPARE(preview->path().pointAtPercent(0), origin->port(CanvasSide::Left));
+    QCOMPARE(preview->path().pointAtPercent(1), target->port(CanvasSide::Right));
+    QTest::mouseRelease(canvas, Qt::LeftButton, {}, onTarget);
+    QVERIFY(model.board().hasEdge(a, left));
+    QCOMPARE(model.board().nodes.size(), 3);
+    QVERIFY(canvasEdge(view, a, left));
+    QCOMPARE(sidesOf(canvasEdge(view, a, left)->route()), QStringLiteral("kiri>kanan"));
+
+    // Menekan di badan kartu tetap menggeser kartunya, bukan menarik garis baru
+    const QPoint body = view.mapFromScene(origin->sceneCardRect().center());
+    QTest::mousePress(canvas, Qt::LeftButton, {}, body);
+    QTest::mouseMove(canvas, body + QPoint(15, 5));
+    QTest::mouseMove(canvas, body + QPoint(30, 10));
+    QTest::mouseRelease(canvas, Qt::LeftButton, {}, body + QPoint(30, 10));
+    QCOMPARE(model.board().edges.size(), 2);
+    QCOMPARE(model.node(a)->pos, QPointF(-80, -65));
+}
+
+void TestGui::canvasCardsShowWhatFitsAtAnyZoom() {
+    CanvasModel model(QStringLiteral("Demo"));
+    CanvasView view(model);
+    view.resize(900, 600);
+    view.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&view));
+    view.restoreView(QPointF(0, 0), 1.0);
+    const QString color = CanvasPalette::defaultNoteColor();
+    auto shown = [](const QStringList &lines) { return lines.join(QLatin1Char(' ')).simplified(); };
+    // Tanpa spasi: baris boleh patah di mana saja, mis. di tengah "C++20"
+    auto squeezed = [](QString text) { return text.remove(QLatin1Char(' ')); };
+    const QChar ellipsis(0x2026);
+    // Baris pertama selalu awal judulnya; judul yang tidak tampil seluruhnya berakhir elipsis
+    auto cutCleanly = [&shown, &squeezed, ellipsis](const QStringList &lines, const QString &title) -> QString {
+        if (lines.isEmpty()) {
+            return QStringLiteral("tidak ada teks");
+        }
+        QString first = lines.first();
+        if (first.endsWith(ellipsis)) {
+            first.chop(1);
+        }
+        if (!squeezed(title).startsWith(squeezed(first))) {
+            return QStringLiteral("baris pertama bukan awal judul: ") + lines.first();
+        }
+        if (!squeezed(shown(lines)).startsWith(squeezed(title)) && !shown(lines).contains(ellipsis)) {
+            return QStringLiteral("judul terpotong tanpa elipsis: ") + shown(lines);
+        }
+        return QString();
+    };
+
+    // Kartu task seukuran bawaannya
+    const QString title = QStringLiteral("Siapkan lingkungan Linux dan toolchain C++20");
+    const QString taskId = model.addReference(
+        CanvasSource{QStringLiteral("Demo"), QStringLiteral("k1"), QString(), QString()}, QPointF(-130, -66), title,
+        QStringLiteral("WAITING"), QStringLiteral("Kategori: utility\n\n## Tujuan\nMenyiapkan lingkungan belajar."));
+    CanvasNodeItem *task = canvasNode(view, taskId);
+    QVERIFY(task);
+    // Zoom biasa: judul utuh, keterangan, lalu isi tanpa tanda Markdown-nya
+    const QStringList full = task->visibleText(1.0);
+    QVERIFY2(squeezed(shown(full)).startsWith(squeezed(title)), qPrintable(shown(full)));
+    QVERIFY2(full.contains(QStringLiteral("WAITING · Demo")), qPrintable(shown(full)));
+    QVERIFY2(shown(full).contains(QStringLiteral("Kategori: utility")), qPrintable(shown(full)));
+    QVERIFY2(!shown(full).contains(QLatin1Char('#')), qPrintable(shown(full)));
+    // Diperbesar tata letaknya tidak berubah: hurufnya sekadar ikut membesar bersama kartunya
+    QCOMPARE(task->visibleText(2.0), full);
+    QCOMPARE(task->visibleText(0.9), full);
+    // Diperkecil: makin sedikit yang muat, tetapi tidak pernah terpotong diam-diam
+    for (qreal scale : {0.75, 0.5, 0.4, 0.3, 0.2}) {
+        const QStringList lines = task->visibleText(scale);
+        QVERIFY2(cutCleanly(lines, title).isEmpty(),
+                 qPrintable(QStringLiteral("skala %1: %2").arg(scale).arg(cutCleanly(lines, title))));
+    }
+    // Judul yang terlalu panjang untuk kartunya: awalnya saja, berakhir elipsis
+    const QString longTitle = QStringLiteral("Kerangka benchmark, integrasi berkelanjutan, jurnal belajar bulanan, "
+                                             "dan catatan evaluasi tiap fase untuk enam bulan ke depan beserta "
+                                             "daftar bacaan pendukungnya");
+    const QString longId = model.addReference(
+        CanvasSource{QStringLiteral("Demo"), QStringLiteral("k2"), QString(), QString()}, QPointF(200, -66), longTitle,
+        QStringLiteral("WAITING"), QString());
+    for (qreal scale : {1.0, 0.5, 0.3}) {
+        const QStringList lines = canvasNode(view, longId)->visibleText(scale);
+        QVERIFY2(cutCleanly(lines, longTitle).isEmpty(),
+                 qPrintable(QStringLiteral("skala %1: %2").arg(scale).arg(cutCleanly(lines, longTitle))));
+        QVERIFY2(shown(lines).contains(ellipsis), qPrintable(shown(lines)));
+    }
+
+    // Catatan berisi dokumen. Pada zoom biasa teksnya apa adanya, sama seperti di editornya
+    const QString document = QStringLiteral("> cara mengeceknya?\n\nSetelah restart, cek lewat PowerShell.\n\n"
+                                            "## Cek cepat\n\n```powershell\nwsl --status\n```\n\n"
+                                            "Menampilkan versi default dan versi kernel WSL yang terpasang di mesin ini.");
+    const QString noteId = model.addNote(QPointF(-300, 200), document, color);
+    model.resizeNode(noteId, QSizeF(600, 700));
+    CanvasNodeItem *note = canvasNode(view, noteId);
+    QVERIFY(note);
+    const QStringList raw = note->visibleText(1.0);
+    QVERIFY(!raw.isEmpty());
+    QCOMPARE(raw.first(), QStringLiteral("> cara mengeceknya?"));
+    QVERIFY2(shown(raw).contains(QStringLiteral("```powershell")), qPrintable(shown(raw)));
+    // Diperkecil: baris pertamanya menjadi judul dan isinya tetap tampil (dulu tinggal judul di kartu
+    // yang kosong), tanpa tanda Markdown
+    for (qreal scale : {0.6, 0.3}) {
+        const QStringList summary = note->visibleText(scale);
+        QVERIFY(!summary.isEmpty());
+        QCOMPARE(summary.first(), QStringLiteral("cara mengeceknya?"));
+        QVERIFY2(shown(summary).contains(QStringLiteral("Setelah restart")), qPrintable(shown(summary)));
+        QVERIFY2(shown(summary).contains(QStringLiteral("wsl --status")), qPrintable(shown(summary)));
+        QVERIFY2(!shown(summary).contains(QLatin1Char('#')) && !shown(summary).contains(QStringLiteral("```")),
+                 qPrintable(shown(summary)));
+    }
+    // Paragraf pembuka yang panjang bukan judul: tetap terbaca sebagai isi, dari kata pertamanya
+    const QString paragraph = QStringLiteral("Rencana pemelajaran enam bulan ini dirancang khusus untuk memadukan sistem "
+                                             "dan jaringan komputer dengan pemanfaatan C++ modern.\n\nBulan pertama.");
+    const QString paragraphId = model.addNote(QPointF(400, 200), paragraph, color);
+    model.resizeNode(paragraphId, QSizeF(600, 400));
+    const QStringList body = canvasNode(view, paragraphId)->visibleText(0.3);
+    QVERIFY2(shown(body).startsWith(QStringLiteral("Rencana pemelajaran enam bulan")), qPrintable(shown(body)));
+    QVERIFY2(shown(body).contains(QStringLiteral("Bulan pertama")), qPrintable(shown(body)));
+    // Catatan kosong menampilkan petunjuknya di zoom berapa pun
+    const QString emptyId = model.addNote(QPointF(-600, -200), QString(), color);
+    QVERIFY(shown(canvasNode(view, emptyId)->visibleText(1.0)).startsWith(QStringLiteral("Klik dua kali")));
+    QVERIFY(shown(canvasNode(view, emptyId)->visibleText(0.4)).startsWith(QStringLiteral("Klik dua kali")));
+
+    // Titik sambung dan daerah klik garis berukuran layar: saat kanvas diperkecil keduanya melebar
+    // di kanvas, tidak mengecil sampai tidak bisa dikenai
+    const QString farId = model.addNote(QPointF(-700, -75), QStringLiteral("jauh"), color);
+    QVERIFY(!model.connectNodes(taskId, farId).isEmpty());
+    CanvasEdgeItem *edge = canvasEdge(view, taskId, farId);
+    QVERIFY(edge);
+    QCOMPARE(sidesOf(edge->route()), QStringLiteral("kiri>kanan"));
+    // Garisnya lurus mendatar; titik ini 22 px di bawah tengahnya
+    const QPointF beside = (edge->start() + edge->tip()) / 2 + QPointF(0, 22);
+    QVERIFY(!edge->shape().contains(beside));
+    const qreal reachAtFull = task->boundingRect().right() - task->cardRect().right();
+    QVERIFY2(reachAtFull >= 5.0 && reachAtFull < 12.0, qPrintable(QString::number(reachAtFull)));
+    view.restoreView(QPointF(0, 0), 0.2);
+    QVERIFY(edge->shape().contains(beside));
+    const qreal reachZoomedOut = task->boundingRect().right() - task->cardRect().right();
+    QVERIFY2(reachZoomedOut >= 4.5 / 0.2, qPrintable(QString::number(reachZoomedOut)));
+    // Titik sambung kartu terpilih terlihat: 2 px di kanan tengah sisi kanannya (di luar kartu) sudah
+    // bagian dalam titik yang berisi warna permukaan, bukan latar kanvas
+    view.selectNodes({taskId});
+    const QPoint dot = view.mapFromScene(task->port(CanvasSide::Right)) + QPoint(2, 0);
+    const QImage shot = view.grab().toImage();
+    QCOMPARE(shot.pixelColor(dot).name(), Theme::fill(0xffffff).name());
+    QVERIFY(shot.pixelColor(dot + QPoint(12, 0)).name() != Theme::fill(0xffffff).name());
+
+    // Diperkecil sejauh-jauhnya kartu tinggal belasan piksel, tetapi menekan tengahnya tetap
+    // menggesernya: pegangan ubah ukuran dan titik sambung tidak memenuhi seluruh kartu
+    view.restoreView(QPointF(0, 0), 0.1);
+    const QPoint middle = view.mapFromScene(task->sceneCardRect().center());
+    QTest::mousePress(view.viewport(), Qt::LeftButton, {}, middle);
+    QTest::mouseMove(view.viewport(), middle + QPoint(5, 2));
+    QTest::mouseMove(view.viewport(), middle + QPoint(10, 5));
+    QTest::mouseRelease(view.viewport(), Qt::LeftButton, {}, middle + QPoint(10, 5));
+    QCOMPARE(model.node(taskId)->size, QSizeF(260, 132));
+    QCOMPARE(model.node(taskId)->pos, QPointF(-30, -16));
+    QCOMPARE(model.board().edges.size(), 1);
 }
 
 QDialog *TestGui::runtimeNotice() const {

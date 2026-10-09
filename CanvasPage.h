@@ -92,6 +92,8 @@ private:
     void refreshPreview();
     void layoutPreview();
     void openPreview();
+    // "Perluas" pada jawaban chat: drawer menampilkan jawaban itu sampai ditutup atau sebuah kartu dipratinjau
+    void openChatPreview(const QString &answerId);
     void closePreview();
 
     CanvasModel &m_model;
@@ -116,5 +118,6 @@ private:
     QTimer m_inspectorTimer;
     QTimer m_statusTimer;
     QHash<QString, QString> m_live;   // stepId -> keluaran agent yang sedang mengalir
+    QString m_previewAnswerId;        // jawaban chat yang sedang tampil di drawer; kosong = kartu terpilih
     bool m_viewRestored = false;
 };
