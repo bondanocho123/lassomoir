@@ -2509,3 +2509,49 @@ QPushButton#btnCanvasChatAction:disabled {
     color: #b3aa9c;
     border: 1px solid #efe6d8;
 }
+
+/* Tombol ikon di kepala panel chat: kembali, sesi baru, riwayat */
+QPushButton#btnCanvasChatBack,
+QPushButton#btnCanvasChatNew,
+QPushButton#btnCanvasChatHistory {
+    background: transparent;
+    border: 1px solid #e2d5c1;
+    border-radius: 4px;
+    padding: 2px 4px;
+}
+
+QPushButton#btnCanvasChatBack:hover,
+QPushButton#btnCanvasChatNew:hover,
+QPushButton#btnCanvasChatHistory:hover {
+    background-color: #eef2f8;
+    border: 1px solid #33517a;
+}
+
+QPushButton#btnCanvasChatNew:disabled,
+QPushButton#btnCanvasChatHistory:disabled {
+    border: 1px solid #efe6d8;
+}
+
+/* Satu sesi di riwayat chat; yang sedang dibuka berlatar seperti gelembung pertanyaan */
+QFrame#canvasChatSession {
+    background-color: #ffffff;
+    border: 1px solid #e2d5c1;
+    border-radius: 8px;
+}
+
+QFrame#canvasChatSession[current="true"] {
+    background-color: #e3ebf6;
+    border: 1px solid #ccd9ea;
+}
+
+QFrame#canvasChatSession:hover {
+    background-color: #eef2f8;
+    border: 1px solid #33517a;
+}
+
+QLabel#canvasChatSessionTitle {
+    background: transparent;
+    font-size: 12px;
+    font-weight: bold;
+    color: #33517a;
+}

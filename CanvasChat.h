@@ -46,15 +46,30 @@ struct CanvasChatMessage {
     static std::optional<CanvasChatMessage> fromJson(const QJsonObject &object);
 };
 
-// Percakapan tanya jawab satu kanvas brainstorm: menyimpan pesan dan menjalankan agent untuk satu
-// pertanyaan pada satu waktu. Agent-nya baca-saja dan mulai dari konteks bersih setiap pertanyaan:
-// bahan kartu, percakapan sebelumnya (dibatasi), dan pertanyaannya dirakit ulang ke prompt.
-// Percakapan bukan bagian isi kanvas: tidak ikut undo/redo, tersimpan di canvas.json ("chat").
+// Satu sesi chat kanvas: satu percakapan yang berdiri sendiri, dikenali dari pertanyaan pertamanya
+struct CanvasChatSession {
+    QString id;
+    QList<CanvasChatMessage> messages;
+
+    // Pertanyaan pertamanya, satu baris
+    QString title() const;
+    int questionCount() const;
+    // Waktu pesan terakhirnya (UTC)
+    QDateTime lastAt() const;
+};
+
+// Tanya jawab satu kanvas brainstorm: menyimpan sesi-sesi percakapannya dan menjalankan agent untuk
+// satu pertanyaan pada satu waktu, di sesi yang sedang dibuka. Agent-nya baca-saja dan mulai dari
+// konteks bersih setiap pertanyaan: bahan kartu, percakapan sesi itu sebelumnya (dibatasi), dan
+// pertanyaannya dirakit ulang ke prompt; sesi lain tidak ikut.
+// Percakapan bukan bagian isi kanvas: tidak ikut undo/redo, tersimpan di canvas.json ("chat" dan
+// "chatHistory").
 class CanvasChat : public QObject {
     Q_OBJECT
 
 public:
-    static constexpr int kMaxMessages = 200;
+    static constexpr int kMaxMessages = 200;   // per sesi
+    static constexpr int kMaxSessions = 50;
 
     // Lingkungan run untuk bahan itu (folder kerja, folder baca, foto); agent dan prompt diisi di sini.
     // nullopt + *reason bila tidak bisa dijalankan.
@@ -62,12 +77,24 @@ public:
 
     CanvasChat(CanvasModel &model, AgentRuntime &runtime, LaunchBuilder builder, QObject *parent = nullptr);
 
-    const QList<CanvasChatMessage> &messages() const { return m_messages; }
+    // Pesan sesi yang sedang dibuka
+    const QList<CanvasChatMessage> &messages() const { return m_current.messages; }
     const CanvasChatMessage *message(const QString &id) const;
-    // Isi dari disk; diabaikan selagi agent menjawab
-    void load(const QList<CanvasChatMessage> &messages);
+
+    // Riwayat: sesi yang punya isi, yang terakhir dipakai lebih dulu
+    QList<CanvasChatSession> sessions() const;
+    QString currentSessionId() const { return m_current.id; }
+    // Sesi kosong baru; percakapan yang sedang dibuka tetap ada di riwayat. false bila agent masih menjawab
+    bool newSession();
+    // false bila agent masih menjawab atau sesinya tidak ada
+    bool openSession(const QString &id);
+
+    // canvas.json: "chat" = pesan sesi yang sedang dibuka (bentuknya tetap seperti sebelum ada sesi,
+    // jadi file lama terbaca apa adanya), "chatHistory" = sesi-sesi lain sebagai {id, messages}.
+    // load diabaikan selagi agent menjawab.
+    void load(const QJsonArray &messages, const QJsonArray &history = QJsonArray());
     QJsonArray toJson() const;
-    static QList<CanvasChatMessage> fromJson(const QJsonArray &array);
+    QJsonArray historyToJson() const;
 
     bool isBusy() const { return !m_session.isNull(); }
     QString liveText() const { return m_live; }
@@ -78,12 +105,12 @@ public:
     bool ask(const QString &question, const QStringList &contextIds, const QString &model, QString *reason = nullptr);
     // Jawaban yang sudah masuk dipertahankan sebagai jawaban "cancelled"
     void cancel();
-    // false bila agent masih menjawab
+    // Mengosongkan sesi yang sedang dibuka (sesi kosong tidak masuk riwayat); false bila agent masih menjawab
     bool clear();
 
 signals:
     void messageAdded(const CanvasChatMessage &message);
-    // Daftar pesan diganti (load, clear, pesan terlama dibuang): tampilan dibangun ulang
+    // Daftar pesan diganti (load, clear, pindah sesi, pesan terlama dibuang): tampilan dibangun ulang
     void messagesReset();
     void busyChanged(bool busy);
     // Jawaban yang sedang mengalir (Markdown) dan tool yang terakhir dipakai agent
@@ -96,12 +123,16 @@ signals:
 private:
     void finish(const QString &questionId, const QString &model, const AgentResult &result);
     void append(const CanvasChatMessage &message);
+    // Sesi yang sedang dibuka masuk riwayat bila ada isinya; di atas kMaxSessions, sesi yang pesan
+    // terakhirnya paling lama dibuang
+    void archiveCurrent();
 
     CanvasModel &m_model;
     AgentRuntime &m_runtime;
     LaunchBuilder m_builder;
-    QList<CanvasChatMessage> m_messages;
-    QPointer<AgentSession> m_session;
+    CanvasChatSession m_current;           // sesi yang sedang dibuka; boleh kosong
+    QList<CanvasChatSession> m_archive;    // sesi lain, semuanya berisi; yang terakhir dibuka di belakang
+    QPointer<AgentSession> m_session;      // run agent yang sedang menjawab
     QString m_workingDirectory;
     QString m_live;
     QString m_activity;

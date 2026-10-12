@@ -46,6 +46,9 @@
         <file>app.ico</file>
         <file>icons/plus.svg</file>
         <file>icons/plus-white.svg</file>
+        <file>icons/plus-navy.svg</file>
+        <file>icons/history.svg</file>
+        <file>icons/arrow-left.svg</file>
         <file>icons/sidebar.svg</file>
         <file>icons/run.svg</file>
         <file>icons/stop.svg</file>

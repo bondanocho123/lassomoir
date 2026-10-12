@@ -56,3 +56,6 @@ Kalau tetap pakai akun gratis, catat sumber tiap ikon di sini supaya nggak lupa 
 | `pinned.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
 | `unpinned.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
 | `preview.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
+| `plus-navy.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
+| `history.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |
+| `arrow-left.svg` | placeholder buatan sendiri (bukan dari Flaticon) | - |

@@ -4,7 +4,10 @@
 #include "CanvasWorkflow.h"
 #include "RunLogFormatter.h"
 
+#include <QSet>
 #include <QUuid>
+
+#include <algorithm>
 
 namespace {
 
@@ -17,6 +20,36 @@ bool fail(QString *reason, const QString &why) {
         *reason = why;
     }
     return false;
+}
+
+// Pesan satu sesi dari canvas.json: yang tidak terbaca dilewati, yang terlama dibuang bila kebanyakan
+QList<CanvasChatMessage> messagesFromJson(const QJsonArray &array) {
+    QList<CanvasChatMessage> messages;
+    for (const QJsonValue &value : array) {
+        if (const std::optional<CanvasChatMessage> message = CanvasChatMessage::fromJson(value.toObject())) {
+            messages.append(*message);
+        }
+    }
+    return messages.mid(qMax<qsizetype>(0, messages.size() - CanvasChat::kMaxMessages));
+}
+
+QJsonArray messagesToJson(const QList<CanvasChatMessage> &messages) {
+    QJsonArray array;
+    for (const CanvasChatMessage &message : messages) {
+        array.append(message.toJson());
+    }
+    return array;
+}
+
+bool olderThan(const CanvasChatSession &a, const CanvasChatSession &b) {
+    return a.lastAt() < b.lastAt();
+}
+
+// Riwayat menyisakan tempat untuk sesi yang sedang dibuka; yang pesan terakhirnya paling lama dibuang
+void trimArchive(QList<CanvasChatSession> &archive) {
+    while (archive.size() >= CanvasChat::kMaxSessions) {
+        archive.erase(std::min_element(archive.cbegin(), archive.cend(), olderThan));
+    }
 }
 
 }
@@ -72,12 +105,31 @@ std::optional<CanvasChatMessage> CanvasChatMessage::fromJson(const QJsonObject &
     return message;
 }
 
+QString CanvasChatSession::title() const {
+    for (const CanvasChatMessage &message : messages) {
+        if (message.isUser()) {
+            return message.text.simplified();
+        }
+    }
+    return QString();
+}
+
+int CanvasChatSession::questionCount() const {
+    return int(std::count_if(messages.cbegin(), messages.cend(),
+                             [](const CanvasChatMessage &message) { return message.isUser(); }));
+}
+
+QDateTime CanvasChatSession::lastAt() const {
+    return messages.isEmpty() ? QDateTime() : messages.last().at;
+}
+
 CanvasChat::CanvasChat(CanvasModel &model, AgentRuntime &runtime, LaunchBuilder builder, QObject *parent)
     : QObject(parent), m_model(model), m_runtime(runtime), m_builder(std::move(builder)) {
+    m_current.id = newId();
 }
 
 const CanvasChatMessage *CanvasChat::message(const QString &id) const {
-    for (const CanvasChatMessage &message : m_messages) {
+    for (const CanvasChatMessage &message : m_current.messages) {
         if (message.id == id) {
             return &message;
         }
@@ -85,30 +137,95 @@ const CanvasChatMessage *CanvasChat::message(const QString &id) const {
     return nullptr;
 }
 
-void CanvasChat::load(const QList<CanvasChatMessage> &messages) {
+QList<CanvasChatSession> CanvasChat::sessions() const {
+    QList<CanvasChatSession> result = m_archive;
+    if (!m_current.messages.isEmpty()) {
+        result.append(m_current);
+    }
+    // Pesan terakhir yang sama waktunya: yang terakhir dibuka lebih dulu
+    std::reverse(result.begin(), result.end());
+    std::stable_sort(result.begin(), result.end(),
+                     [](const CanvasChatSession &a, const CanvasChatSession &b) { return olderThan(b, a); });
+    return result;
+}
+
+bool CanvasChat::newSession() {
+    if (isBusy()) {
+        return false;
+    }
+    if (m_current.messages.isEmpty()) {
+        return true;   // sesi yang sedang dibuka memang masih baru
+    }
+    archiveCurrent();
+    m_current = CanvasChatSession{newId(), {}};
+    emit messagesReset();
+    emit changed();
+    return true;
+}
+
+bool CanvasChat::openSession(const QString &id) {
+    if (isBusy()) {
+        return false;
+    }
+    if (id == m_current.id) {
+        return true;
+    }
+    const auto found = std::find_if(m_archive.cbegin(), m_archive.cend(),
+                                    [&id](const CanvasChatSession &session) { return session.id == id; });
+    if (found == m_archive.cend()) {
+        return false;
+    }
+    const CanvasChatSession opened = *found;
+    m_archive.erase(found);
+    archiveCurrent();
+    m_current = opened;
+    emit messagesReset();
+    emit changed();
+    return true;
+}
+
+void CanvasChat::archiveCurrent() {
+    if (!m_current.messages.isEmpty()) {
+        m_archive.append(m_current);
+    }
+    trimArchive(m_archive);
+}
+
+void CanvasChat::load(const QJsonArray &messages, const QJsonArray &history) {
     if (isBusy()) {
         return;
     }
-    m_messages = messages.mid(qMax<qsizetype>(0, messages.size() - kMaxMessages));
+    m_current = CanvasChatSession{newId(), messagesFromJson(messages)};
+    m_archive.clear();
+    QSet<QString> ids;
+    for (const QJsonValue &value : history) {
+        const QJsonObject object = value.toObject();
+        CanvasChatSession session;
+        session.id = object.value(QStringLiteral("id")).toString();
+        if (session.id.isEmpty() || ids.contains(session.id)) {
+            session.id = newId();
+        }
+        session.messages = messagesFromJson(object.value(QStringLiteral("messages")).toArray());
+        if (!session.messages.isEmpty()) {
+            ids.insert(session.id);
+            m_archive.append(session);
+        }
+    }
+    trimArchive(m_archive);
     emit messagesReset();
 }
 
 QJsonArray CanvasChat::toJson() const {
-    QJsonArray array;
-    for (const CanvasChatMessage &message : m_messages) {
-        array.append(message.toJson());
-    }
-    return array;
+    return messagesToJson(m_current.messages);
 }
 
-QList<CanvasChatMessage> CanvasChat::fromJson(const QJsonArray &array) {
-    QList<CanvasChatMessage> messages;
-    for (const QJsonValue &value : array) {
-        if (const std::optional<CanvasChatMessage> message = CanvasChatMessage::fromJson(value.toObject())) {
-            messages.append(*message);
-        }
+QJsonArray CanvasChat::historyToJson() const {
+    QJsonArray sessions;
+    for (const CanvasChatSession &session : m_archive) {
+        sessions.append(QJsonObject{{QStringLiteral("id"), session.id},
+                                    {QStringLiteral("messages"), messagesToJson(session.messages)}});
     }
-    return messages;
+    return sessions;
 }
 
 bool CanvasChat::ask(const QString &question, const QStringList &contextIds, const QString &model, QString *reason) {
@@ -132,9 +249,9 @@ bool CanvasChat::ask(const QString &question, const QStringList &contextIds, con
         return fail(reason, why.isEmpty() ? QStringLiteral("chat tidak bisa disiapkan") : why);
     }
 
-    // Percakapan sampai sebelum pertanyaan ini; jawaban yang gagal tidak ikut
+    // Percakapan sesi ini sampai sebelum pertanyaan ini; jawaban yang gagal tidak ikut
     QList<CanvasWorkflow::ChatTurn> history;
-    for (const CanvasChatMessage &message : std::as_const(m_messages)) {
+    for (const CanvasChatMessage &message : std::as_const(m_current.messages)) {
         if (message.isUser() || message.succeeded()) {
             history.append({message.isUser(), message.text});
         }
@@ -218,11 +335,12 @@ void CanvasChat::finish(const QString &questionId, const QString &model, const A
 }
 
 void CanvasChat::append(const CanvasChatMessage &message) {
-    m_messages.append(message);
+    QList<CanvasChatMessage> &messages = m_current.messages;
+    messages.append(message);
     bool trimmed = false;
     // Pesan terlama dibuang; percakapan selalu mulai dari sebuah pertanyaan
-    while (m_messages.size() > kMaxMessages || (!m_messages.isEmpty() && !m_messages.first().isUser())) {
-        m_messages.removeFirst();
+    while (messages.size() > kMaxMessages || (!messages.isEmpty() && !messages.first().isUser())) {
+        messages.removeFirst();
         trimmed = true;
     }
     if (trimmed) {
@@ -243,10 +361,10 @@ bool CanvasChat::clear() {
     if (isBusy()) {
         return false;
     }
-    if (m_messages.isEmpty()) {
+    if (m_current.messages.isEmpty()) {
         return true;
     }
-    m_messages.clear();
+    m_current.messages.clear();
     emit messagesReset();
     emit changed();
     return true;

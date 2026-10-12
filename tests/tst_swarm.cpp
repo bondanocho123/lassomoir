@@ -589,6 +589,7 @@ private slots:
     void canvasWorkflowComposesChatPrompt();
     void canvasChatAsksWithHistory();
     void canvasChatCancelsRejectsAndPersists();
+    void canvasChatKeepsSessions();
     void fileManagerRoundTripsCanvas();
 
     // Claude Code sungguhan; hanya jalan bila LASSOMOIR_REAL_CLAUDE=1 (memakai token)
@@ -5723,7 +5724,14 @@ void TestSwarm::canvasChatCancelsRejectsAndPersists() {
     // canvas.json: tersimpan dan terbaca kembali utuh; isi dari disk tidak dianggap perubahan
     const QJsonArray json = chat.toJson();
     QCOMPARE(json.size(), chat.messages().size());
-    const QList<CanvasChatMessage> restored = CanvasChat::fromJson(json);
+    QVERIFY(chat.historyToJson().isEmpty());
+    CanvasChat reopened(model, runtime, chatLauncher(&contexts));
+    QSignalSpy reset(&reopened, &CanvasChat::messagesReset);
+    QSignalSpy changed(&reopened, &CanvasChat::changed);
+    reopened.load(json);
+    QCOMPARE(reset.count(), 1);
+    QCOMPARE(changed.count(), 0);
+    const QList<CanvasChatMessage> restored = reopened.messages();
     QCOMPARE(restored.size(), chat.messages().size());
     for (qsizetype i = 0; i < restored.size(); ++i) {
         const CanvasChatMessage &a = restored.at(i);
@@ -5739,14 +5747,6 @@ void TestSwarm::canvasChatCancelsRejectsAndPersists() {
     }
     QVERIFY(!CanvasChatMessage::fromJson(QJsonObject{{QStringLiteral("role"), QStringLiteral("sistem")}}).has_value());
 
-    CanvasChat reopened(model, runtime, chatLauncher(&contexts));
-    QSignalSpy reset(&reopened, &CanvasChat::messagesReset);
-    QSignalSpy changed(&reopened, &CanvasChat::changed);
-    reopened.load(restored);
-    QCOMPARE(reset.count(), 1);
-    QCOMPARE(changed.count(), 0);
-    QCOMPARE(reopened.messages().size(), restored.size());
-
     // Mulai ulang tidak berlaku selagi agent menjawab
     QVERIFY(reopened.ask(QStringLiteral("Sibuk"), {}, QString(), &reason));
     QVERIFY(!reopened.clear());
@@ -5754,6 +5754,144 @@ void TestSwarm::canvasChatCancelsRejectsAndPersists() {
     QVERIFY(reopened.clear());
     QVERIFY(reopened.messages().isEmpty());
     QCOMPARE(changed.count(), 3);   // pertanyaan, jawaban yang dihentikan, lalu clear
+    QVERIFY(reopened.toJson().isEmpty());
+}
+
+void TestSwarm::canvasChatKeepsSessions() {
+    CanvasModel model(QStringLiteral("P"));
+    model.addNote(QPointF(0, 0), QStringLiteral("Catatan"));
+    FakeAgentRuntime runtime;
+    QStringList contexts;
+    CanvasChat chat(model, runtime, chatLauncher(&contexts));
+    QSignalSpy reset(&chat, &CanvasChat::messagesReset);
+    QSignalSpy changed(&chat, &CanvasChat::changed);
+    QString reason;
+
+    // Belum ada isi: riwayat kosong, dan sesi baru tidak mengubah apa pun
+    const QString first = chat.currentSessionId();
+    QVERIFY(!first.isEmpty());
+    QVERIFY(chat.sessions().isEmpty());
+    QVERIFY(chat.newSession());
+    QCOMPARE(chat.currentSessionId(), first);
+    QCOMPARE(reset.count(), 0);
+    QCOMPARE(changed.count(), 0);
+    QVERIFY(chat.toJson().isEmpty() && chat.historyToJson().isEmpty());
+
+    QVERIFY(chat.ask(QStringLiteral(" Apa   rencana\nrilisnya? "), {}, QString(), &reason));
+    // Sesi tidak berganti selagi agent menjawab
+    QVERIFY(!chat.newSession());
+    QVERIFY(!chat.openSession(first));
+    runtime.sessions.last()->finishWith(answer(QStringLiteral("Rilis bertahap.")));
+    QCOMPARE(chat.sessions().size(), 1);
+    QCOMPARE(chat.sessions().first().id, first);
+    QCOMPARE(chat.sessions().first().title(), QStringLiteral("Apa rencana rilisnya?"));
+    QCOMPARE(chat.sessions().first().questionCount(), 1);
+    QCOMPARE(chat.sessions().first().lastAt(), chat.messages().last().at);
+
+    // Sesi baru: kosong dan belum masuk riwayat; percakapan lama tidak ikut ke prompt-nya
+    QVERIFY(chat.newSession());
+    const QString second = chat.currentSessionId();
+    QVERIFY(second != first);
+    QVERIFY(chat.messages().isEmpty());
+    QCOMPARE(reset.count(), 1);
+    QCOMPARE(chat.sessions().size(), 1);
+    QVERIFY(chat.ask(QStringLiteral("Siapa penggunanya?"), {}, QString(), &reason));
+    QVERIFY(!runtime.sessions.last()->launch().prompt.contains(QStringLiteral("rilisnya")));
+    QVERIFY(!runtime.sessions.last()->launch().prompt.contains(QStringLiteral("Rilis bertahap.")));
+    runtime.sessions.last()->finishWith(answer(QStringLiteral("Tim internal.")));
+    QCOMPARE(chat.sessions().size(), 2);
+    QCOMPARE(chat.sessions().at(0).id, second);
+    QCOMPARE(chat.sessions().at(1).id, first);
+
+    // Membuka sesi lama: pesannya kembali, dan pertanyaan berikutnya membawa percakapan sesi itu saja
+    QVERIFY(!chat.openSession(QStringLiteral("tidak-ada")));
+    const qsizetype resets = reset.count();
+    QVERIFY(chat.openSession(second));   // memang sedang dibuka
+    QCOMPARE(reset.count(), resets);
+    QVERIFY(chat.openSession(first));
+    QCOMPARE(reset.count(), resets + 1);
+    QCOMPARE(chat.currentSessionId(), first);
+    QCOMPARE(chat.messages().size(), 2);
+    QCOMPARE(chat.messages().last().text, QStringLiteral("Rilis bertahap."));
+    QVERIFY(chat.message(chat.messages().last().id));
+    QVERIFY(chat.ask(QStringLiteral("Lalu kapan?"), {}, QString(), &reason));
+    const QString prompt = runtime.sessions.last()->launch().prompt;
+    QVERIFY(prompt.contains(QStringLiteral("**Kamu:** Rilis bertahap.")));
+    QVERIFY(!prompt.contains(QStringLiteral("Tim internal.")));
+    runtime.sessions.last()->finishWith(answer(QStringLiteral("Kuartal depan.")));
+    // Sesi yang terakhir dipakai ada di atas riwayat
+    QCOMPARE(chat.sessions().first().id, first);
+    QCOMPARE(chat.sessions().first().questionCount(), 2);
+
+    // canvas.json: "chat" tetap pesan sesi yang dibuka, sesi lain di "chatHistory"; semuanya kembali
+    QCOMPARE(chat.toJson().size(), 4);
+    QCOMPARE(chat.historyToJson().size(), 1);
+    QCOMPARE(chat.historyToJson().first().toObject().value(QStringLiteral("id")).toString(), second);
+    CanvasChat reopened(model, runtime, chatLauncher(&contexts));
+    reopened.load(chat.toJson(), chat.historyToJson());
+    QCOMPARE(reopened.messages().size(), 4);
+    QCOMPARE(reopened.messages().last().text, QStringLiteral("Kuartal depan."));
+    QCOMPARE(reopened.sessions().size(), 2);
+    QCOMPARE(reopened.sessions().first().id, reopened.currentSessionId());
+    QCOMPARE(reopened.sessions().last().id, second);
+    QCOMPARE(reopened.sessions().last().messages.size(), 2);
+
+    // Sesi baru yang masih kosong: "chat" kosong, kedua sesi lama ada di riwayat
+    QVERIFY(chat.newSession());
+    QVERIFY(chat.toJson().isEmpty());
+    QCOMPARE(chat.historyToJson().size(), 2);
+    reopened.load(chat.toJson(), chat.historyToJson());
+    QVERIFY(reopened.messages().isEmpty());
+    QCOMPARE(reopened.sessions().size(), 2);
+    QCOMPARE(reopened.sessions().first().id, first);
+
+    // Mulai ulang mengosongkan sesi yang dibuka saja: sesi itu hilang dari riwayat, yang lain tetap
+    QVERIFY(chat.openSession(second));
+    QVERIFY(chat.clear());
+    QCOMPARE(chat.currentSessionId(), second);
+    QCOMPARE(chat.sessions().size(), 1);
+    QCOMPARE(chat.sessions().first().id, first);
+
+    // canvas.json dari sebelum ada sesi (hanya "chat"): satu sesi, tanpa riwayat lain
+    const QJsonArray legacy = chat.historyToJson().first().toObject().value(QStringLiteral("messages")).toArray();
+    QCOMPARE(legacy.size(), 4);
+    reopened.load(legacy);
+    QCOMPARE(reopened.messages().size(), 4);
+    QCOMPARE(reopened.sessions().size(), 1);
+    QCOMPARE(reopened.sessions().first().id, reopened.currentSessionId());
+    // Riwayat: sesi tanpa pesan dilewati, dan id ganda tidak membuat dua sesi tertukar
+    reopened.load(QJsonArray(),
+                  QJsonArray{QJsonObject{{QStringLiteral("id"), QStringLiteral("a")}, {QStringLiteral("messages"), legacy}},
+                             QJsonObject{{QStringLiteral("id"), QStringLiteral("a")}, {QStringLiteral("messages"), legacy}},
+                             QJsonObject{{QStringLiteral("id"), QStringLiteral("kosong")}}, 7});
+    QCOMPARE(reopened.sessions().size(), 2);
+    QVERIFY(reopened.sessions().at(0).id != reopened.sessions().at(1).id);
+    QVERIFY(reopened.openSession(QStringLiteral("a")));
+    QCOMPARE(reopened.messages().size(), 4);
+
+    // Paling banyak kMaxSessions sesi: yang pesan terakhirnya paling lama dibuang
+    const QDateTime base = QDateTime::currentDateTimeUtc().addDays(-100);
+    QJsonArray many;
+    for (int i = 0; i < CanvasChat::kMaxSessions + 5; ++i) {
+        CanvasChatMessage question;
+        question.id = QStringLiteral("q%1").arg(i);
+        question.text = QStringLiteral("Pertanyaan %1").arg(i);
+        question.at = base.addDays(i);
+        many.append(QJsonObject{{QStringLiteral("id"), QStringLiteral("s%1").arg(i)},
+                                {QStringLiteral("messages"), QJsonArray{question.toJson()}}});
+    }
+    reopened.load(QJsonArray(), many);
+    QVERIFY(reopened.messages().isEmpty());
+    QCOMPARE(reopened.sessions().size(), CanvasChat::kMaxSessions - 1);
+    QCOMPARE(reopened.sessions().first().title(), QStringLiteral("Pertanyaan %1").arg(CanvasChat::kMaxSessions + 4));
+    QCOMPARE(reopened.sessions().last().title(), QStringLiteral("Pertanyaan 6"));
+    QVERIFY(reopened.ask(QStringLiteral("Terbaru"), {}, QString(), &reason));
+    runtime.sessions.last()->finishWith(answer(QStringLiteral("Ya.")));
+    QCOMPARE(reopened.sessions().size(), int(CanvasChat::kMaxSessions));
+    QVERIFY(reopened.newSession());
+    QCOMPARE(reopened.sessions().size(), CanvasChat::kMaxSessions - 1);
+    QCOMPARE(reopened.sessions().first().title(), QStringLiteral("Terbaru"));
+    QCOMPARE(reopened.sessions().last().title(), QStringLiteral("Pertanyaan 7"));
 }
 
 void TestSwarm::fileManagerRoundTripsCanvas() {

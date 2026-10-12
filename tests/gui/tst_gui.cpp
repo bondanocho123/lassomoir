@@ -308,6 +308,11 @@ private slots:
     // menimpa kanvas dari tepi kanannya, mengikuti ketikan dan pilihan kartu
     void canvasPreviewsMarkdownInDrawer();
     void canvasChatAnswerExpandsIntoDrawer();
+    // Kepala panel chat: + memulai sesi baru di kanan Mulai ulang, tombol riwayat mengganti ruang chat
+    // dengan daftar sesi, dan tombol kembali di kirinya mengembalikan ruang chat
+    void canvasChatStartsSessionsAndReopensHistory();
+    // Sesi chat dimuat dari canvas.json project dan tersimpan lagi ke sana setelah berpindah sesi
+    void canvasChatSessionsPersistInCanvasFile();
     // Garis menempel di sisi kartu yang menghadap tujuannya (bukan selalu kanan ke kiri), menghindari
     // lorong yang diisi kartu lain, dan ditata ulang saat kartu mana pun berpindah
     void canvasEdgesAttachToFacingSides();
@@ -4200,7 +4205,7 @@ void TestGui::canvasChatAnswerExpandsIntoDrawer() {
     CanvasChatMessage failed = message("a2", CanvasChatMessage::Role::Agent, QStringLiteral("belum login"));
     failed.replyTo = question.id;
     failed.outcome = QStringLiteral("error");
-    chat.load({question, answer, failed});
+    chat.load(QJsonArray{question.toJson(), answer.toJson(), failed.toJson()});
 
     auto *panel = page.findChild<CanvasChatPanel *>();
     auto *inspector = page.findChild<CanvasInspector *>();
@@ -4272,6 +4277,251 @@ void TestGui::canvasChatAnswerExpandsIntoDrawer() {
     QVERIFY(chat.clear());
     QVERIFY(!drawer->isOpen());
     QVERIFY(expandButtons().isEmpty());
+}
+
+void TestGui::canvasChatStartsSessionsAndReopensHistory() {
+    CanvasModel model(QStringLiteral("proj-sesi"));
+    CanvasAutomation automation(model, m_runtime, [](const QString &, QString *) { return std::nullopt; });
+    CanvasChat chat(model, m_runtime, [](const QStringList &, QString *) -> std::optional<AgentLaunch> {
+        AgentLaunch launch;
+        launch.workingDirectory = QDir::currentPath();
+        return launch;
+    });
+    CanvasPage page(model, automation, chat, &m_mermaid);
+    // Di aplikasi pertanyaan lewat CanvasWorkspace; di sini langsung ke CanvasChat
+    connect(&page, &CanvasPage::chatAskRequested, &chat,
+            [&chat](const QString &question, const QStringList &ids, const QString &agentModel) {
+        chat.ask(question, ids, agentModel);
+    });
+    page.resize(1280, 720);
+    page.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&page));
+
+    // Dua sesi tersimpan: yang sedang dibuka, dan sesi "lama" di riwayat
+    auto exchange = [](const QString &key, const QString &asked, const QString &replied, int daysAgo) {
+        CanvasChatMessage question;
+        question.id = QStringLiteral("q-") + key;
+        question.role = CanvasChatMessage::Role::User;
+        question.text = asked;
+        question.at = QDateTime::currentDateTimeUtc().addDays(-daysAgo);
+        question.contextLabel = QStringLiteral("Seluruh kanvas");
+        CanvasChatMessage answer;
+        answer.id = QStringLiteral("a-") + key;
+        answer.role = CanvasChatMessage::Role::Agent;
+        answer.text = replied;
+        answer.at = question.at;
+        answer.replyTo = question.id;
+        answer.outcome = QStringLiteral("success");
+        return QJsonArray{question.toJson(), answer.toJson()};
+    };
+    chat.load(exchange(QStringLiteral("baru"), QStringLiteral("Siapa penggunanya?"), QStringLiteral("Tim internal."), 0),
+              QJsonArray{QJsonObject{{QStringLiteral("id"), QStringLiteral("lama")},
+                                     {QStringLiteral("messages"),
+                                      exchange(QStringLiteral("lama"), QStringLiteral("Apa risikonya?"),
+                                               QStringLiteral("Token habis."), 3)}}});
+    const QString opened = chat.currentSessionId();
+
+    auto *panel = page.findChild<CanvasChatPanel *>();
+    auto *drawer = page.findChild<CanvasPreviewDrawer *>();
+    auto *toggleChat = page.findChild<QPushButton *>(QStringLiteral("btnCanvasToggleChat"));
+    QVERIFY(panel && drawer && toggleChat);
+    auto *back = panel->findChild<QPushButton *>(QStringLiteral("btnCanvasChatBack"));
+    auto *fresh = panel->findChild<QPushButton *>(QStringLiteral("btnCanvasChatNew"));
+    auto *history = panel->findChild<QPushButton *>(QStringLiteral("btnCanvasChatHistory"));
+    auto *title = panel->findChild<ElidedLabel *>(QStringLiteral("canvasPanelTitle"));
+    auto *input = panel->findChild<QPlainTextEdit *>(QStringLiteral("canvasChatInput"));
+    auto *send = panel->findChild<QPushButton *>(QStringLiteral("btnCanvasRunStep"));
+    auto action = [panel](const QString &text) -> QPushButton * {
+        const QList<QPushButton *> buttons = panel->findChildren<QPushButton *>(QStringLiteral("btnCanvasChatAction"));
+        for (QPushButton *button : buttons) {
+            if (button->text() == text) {
+                return button;
+            }
+        }
+        return nullptr;
+    };
+    QPushButton *clear = action(QStringLiteral("Mulai ulang"));
+    QVERIFY(back && fresh && history && title && input && send && clear);
+    toggleChat->click();
+    QTRY_VERIFY(panel->isVisible());
+
+    auto questions = [panel]() {
+        QStringList texts;
+        const QList<QLabel *> labels = panel->findChildren<QLabel *>(QStringLiteral("canvasChatUserText"));
+        for (const QLabel *label : labels) {
+            texts.append(label->text());
+        }
+        return texts;
+    };
+    auto rows = [panel]() { return panel->findChildren<QFrame *>(QStringLiteral("canvasChatSession")); };
+    auto rowTitles = [panel]() {
+        QStringList titles;
+        const QList<ElidedLabel *> labels = panel->findChildren<ElidedLabel *>(QStringLiteral("canvasChatSessionTitle"));
+        for (const ElidedLabel *label : labels) {
+            titles.append(label->fullText());
+        }
+        return titles;
+    };
+
+    // Ruang chat: + di kanan Mulai ulang, lalu riwayat, sama tingginya; tombol kembali belum ada
+    QCOMPARE(title->fullText(), QStringLiteral("CHAT BRAINSTORM"));
+    QCOMPARE(questions(), QStringList{QStringLiteral("Siapa penggunanya?")});
+    QTRY_VERIFY(clear->isVisible() && fresh->isVisible() && history->isVisible());
+    QVERIFY(!back->isVisible() && !panel->isHistoryOpen());
+    QVERIFY(clear->isEnabled() && fresh->isEnabled() && history->isEnabled());
+    QVERIFY(!fresh->icon().isNull() && !history->icon().isNull() && !back->icon().isNull());
+    QVERIFY(!fresh->toolTip().isEmpty() && !history->toolTip().isEmpty() && !back->toolTip().isEmpty());
+    QTRY_VERIFY(fresh->x() > clear->geometry().right() && history->x() > fresh->geometry().right());
+    QCOMPARE(fresh->height(), clear->height());
+    QCOMPARE(history->height(), clear->height());
+
+    // Riwayat: daftar sesi menggantikan ruang chat, yang terakhir dipakai di atas, yang dibuka ditandai;
+    // tombol kembali di kiri judul
+    history->click();
+    QVERIFY(panel->isHistoryOpen());
+    QCOMPARE(title->fullText(), QStringLiteral("RIWAYAT CHAT"));
+    QVERIFY(back->isVisible());
+    QVERIFY(!clear->isVisible() && !fresh->isVisible() && !history->isVisible());
+    QVERIFY(!input->isVisible() && !send->isVisible());
+    QTRY_VERIFY(back->geometry().right() < title->x());
+    QCOMPARE(rowTitles(), QStringList({QStringLiteral("Siapa penggunanya?"), QStringLiteral("Apa risikonya?")}));
+    QTRY_VERIFY(rows().at(0)->isVisible() && rows().at(1)->isVisible());
+    QVERIFY(rows().at(0)->property("current").toBool());
+    QVERIFY(!rows().at(1)->property("current").toBool());
+
+    // Kembali: ruang chat sesi yang sama
+    back->click();
+    QVERIFY(!panel->isHistoryOpen() && !back->isVisible());
+    QVERIFY(input->isVisible() && history->isVisible());
+    QCOMPARE(title->fullText(), QStringLiteral("CHAT BRAINSTORM"));
+    QCOMPARE(chat.currentSessionId(), opened);
+    QCOMPARE(questions(), QStringList{QStringLiteral("Siapa penggunanya?")});
+
+    // Klik sebuah sesi di riwayat: percakapannya dibuka lagi di ruang chat
+    history->click();
+    QTRY_VERIFY(rows().size() == 2 && rows().at(1)->isVisible());
+    QTest::mouseClick(rows().at(1), Qt::LeftButton);
+    QVERIFY(!panel->isHistoryOpen());
+    QCOMPARE(chat.currentSessionId(), QStringLiteral("lama"));
+    QCOMPARE(questions(), QStringList{QStringLiteral("Apa risikonya?")});
+    QVERIFY(input->isVisible());
+
+    // +: sesi kosong; jawaban sesi lama yang sedang diperluas di drawer ikut tertutup, dan sesi lama
+    // tetap ada di riwayat
+    QPushButton *expand = action(QStringLiteral("Perluas"));
+    QVERIFY(expand);
+    expand->click();
+    QVERIFY(drawer->isOpen());
+    fresh->click();
+    QVERIFY(!drawer->isOpen());
+    QVERIFY(chat.messages().isEmpty() && questions().isEmpty());
+    QVERIFY(chat.currentSessionId() != QStringLiteral("lama") && chat.currentSessionId() != opened);
+    QCOMPARE(chat.sessions().size(), 2);
+    QVERIFY(!fresh->isEnabled() && !clear->isEnabled() && history->isEnabled());
+
+    // Pertanyaan pertama sesi baru tidak membawa percakapan sesi lain; selagi agent menjawab sesi
+    // tidak bisa diganti
+    input->setPlainText(QStringLiteral("Kapan rilisnya?"));
+    send->click();
+    QVERIFY(chat.isBusy());
+    QVERIFY(!fresh->isEnabled() && !clear->isEnabled() && !history->isEnabled());
+    QVERIFY(!m_runtime.sessions.last()->launch().prompt.contains(QStringLiteral("Token habis.")));
+    AgentResult replied;
+    replied.success = true;
+    replied.outcome = QStringLiteral("success");
+    replied.message = QStringLiteral("Kuartal depan.");
+    m_runtime.sessions.last()->finishWith(replied);
+    QVERIFY(!chat.isBusy());
+    QVERIFY(fresh->isEnabled() && clear->isEnabled() && history->isEnabled());
+    history->click();
+    QCOMPARE(rowTitles(), QStringList({QStringLiteral("Kapan rilisnya?"), QStringLiteral("Siapa penggunanya?"),
+                                       QStringLiteral("Apa risikonya?")}));
+    QVERIFY(rows().first()->property("current").toBool());
+
+    // Riwayat tertutup sendiri begitu agent mulai menjawab
+    QVERIFY(chat.ask(QStringLiteral("Lalu?"), {}, QString()));
+    QVERIFY(!panel->isHistoryOpen() && input->isVisible());
+    chat.cancel();
+    QVERIFY(!chat.isBusy());
+
+    // Panel sesempit-sempitnya: judulnya yang mengalah, tombol kepala tetap utuh di dalam panel
+    auto *splitter = page.findChild<QSplitter *>(QStringLiteral("canvasSplitter"));
+    QVERIFY(splitter);
+    splitter->setSizes({220, 1060, 0});
+    QTRY_COMPARE(panel->width(), 260);
+    QTRY_VERIFY(panel->rect().contains(clear->geometry()) && panel->rect().contains(history->geometry()));
+    QVERIFY(clear->width() >= clear->sizeHint().width());
+    QVERIFY(fresh->x() > clear->geometry().right() && history->x() > fresh->geometry().right());
+}
+
+void TestGui::canvasChatSessionsPersistInCanvasFile() {
+    auto exchange = [](const QString &key, const QString &asked, int daysAgo) {
+        CanvasChatMessage question;
+        question.id = QStringLiteral("q-") + key;
+        question.role = CanvasChatMessage::Role::User;
+        question.text = asked;
+        question.at = QDateTime::currentDateTimeUtc().addDays(-daysAgo);
+        CanvasChatMessage answer;
+        answer.id = QStringLiteral("a-") + key;
+        answer.role = CanvasChatMessage::Role::Agent;
+        answer.text = QStringLiteral("Jawaban.");
+        answer.at = question.at;
+        answer.replyTo = question.id;
+        answer.outcome = QStringLiteral("success");
+        return QJsonArray{question.toJson(), answer.toJson()};
+    };
+    // canvas.json project: percakapan yang sedang dibuka di "chat", satu sesi lain di "chatHistory"
+    const QString path = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+                         + QStringLiteral("/projects/Demo/canvas.json");
+    QJsonObject stored = CanvasBoard().toJson();
+    stored[QStringLiteral("chat")] = exchange(QStringLiteral("baru"), QStringLiteral("Siapa penggunanya?"), 0);
+    stored[QStringLiteral("chatHistory")] = QJsonArray{
+        QJsonObject{{QStringLiteral("id"), QStringLiteral("lama")},
+                    {QStringLiteral("messages"), exchange(QStringLiteral("lama"), QStringLiteral("Apa risikonya?"), 3)}}};
+    QFile file(path);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write(QJsonDocument(stored).toJson());
+    file.close();
+
+    QAction *canvas = fileAction(QStringLiteral("actionCanvas"));
+    QVERIFY(canvas);
+    canvas->trigger();
+    auto *page = m_window->findChild<CanvasPage *>();
+    QVERIFY(page);
+    CanvasChatPanel *panel = page->chatPanel();
+    auto *history = panel->findChild<QPushButton *>(QStringLiteral("btnCanvasChatHistory"));
+    QVERIFY(history);
+    page->openChat();
+    QTRY_VERIFY(panel->isVisible());
+
+    auto questions = [panel]() {
+        QStringList texts;
+        const QList<QLabel *> labels = panel->findChildren<QLabel *>(QStringLiteral("canvasChatUserText"));
+        for (const QLabel *label : labels) {
+            texts.append(label->text());
+        }
+        return texts;
+    };
+    QCOMPARE(questions(), QStringList{QStringLiteral("Siapa penggunanya?")});
+    history->click();
+    const QList<QFrame *> rows = panel->findChildren<QFrame *>(QStringLiteral("canvasChatSession"));
+    QCOMPARE(rows.size(), 2);
+
+    // Sesi lama dibuka: di file, percakapannya pindah ke "chat" dan yang tadi dibuka masuk "chatHistory"
+    QTest::mouseClick(rows.at(1), Qt::LeftButton);
+    QCOMPARE(questions(), QStringList{QStringLiteral("Apa risikonya?")});
+    auto firstQuestion = [](const QJsonValue &messages) {
+        return messages.toArray().first().toObject().value(QStringLiteral("text")).toString();
+    };
+    auto saved = [&path]() {
+        QFile reader(path);
+        return reader.open(QIODevice::ReadOnly) ? QJsonDocument::fromJson(reader.readAll()).object() : QJsonObject();
+    };
+    QTRY_COMPARE(firstQuestion(saved().value(QStringLiteral("chat"))), QStringLiteral("Apa risikonya?"));
+    const QJsonArray archived = saved().value(QStringLiteral("chatHistory")).toArray();
+    QCOMPARE(archived.size(), 1);
+    QCOMPARE(firstQuestion(archived.first().toObject().value(QStringLiteral("messages"))),
+             QStringLiteral("Siapa penggunanya?"));
 }
 
 namespace {
@@ -5442,7 +5692,7 @@ void TestGui::canvasOffersNotionExport() {
     CanvasChatMessage failed = message("a2", CanvasChatMessage::Role::Agent, QStringLiteral("belum login"));
     failed.replyTo = question.id;
     failed.outcome = QStringLiteral("error");
-    chat.load({question, answer, failed});
+    chat.load(QJsonArray{question.toJson(), answer.toJson(), failed.toJson()});
 
     auto *panel = page.findChild<CanvasChatPanel *>();
     auto *inspector = page.findChild<CanvasInspector *>();

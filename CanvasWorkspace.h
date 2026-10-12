@@ -86,7 +86,7 @@ private:
     void wireAutomation(const QString &projectId, Canvas *canvas);
     void wireChat(const QString &projectId, Canvas *canvas);
     void save(const QString &projectId);
-    // Isi canvas.json: kartu, garis, tampilan, dan percakapan chat
+    // Isi canvas.json: kartu, garis, tampilan, dan sesi-sesi chat
     static QJsonObject snapshot(const Canvas *canvas);
     void refreshReferences(Canvas *canvas, const QString &taskId = QString());
     std::optional<AgentLaunch> launchFor(const QString &projectId, const QString &stepId, QString *reason) const;

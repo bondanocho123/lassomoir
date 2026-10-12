@@ -1,6 +1,7 @@
 #include "CanvasChatPanel.h"
 #include "CanvasChat.h"
 #include "CanvasWorkflow.h"
+#include "ElidedLabel.h"
 #include "MarkdownView.h"
 #include "RunLogFormatter.h"
 #include "Theme.h"
@@ -20,6 +21,7 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QStackedWidget>
 #include <QStyle>
 #include <QTextDocument>
 #include <QVBoxLayout>
@@ -47,11 +49,38 @@ QString timeOf(const QDateTime &at) {
     return at.isValid() ? at.toLocalTime().toString(QStringLiteral("HH:mm")) : QString();
 }
 
+// Waktu pesan terakhir sebuah sesi di riwayat: tanggalnya ikut bila bukan hari ini
+QString dayOf(const QDateTime &at) {
+    if (!at.isValid()) {
+        return QString();
+    }
+    const QDateTime local = at.toLocalTime();
+    const QDate today = QDate::currentDate();
+    if (local.date() == today) {
+        return QStringLiteral("Hari ini %1").arg(local.toString(QStringLiteral("HH:mm")));
+    }
+    return local.toString(local.date().year() == today.year() ? QStringLiteral("d MMM HH:mm")
+                                                               : QStringLiteral("d MMM yyyy"));
+}
+
 QPushButton *smallButton(const QString &text, QWidget *parent) {
     auto *button = new QPushButton(text, parent);
     button->setObjectName("btnCanvasChatAction");
     button->setCursor(Qt::PointingHandCursor);
     button->setFocusPolicy(Qt::NoFocus);
+    return button;
+}
+
+// Tombol ikon di kepala panel, setinggi baris kepalanya
+QPushButton *headerButton(const QString &icon, const char *name, const QString &tip, QWidget *parent) {
+    auto *button = new QPushButton(parent);
+    button->setObjectName(QLatin1String(name));
+    button->setIcon(Theme::icon(icon));
+    button->setIconSize(QSize(13, 13));
+    button->setToolTip(tip);
+    button->setCursor(Qt::PointingHandCursor);
+    button->setFocusPolicy(Qt::NoFocus);
+    button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Minimum);
     return button;
 }
 
@@ -65,6 +94,35 @@ QLabel *label(const QString &text, const char *name, QWidget *parent) {
 void repolish(QWidget *widget) {
     widget->style()->unpolish(widget);
     widget->style()->polish(widget);
+}
+
+// Daftar tegak yang bisa digulir; isinya disisipkan sebelum stretch penutup
+QVBoxLayout *scrollList(QScrollArea *scroll, int spacing) {
+    scroll->setObjectName("canvasChatScroll");
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto *content = new QWidget(scroll);
+    content->setObjectName("canvasChatList");
+    auto *list = new QVBoxLayout(content);
+    list->setContentsMargins(0, 4, 6, 4);
+    list->setSpacing(spacing);
+    list->addStretch(1);
+    scroll->setWidget(content);
+    scroll->viewport()->setAutoFillBackground(false);
+    content->setAutoFillBackground(false);
+    return list;
+}
+
+// Semua isi daftar dibuang kecuali keep (penanda daftar kosong)
+void clearList(QVBoxLayout *list, const QWidget *keep) {
+    for (int i = list->count() - 1; i >= 0; --i) {
+        QWidget *widget = list->itemAt(i)->widget();
+        if (widget && widget != keep) {
+            list->removeWidget(widget);
+            delete widget;
+        }
+    }
 }
 
 // Jawaban Markdown setinggi isinya: yang menggulir adalah daftar pesan, bukan tiap jawaban
@@ -177,6 +235,42 @@ protected:
     }
 };
 
+// Satu sesi di riwayat: pertanyaan pertamanya, lalu waktu pesan terakhir dan jumlah pertanyaannya.
+// Klik di mana pun pada barisnya membuka sesi itu.
+class SessionRow final : public QFrame {
+public:
+    SessionRow(const CanvasChatSession &session, bool current, QWidget *parent) : QFrame(parent) {
+        setObjectName("canvasChatSession");
+        setProperty("current", current);
+        setCursor(Qt::PointingHandCursor);
+        setAttribute(Qt::WA_Hover, true);
+
+        const QString title = session.title();
+        auto *name = new ElidedLabel(title.isEmpty() ? QStringLiteral("(tanpa pertanyaan)") : title, this);
+        name->setObjectName("canvasChatSessionTitle");
+        name->setTextFormat(Qt::PlainText);
+        QStringList facts = {dayOf(session.lastAt()), QStringLiteral("%1 pertanyaan").arg(session.questionCount())};
+        facts.removeAll(QString());
+        if (current) {
+            facts.append(QStringLiteral("sedang dibuka"));
+        }
+        auto *layout = new QVBoxLayout(this);
+        layout->setContentsMargins(10, 7, 10, 7);
+        layout->setSpacing(2);
+        layout->addWidget(name);
+        layout->addWidget(label(facts.join(QStringLiteral(" · ")), "canvasChatMeta", this));
+    }
+    std::function<void()> clicked;
+
+protected:
+    void mouseReleaseEvent(QMouseEvent *event) override {
+        if (event->button() == Qt::LeftButton && rect().contains(event->position().toPoint()) && clicked) {
+            clicked();
+        }
+        QFrame::mouseReleaseEvent(event);
+    }
+};
+
 // Enter mengirim, Shift+Enter baris baru
 class ChatInput final : public QPlainTextEdit {
 public:
@@ -204,32 +298,39 @@ CanvasChatPanel::CanvasChatPanel(CanvasChat &chat, MermaidRenderer *renderer, QW
     setObjectName("canvasChatPanel");
     setAttribute(Qt::WA_StyledBackground, true);
 
-    auto *title = label(QStringLiteral("CHAT BRAINSTORM"), "canvasPanelTitle", this);
-    title->setWordWrap(false);
+    // Kepala panel. Judul menyempit (terpotong "…") lebih dulu daripada mendorong tombol keluar dari
+    // panel yang sempit; tombol kembali hanya tampil selama riwayat dibuka, tiga tombol kanan selama tidak.
+    m_title = new ElidedLabel(QString(), this);
+    m_title->setObjectName("canvasPanelTitle");
+    m_title->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
+    m_back = headerButton(QStringLiteral(":/icons/arrow-left.svg"), "btnCanvasChatBack",
+                          QStringLiteral("Kembali ke percakapan"), this);
     m_clear = smallButton(QStringLiteral("Mulai ulang"), this);
-    m_clear->setToolTip(QStringLiteral("Hapus seluruh percakapan chat kanvas ini"));
+    m_clear->setToolTip(QStringLiteral("Hapus seluruh percakapan sesi chat ini"));
+    m_clear->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Minimum);
+    m_new = headerButton(QStringLiteral(":/icons/plus-navy.svg"), "btnCanvasChatNew",
+                         QStringLiteral("Sesi baru: percakapan ini tetap ada di riwayat"), this);
+    m_history = headerButton(QStringLiteral(":/icons/history.svg"), "btnCanvasChatHistory",
+                             QStringLiteral("Riwayat sesi chat kanvas ini"), this);
     auto *header = new QHBoxLayout();
     header->setContentsMargins(0, 0, 0, 0);
-    header->addWidget(title);
+    header->setSpacing(4);
+    header->addWidget(m_back);
+    header->addWidget(m_title);
     header->addStretch(1);
     header->addWidget(m_clear);
+    header->addWidget(m_new);
+    header->addWidget(m_history);
+
+    // Ruang chat: daftar pesan, bahan, dan input
+    m_room = new QWidget(this);
     auto *hint = label(QStringLiteral("Tanya jawab tentang artefak di kanvas. Agent membaca kartu bahan dan kode "
                                       "project tanpa mengubah apa pun."),
-                       "canvasPanelHint", this);
+                       "canvasPanelHint", m_room);
+    m_scroll = new QScrollArea(m_room);
+    m_list = scrollList(m_scroll, 10);
 
-    // Daftar pesan; pesan baru disisipkan sebelum stretch penutup
-    m_scroll = new QScrollArea(this);
-    m_scroll->setObjectName("canvasChatScroll");
-    m_scroll->setWidgetResizable(true);
-    m_scroll->setFrameShape(QFrame::NoFrame);
-    m_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    auto *listWidget = new QWidget(m_scroll);
-    listWidget->setObjectName("canvasChatList");
-    m_list = new QVBoxLayout(listWidget);
-    m_list->setContentsMargins(0, 4, 6, 4);
-    m_list->setSpacing(10);
-
-    m_empty = new QWidget(listWidget);
+    m_empty = new QWidget(m_list->parentWidget());
     auto *emptyLayout = new QVBoxLayout(m_empty);
     emptyLayout->setContentsMargins(0, 0, 0, 0);
     emptyLayout->setSpacing(6);
@@ -245,11 +346,7 @@ CanvasChatPanel::CanvasChatPanel(CanvasChat &chat, MermaidRenderer *renderer, QW
         };
         emptyLayout->addWidget(item);
     }
-    m_list->addWidget(m_empty);
-    m_list->addStretch(1);
-    m_scroll->setWidget(listWidget);
-    m_scroll->viewport()->setAutoFillBackground(false);
-    listWidget->setAutoFillBackground(false);
+    m_list->insertWidget(0, m_empty);
 
     QScrollBar *bar = m_scroll->verticalScrollBar();
     connect(bar, &QScrollBar::rangeChanged, this, [this, bar](int, int maximum) {
@@ -259,14 +356,14 @@ CanvasChatPanel::CanvasChatPanel(CanvasChat &chat, MermaidRenderer *renderer, QW
     });
     connect(bar, &QScrollBar::valueChanged, this, [this, bar](int value) { m_stickToEnd = value >= bar->maximum() - 24; });
 
-    m_error = label(QString(), "canvasStepStatus", this);
+    m_error = label(QString(), "canvasStepStatus", m_room);
     m_error->setProperty("error", true);
     m_error->hide();
-    m_context = label(QString(), "canvasChatContext", this);
+    m_context = label(QString(), "canvasChatContext", m_room);
     m_context->setTextFormat(Qt::RichText);
-    m_contextHint = label(QString(), "canvasPanelHint", this);
+    m_contextHint = label(QString(), "canvasPanelHint", m_room);
 
-    auto *input = new ChatInput(this);
+    auto *input = new ChatInput(m_room);
     input->submit = [this]() { send(); };
     m_input = input;
     m_input->setObjectName("canvasChatInput");
@@ -275,7 +372,7 @@ CanvasChatPanel::CanvasChatPanel(CanvasChat &chat, MermaidRenderer *renderer, QW
     m_input->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     connect(m_input, &QPlainTextEdit::textChanged, this, &CanvasChatPanel::fitInput);
 
-    m_model = new QComboBox(this);
+    m_model = new QComboBox(m_room);
     m_model->setObjectName("canvasInspectorCombo");
     m_model->setToolTip(QStringLiteral("Model agent untuk pertanyaan berikutnya"));
     const QString defaultModel = CanvasWorkflow::chatAgent().model;
@@ -289,7 +386,7 @@ CanvasChatPanel::CanvasChatPanel(CanvasChat &chat, MermaidRenderer *renderer, QW
     for (const ModelChoice &choice : kModels) {
         m_model->addItem(QString::fromLatin1(choice.label), QString::fromLatin1(choice.value));
     }
-    m_send = new QPushButton(QStringLiteral("Kirim"), this);
+    m_send = new QPushButton(QStringLiteral("Kirim"), m_room);
     m_send->setObjectName("btnCanvasRunStep");
     m_send->setCursor(Qt::PointingHandCursor);
     m_send->setFocusPolicy(Qt::NoFocus);
@@ -306,18 +403,42 @@ CanvasChatPanel::CanvasChatPanel(CanvasChat &chat, MermaidRenderer *renderer, QW
     footer->addWidget(m_model, 1);
     footer->addWidget(m_send);
 
+    auto *room = new QVBoxLayout(m_room);
+    room->setContentsMargins(0, 0, 0, 0);
+    room->setSpacing(6);
+    room->addWidget(hint);
+    room->addSpacing(2);
+    room->addWidget(m_scroll, 1);
+    room->addWidget(m_error);
+    room->addWidget(m_context);
+    room->addWidget(m_contextHint);
+    room->addWidget(m_input);
+    room->addLayout(footer);
+
+    // Riwayat sesi: menggantikan ruang chat selama dibuka
+    m_historyPage = new QWidget(this);
+    auto *sessionScroll = new QScrollArea(m_historyPage);
+    m_sessions = scrollList(sessionScroll, 6);
+    m_noSessions = label(QStringLiteral("Belum ada sesi chat. Sesi masuk ke sini setelah pertanyaan pertamanya dikirim."),
+                         "canvasInspectorTips", m_sessions->parentWidget());
+    m_sessions->insertWidget(0, m_noSessions);
+    auto *history = new QVBoxLayout(m_historyPage);
+    history->setContentsMargins(0, 0, 0, 0);
+    history->setSpacing(6);
+    history->addWidget(label(QStringLiteral("Pilih sesi untuk membuka lagi percakapannya."), "canvasPanelHint",
+                             m_historyPage));
+    history->addSpacing(2);
+    history->addWidget(sessionScroll, 1);
+
+    m_pages = new QStackedWidget(this);
+    m_pages->addWidget(m_room);
+    m_pages->addWidget(m_historyPage);
+
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(12, 12, 12, 12);
     layout->setSpacing(6);
     layout->addLayout(header);
-    layout->addWidget(hint);
-    layout->addSpacing(2);
-    layout->addWidget(m_scroll, 1);
-    layout->addWidget(m_error);
-    layout->addWidget(m_context);
-    layout->addWidget(m_contextHint);
-    layout->addWidget(m_input);
-    layout->addLayout(footer);
+    layout->addWidget(m_pages, 1);
 
     m_liveTimer.setSingleShot(true);
     m_liveTimer.setInterval(120);
@@ -352,13 +473,23 @@ CanvasChatPanel::CanvasChatPanel(CanvasChat &chat, MermaidRenderer *renderer, QW
     connect(m_clear, &QPushButton::clicked, this, [this]() {
         const auto answer = QMessageBox::question(
             this, QStringLiteral("Mulai ulang chat"),
-            QStringLiteral("Hapus seluruh percakapan chat di kanvas ini? Catatan yang sudah dibuat dari jawaban tetap ada."));
+            QStringLiteral("Hapus seluruh percakapan sesi chat ini? Sesi lain di riwayat dan catatan yang sudah "
+                           "dibuat dari jawaban tetap ada."));
         if (answer == QMessageBox::Yes) {
             m_chat.clear();
         }
     });
+    connect(m_new, &QPushButton::clicked, this, [this]() {
+        if (m_chat.newSession()) {
+            m_error->hide();
+            focusInput();
+        }
+    });
+    connect(m_history, &QPushButton::clicked, this, [this]() { showHistory(true); });
+    connect(m_back, &QPushButton::clicked, this, [this]() { showHistory(false); });
 
     setContext(CanvasBoard(), {});
+    showHistory(false);
     rebuild();
     fitInput();
 }
@@ -379,6 +510,7 @@ void CanvasChatPanel::setContext(const CanvasBoard &board, const QStringList &se
 }
 
 void CanvasChatPanel::focusInput() {
+    showHistory(false);
     m_input->setFocus(Qt::OtherFocusReason);
     m_input->moveCursor(QTextCursor::End);
 }
@@ -386,20 +518,50 @@ void CanvasChatPanel::focusInput() {
 void CanvasChatPanel::showError(const QString &text) {
     m_error->setText(text);
     m_error->setVisible(!text.isEmpty());
+    if (!text.isEmpty()) {
+        showHistory(false);   // alasannya tampil di ruang chat
+    }
 }
 
 QString CanvasChatPanel::draft() const {
     return m_input->toPlainText();
 }
 
-void CanvasChatPanel::rebuild() {
-    for (int i = m_list->count() - 1; i >= 0; --i) {
-        QWidget *widget = m_list->itemAt(i)->widget();
-        if (widget && widget != m_empty) {
-            m_list->removeWidget(widget);
-            delete widget;
-        }
+bool CanvasChatPanel::isHistoryOpen() const {
+    return m_pages->currentWidget() == m_historyPage;
+}
+
+void CanvasChatPanel::showHistory(bool open) {
+    if (open) {
+        rebuildHistory();
     }
+    m_pages->setCurrentWidget(open ? m_historyPage : m_room);
+    m_title->setFullText(open ? QStringLiteral("RIWAYAT CHAT") : QStringLiteral("CHAT BRAINSTORM"));
+    m_back->setVisible(open);
+    m_clear->setVisible(!open);
+    m_new->setVisible(!open);
+    m_history->setVisible(!open);
+}
+
+void CanvasChatPanel::rebuildHistory() {
+    clearList(m_sessions, m_noSessions);
+    const QList<CanvasChatSession> sessions = m_chat.sessions();
+    for (const CanvasChatSession &session : sessions) {
+        auto *row = new SessionRow(session, session.id == m_chat.currentSessionId(), m_sessions->parentWidget());
+        const QString id = session.id;
+        row->clicked = [this, id]() {
+            if (m_chat.openSession(id)) {
+                m_error->hide();
+                focusInput();
+            }
+        };
+        m_sessions->insertWidget(m_sessions->count() - 1, row);
+    }
+    m_noSessions->setVisible(sessions.isEmpty());
+}
+
+void CanvasChatPanel::rebuild() {
+    clearList(m_list, m_empty);
     m_live = nullptr;
     m_liveView = nullptr;
     m_liveActivity = nullptr;
@@ -542,9 +704,9 @@ void CanvasChatPanel::setBusy(bool busy) {
         repolish(m_send);
     }
     m_model->setEnabled(!busy);
-    m_clear->setEnabled(!busy && !m_chat.messages().isEmpty());
 
     if (busy && !m_live) {
+        showHistory(false);   // jawabannya mengalir di ruang chat
         auto *bubble = new QFrame();
         bubble->setObjectName("canvasChatAgent");
         auto *layout = new QVBoxLayout(bubble);
@@ -610,6 +772,11 @@ void CanvasChatPanel::fitInput() {
 }
 
 void CanvasChatPanel::updateEmptyState() {
-    m_empty->setVisible(m_chat.messages().isEmpty() && !m_chat.isBusy());
-    m_clear->setEnabled(!m_chat.isBusy() && !m_chat.messages().isEmpty());
+    const bool idle = !m_chat.isBusy();
+    const bool empty = m_chat.messages().isEmpty();
+    m_empty->setVisible(idle && empty);
+    // Sesi tidak berganti selagi agent menjawab; sesi yang masih kosong sudah sesi baru
+    m_clear->setEnabled(idle && !empty);
+    m_new->setEnabled(idle && !empty);
+    m_history->setEnabled(idle);
 }

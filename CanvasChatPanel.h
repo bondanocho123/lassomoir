@@ -9,6 +9,7 @@
 
 class CanvasChat;
 struct CanvasChatMessage;
+class ElidedLabel;
 class MarkdownView;
 class MermaidRenderer;
 class QComboBox;
@@ -16,12 +17,15 @@ class QLabel;
 class QPlainTextEdit;
 class QPushButton;
 class QScrollArea;
+class QStackedWidget;
 class QVBoxLayout;
 
 // Panel chat kanvas brainstorm (kanan, bergantian dengan Detail): tanya jawab dengan agent tentang
 // artefak di kanvas. Bahan pertanyaan berikutnya adalah kartu yang sedang dipilih, atau seluruh
 // kanvas bila tidak ada yang dipilih. Isi percakapan dibaca dari CanvasChat; pertanyaan baru dikirim
 // sebagai intent (askRequested) supaya folder kerja bisa dipastikan dulu.
+// Kepala panel: Mulai ulang, + (sesi baru), dan riwayat. Riwayat sesi menggantikan ruang chat sampai
+// sebuah sesi dipilih atau tombol kembali ditekan.
 class CanvasChatPanel : public QWidget {
     Q_OBJECT
 
@@ -32,10 +36,12 @@ public:
     // Kartu yang dipilih di kanvas; kosong = seluruh kanvas
     void setContext(const CanvasBoard &board, const QStringList &selectedIds);
     QStringList contextIds() const { return m_contextIds; }
+    // Ruang chat tampil (riwayat ditutup) dan input siap diketik
     void focusInput();
     // Pertanyaan ditolak (mis. folder kerja belum ada): ketikannya dibiarkan
     void showError(const QString &text);
     QString draft() const;
+    bool isHistoryOpen() const;
 
 signals:
     void askRequested(const QString &question, const QStringList &contextIds, const QString &model);
@@ -58,12 +64,23 @@ private:
     void send();
     void fitInput();
     void updateEmptyState();
+    void showHistory(bool open);
+    void rebuildHistory();
 
     CanvasChat &m_chat;
     MermaidRenderer *m_renderer;
     QStringList m_contextIds;
 
+    ElidedLabel *m_title;
+    QPushButton *m_back;
     QPushButton *m_clear;
+    QPushButton *m_new;
+    QPushButton *m_history;
+    QStackedWidget *m_pages;       // ruang chat, atau riwayat sesi
+    QWidget *m_room;
+    QWidget *m_historyPage;
+    QVBoxLayout *m_sessions;
+    QLabel *m_noSessions;
     QScrollArea *m_scroll;
     QVBoxLayout *m_list;
     QWidget *m_empty;

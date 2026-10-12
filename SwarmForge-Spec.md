@@ -165,8 +165,8 @@ Konvensi nama sinyal di kode sudah tepat dan dipertahankan: **peristiwa** dalam 
 | `CanvasWorkspace` ✅ | View | Satu kanvas brainstorm per project (§3.6): muat/simpan `canvas.json` lewat `FileManager`, segarkan kartu referensi saat task berubah, rakit `AgentLaunch` langkah AI, buat task usulan lewat `TaskManager` | Mengubah task tanpa `TaskManager` |
 | `CanvasPage` · `CanvasInspector` · `CanvasLibrary` ✅ | View | Halaman kanvas: toolbar, tombol mengambang di kanvas (buat kartu, zoom), Pustaka artefak lintas project (sumber drag), panel Detail kartu terpilih | Menyimpan data kanvas sendiri |
 | `CanvasPreviewDrawer` ✅ | View | Drawer pratinjau Markdown kartu terpilih, menimpa kanvas dari tepi kanannya (§3.6) | Tahu kartu atau model kanvas (isi datang dari `CanvasPage`) |
-| `CanvasChatPanel` ✅ | View | Panel chat tanya jawab (bergantian dengan Detail): gelembung pesan, jawaban Markdown, keluaran live, bahan = kartu terpilih | Menjalankan agent sendiri (kirim intent) |
-| `CanvasChat` ✅ | Infra | Percakapan satu kanvas: pesan + metrik, satu pertanyaan pada satu waktu lewat `AgentRuntime`, JSON untuk `canvas.json` | Mengubah kartu kanvas |
+| `CanvasChatPanel` ✅ | View | Panel chat tanya jawab (bergantian dengan Detail): gelembung pesan, jawaban Markdown, keluaran live, bahan = kartu terpilih, sesi baru dan riwayat sesi | Menjalankan agent sendiri (kirim intent) |
+| `CanvasChat` ✅ | Infra | Sesi-sesi chat satu kanvas: pesan + metrik, sesi yang sedang dibuka dan riwayatnya, satu pertanyaan pada satu waktu lewat `AgentRuntime`, JSON untuk `canvas.json` | Mengubah kartu kanvas |
 | `CanvasView` · `CanvasNodeItem` · `CanvasEdgeItem` ✅ | View | Kanvas tak terbatas (`QGraphicsView`): geser, zoom di kursor, seleksi, sambungan titik → kartu; semua perubahan dikirim sebagai intent ke `CanvasModel` | Mengubah kartu tanpa model |
 | `CanvasModel` · `CanvasBoard` ✅ | Domain | Satu-satunya pengubah isi kanvas: validasi intent (garis tanpa putaran), undo/redo, JSON, urutan dependensi langkah AI | Menyentuh file atau proses |
 | `CanvasWorkflow` ✅ | Domain | Isi kartu referensi dari task, prompt langkah AI dan chat, ringkasan task baru, parsing usulan task | UI, proses |
@@ -229,10 +229,11 @@ Aturan:
 Panel kanan bergantian antara **Detail** dan **Chat** (tombol di toolbar; tombol yang aktif menutup panel). Chat dibuka juga dengan `C` atau menu klik kanan **Tanyakan kartu ini di chat**.
 
 1. **Bahan mengikuti pilihan.** Kartu yang sedang dipilih menjadi bahan pertanyaan berikutnya; tanpa pilihan, bahannya seluruh kanvas. Baris **Bahan** di atas input menunjukkannya. Seluruh kanvas membagi jatah 90 000 karakter rata per kartu (min. 6 000, maks. 24 000).
-2. **Satu proses per pertanyaan.** Seperti langkah AI, setiap pertanyaan menjalankan `claude -p` baru yang baca-saja (`Read`, `Grep`, `Glob`) di folder kerja project, dengan prompt peran `:/prompts/BRAINSTORM_CHAT.md`. Prompt-nya dirakit ulang: bahan kartu, percakapan sebelumnya (maks. 16 pesan / 20 000 karakter, pesan terbaru didahulukan, jawaban gagal tidak ikut), lalu pertanyaannya. Tidak memakai `--resume`, jadi pertanyaan tidak bergantung pada sesi lama dan bahan selalu yang terbaru.
+2. **Satu proses per pertanyaan.** Seperti langkah AI, setiap pertanyaan menjalankan `claude -p` baru yang baca-saja (`Read`, `Grep`, `Glob`) di folder kerja project, dengan prompt peran `:/prompts/BRAINSTORM_CHAT.md`. Prompt-nya dirakit ulang: bahan kartu, percakapan sesi yang sedang dibuka sebelumnya (maks. 16 pesan / 20 000 karakter, pesan terbaru didahulukan, jawaban gagal tidak ikut), lalu pertanyaannya. Tidak memakai `--resume`, jadi pertanyaan tidak bergantung pada sesi CLI lama dan bahan selalu yang terbaru.
 3. **Satu pertanyaan pada satu waktu.** Selama agent menjawab, tombol **Kirim** menjadi **■ Hentikan**. Teks agent dan tool yang sedang dipakai tampil live. Jawaban yang dihentikan menyimpan potongan yang sudah masuk; jawaban gagal menampilkan alasannya beserta **Tanya lagi**.
 4. **Ke kanvas.** **Jadikan catatan** menaruh pertanyaan (sebagai baris pertama) dan jawabannya di catatan biru di kanan kartu bahannya, tersambung dari kartu-kartu itu (bila ≤ 6), di tempat lapang. Langkah ini masuk undo seperti intent lain; percakapannya sendiri tidak.
-5. **Tersimpan.** Percakapan (maks. 200 pesan) ikut `canvas.json` (§4.6). **Mulai ulang** menghapusnya setelah konfirmasi. Klik bahan di gelembung pertanyaan memilih kartu-kartunya lagi di kanvas.
+5. **Sesi.** Satu kanvas menyimpan beberapa sesi chat; agent hanya membawa percakapan sesi yang sedang dibuka. Di kepala panel, di kanan **Mulai ulang**: **+** memulai sesi kosong (percakapan yang sedang dibuka tetap ada di riwayat), dan tombol **riwayat** (jam berpanah mundur) mengganti ruang chat dengan daftar sesi: pertanyaan pertamanya, waktu pesan terakhir, dan jumlah pertanyaan; yang terakhir dipakai di atas, yang sedang dibuka ditandai. Klik sebuah sesi membukanya lagi di ruang chat; tombol **←** di kiri judul kembali tanpa berpindah sesi. Selama agent menjawab, **+** dan riwayat mati. Sesi yang masih kosong tidak masuk riwayat.
+6. **Tersimpan.** Semua sesi (maks. 50 sesi, 200 pesan per sesi) ikut `canvas.json` (§4.6); di atas batas itu sesi yang pesan terakhirnya paling lama dibuang. **Mulai ulang** mengosongkan sesi yang sedang dibuka saja setelah konfirmasi. Klik bahan di gelembung pertanyaan memilih kartu-kartunya lagi di kanvas.
 
 | Pintasan | Aksi |
 |---|---|
@@ -476,7 +477,7 @@ Aturan:
 
 ### 4.6 File kanvas
 
-`projects/<projectId>/canvas.json` dirakit `CanvasBoard::toJson()` (ditambah `CanvasChat::toJson()` untuk percakapan chat) dan ditulis `FileManager` dengan aturan yang sama seperti `session.json` (`QSaveFile`, debounce ±500 ms, sekali lagi saat aplikasi ditutup). File ini ikut terhapus bersama project.
+`projects/<projectId>/canvas.json` dirakit `CanvasBoard::toJson()` (ditambah `CanvasChat::toJson()` untuk sesi-sesi chat) dan ditulis `FileManager` dengan aturan yang sama seperti `session.json` (`QSaveFile`, debounce ±500 ms, sekali lagi saat aplikasi ditutup). File ini ikut terhapus bersama project.
 
 ```json
 {
@@ -499,6 +500,13 @@ Aturan:
       "context": ["9b2e…"], "contextLabel": "1 kartu: Spesifikasi · Login magic link" },
     { "id": "8d2c…", "role": "agent", "text": "Risiko terbesar: email terlambat …", "at": "2026-10-05T12:03:21Z",
       "replyTo": "1f7a…", "model": "sonnet", "outcome": "success", "durationMs": 21000, "totalTokens": 18400, "costUsd": 0.06 }
+  ],
+  "chatHistory": [
+    { "id": "b61e…", "messages": [
+      { "id": "5c0d…", "role": "user", "text": "Siapa penggunanya?", "at": "2026-10-03T09:10:00Z", "contextLabel": "seluruh kanvas · 3 kartu" },
+      { "id": "e94a…", "role": "agent", "text": "Tim internal dulu …", "at": "2026-10-03T09:10:18Z",
+        "replyTo": "5c0d…", "model": "sonnet", "outcome": "success", "durationMs": 18000, "totalTokens": 15200, "costUsd": 0.05 }
+    ] }
   ]
 }
 ```
@@ -510,7 +518,8 @@ Aturan:
 3. `schemaVersion` tidak dikenal atau JSON rusak → file dipindah ke `canvas-rusak-<yyyyMMdd-HHmmss>.json` (isinya tidak dibuang), kanvas mulai kosong, dan konsol mencatat `[KANVAS WARN]`.
 4. Kartu berjenis tidak dikenal, id ganda, dan garis yang menunjuk kartu yang tidak ada atau membuat putaran dilewati saat dimuat, masing-masing dengan peringatan.
 5. Hanya hasil run yang sudah selesai yang disimpan (`run`). Run yang masih berjalan saat aplikasi ditutup dihentikan tanpa dicatat; langkahnya tetap memegang hasil sebelumnya (bila ada) dan bisa dijalankan ulang.
-6. `chat` (opsional): percakapan chat, urut waktu. Pertanyaan: `{id, role: "user", text, at, context?: [id kartu], contextLabel}`; `context` tidak ada = seluruh kanvas. Jawaban: `{id, role: "agent", text, at, replyTo, model, outcome, durationMs, totalTokens, costUsd}`. Pesan dengan `role` lain dilewati saat dimuat.
+6. `chat` (opsional): pesan sesi chat yang sedang dibuka, urut waktu; tidak ditulis selama sesi itu masih kosong. Pertanyaan: `{id, role: "user", text, at, context?: [id kartu], contextLabel}`; `context` tidak ada = seluruh kanvas. Jawaban: `{id, role: "agent", text, at, replyTo, model, outcome, durationMs, totalTokens, costUsd}`. Pesan dengan `role` lain dilewati saat dimuat.
+7. `chatHistory` (opsional): sesi-sesi chat lainnya, masing-masing `{id, messages}` dengan pesan berbentuk sama seperti `chat`. Sesi tanpa pesan yang terbaca dilewati saat dimuat; id yang kosong atau ganda diganti id baru. `chat` sengaja tetap berbentuk seperti sebelum ada sesi: file lama terbaca apa adanya, dan build lama yang membuka file baru tetap menampilkan percakapan yang sedang dibuka (tetapi membuang `chatHistory` saat menyimpan).
 
 ---
 
