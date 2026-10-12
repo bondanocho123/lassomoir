@@ -42,6 +42,8 @@ signals:
     void noteRequested(const QString &answerId);
     // "Perluas" pada jawaban: isinya dibuka di drawer pratinjau
     void expandRequested(const QString &answerId);
+    // "Ke Notion" pada jawaban: pertanyaan dan jawabannya dikirim sebagai halaman Notion
+    void exportRequested(const QString &answerId);
     // Klik bahan sebuah pertanyaan: kartunya dipilih di kanvas
     void contextActivated(const QStringList &ids);
 

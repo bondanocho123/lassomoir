@@ -33,6 +33,8 @@ SOURCES += \
     ../GitHistory.cpp \
     ../GitProcess.cpp \
     ../MermaidRenderer.cpp \
+    ../NotionAccess.cpp \
+    ../NotionExport.cpp \
     ../PromptComposer.cpp \
     ../RunLogFormatter.cpp \
     ../SecretStore.cpp \
@@ -75,6 +77,8 @@ HEADERS += \
     ../GitHistory.h \
     ../GitProcess.h \
     ../MermaidRenderer.h \
+    ../NotionAccess.h \
+    ../NotionExport.h \
     ../PromptComposer.h \
     ../RunLogFormatter.h \
     ../SecretStore.h \

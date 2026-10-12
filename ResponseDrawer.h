@@ -71,6 +71,8 @@ signals:
     void diffRequested(const QString &taskId);
     // Tombol "Lihat commit" di baris branch: riwayat branch task dibanding branch dasarnya
     void branchHistoryRequested(const QString &taskId);
+    // Tombol "Ke Notion": hasil run yang sedang tampil dikirim sebagai halaman Notion
+    void notionExportRequested(const QString &title, const QString &markdown);
 
 private:
     void requestDiff();
@@ -103,6 +105,7 @@ private:
     QTabBar *m_tabs;           // hanya tampil di stage yang menampilkan perubahan kode
     QStackedWidget *m_pages;   // [hasil agent | perubahan kode | maintainability | UML], mengikuti m_tabs
     QComboBox *m_runSelector;
+    QPushButton *m_export;     // hanya menyala untuk run yang sudah tersimpan
     QLabel *m_metrics;
     MarkdownView *m_view;
     DiffView *m_diffView;

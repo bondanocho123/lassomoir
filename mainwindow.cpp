@@ -17,6 +17,8 @@
 #include "FontPickerDialog.h"
 #include "IntegrationsDialog.h"
 #include "NewTaskDialog.h"
+#include "NotionAccess.h"
+#include "NotionExportDialog.h"
 #include "ResponseDrawer.h"
 #include "RunLogFormatter.h"
 #include "RuntimeNoticeDialog.h"
@@ -125,6 +127,7 @@ MainWindow::MainWindow(const StageCatalog &catalog, TaskManager &tasks, SwarmCoo
         showBoard(task->projectId);
         openDrawer(taskId);
     });
+    connect(m_canvas, &CanvasWorkspace::notionExportRequested, this, &MainWindow::exportToNotion);
     connect(m_canvas, &CanvasWorkspace::logLine, ui->consolePanel, &ConsolePanelWidget::appendLog);
     connect(m_canvas, &CanvasWorkspace::taskLogged, this, [this](const TaskItem &task, const QString &line) {
         logTask(task, line);
@@ -176,6 +179,7 @@ MainWindow::MainWindow(const StageCatalog &catalog, TaskManager &tasks, SwarmCoo
             showBranchViewer(task->projectId, task->branch.name, task->branch.base);
         }
     });
+    connect(m_drawer, &ResponseDrawer::notionExportRequested, this, &MainWindow::exportToNotion);
 
     // Simpan lebar minimum asli sidebar (dari .ui) sebelum animasi bisa mengubahnya
     m_sidebarMinWidth = ui->sidebarPanel->minimumWidth();
@@ -1736,7 +1740,35 @@ void MainWindow::showIntegrations() {
             method == AgentAccess::Method::ApiKey ? QStringLiteral("API key Anthropic")
                                                   : QStringLiteral("login Claude Code")));
     });
+    connect(dialog, &IntegrationsDialog::notionSaved, this, [this](bool connected) {
+        ui->consolePanel->appendLog(connected ? QStringLiteral("[SYSTEM] Notion: token disimpan")
+                                              : QStringLiteral("[SYSTEM] Notion: token dihapus"));
+    });
     m_integrations = dialog;
+    dialog->open();
+}
+
+void MainWindow::exportToNotion(const QString &title, const QString &markdown) {
+    const QString token = NotionAccess::token();
+    if (token.isEmpty()) {
+        ui->consolePanel->appendLog(QStringLiteral("[NOTION] Token Notion belum diisi. Isi dulu di File > Integrations, "
+                                                   "lalu tekan Ke Notion lagi."));
+        showIntegrations();
+        if (auto *integrations = qobject_cast<IntegrationsDialog *>(m_integrations.data())) {
+            integrations->focusNotionToken();
+        }
+        return;
+    }
+    // Dialog ekspor yang masih terbuka diganti: yang berlaku adalah dokumen yang baru diminta
+    if (m_notionExport) {
+        m_notionExport->close();
+    }
+    auto *dialog = new NotionExportDialog(token, title, markdown, this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dialog, &NotionExportDialog::exported, this, [this](const QString &pageTitle, const QString &url) {
+        ui->consolePanel->appendLog(QStringLiteral("[NOTION] Terkirim: %1 → %2").arg(pageTitle, url));
+    });
+    m_notionExport = dialog;
     dialog->open();
 }
 

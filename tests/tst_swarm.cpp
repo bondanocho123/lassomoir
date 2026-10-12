@@ -17,6 +17,8 @@
 #include "GitHistory.h"
 #include "GitSandbox.h"
 #include "MermaidRenderer.h"
+#include "NotionAccess.h"
+#include "NotionExport.h"
 #include "PromptComposer.h"
 #include "RunLogFormatter.h"
 #include "SecretStore.h"
@@ -501,6 +503,12 @@ private slots:
     void claudeSessionStopsWhenApiKeyRejected();
     void claudeLoginReportsStatusAndLogsIn();
     void claudeLoginReportsFailureAndCancel();
+
+    // Ekspor ke Notion: token, isi permintaan API, dan penyesuaian Markdown
+    void notionAccessKeepsTokenOutOfSettings();
+    void notionRequestsMatchApi();
+    void notionRepliesAreRead();
+    void notionMarkdownFollowsNotionDialect();
 
     // Penanda "Selesai" di kartu: stage terakhir yang run-nya berhasil
     void taskReportsCompletedStage();
@@ -1361,6 +1369,230 @@ void TestSwarm::agentAccessPersistsMethodAndKey() {
     // Yang ditampilkan hanya ujung key
     QCOMPARE(AgentAccess::maskedKey(key), QStringLiteral("…1234"));
     QCOMPARE(AgentAccess::maskedKey(QStringLiteral("pendek")), QStringLiteral("…"));
+}
+
+void TestSwarm::notionAccessKeepsTokenOutOfSettings() {
+#ifndef Q_OS_WIN
+    QSKIP("Token Notion disimpan di Windows Credential Manager");
+#endif
+    const auto restore = qScopeGuard([]() { NotionAccess::clear(); });
+    NotionAccess::clear();
+    QVERIFY(NotionAccess::token().isEmpty());
+    QVERIFY(NotionAccess::lastParent().id.isEmpty());
+
+    const QString token = QStringLiteral("ntn_uji_token_5678");
+    QString error;
+    QVERIFY2(NotionAccess::saveToken(token, &error), qPrintable(error));
+    QCOMPARE(NotionAccess::token(), token);
+    QCOMPARE(SecretStore::read(QStringLiteral("notion-token")), token);
+
+    NotionAccess::saveLastParent({QStringLiteral("page-1"), QStringLiteral("Catatan Proyek")});
+    QCOMPARE(NotionAccess::lastParent().id, QStringLiteral("page-1"));
+    QCOMPARE(NotionAccess::lastParent().title, QStringLiteral("Catatan Proyek"));
+
+    // settings.ini hanya mencatat halaman induk terakhir; tokennya di Credential Manager
+    QFile settings(AppSettings::filePath());
+    QVERIFY(settings.open(QIODevice::ReadOnly));
+    const QByteArray ini = settings.readAll();
+    settings.close();
+    QVERIFY(ini.contains("page-1"));
+    QVERIFY2(!ini.contains("ntn_"), ini.constData());
+
+    // Token dibuang: halaman induk terakhir milik workspace-nya ikut hilang
+    NotionAccess::clear();
+    QVERIFY(NotionAccess::token().isEmpty());
+    QVERIFY(NotionAccess::lastParent().id.isEmpty());
+    QCOMPARE(SecretStore::read(QStringLiteral("notion-token")), QString());
+}
+
+void TestSwarm::notionRequestsMatchApi() {
+    const NotionExport::Request whoAmI = NotionExport::whoAmIRequest();
+    QCOMPARE(whoAmI.method, QByteArray("GET"));
+    QCOMPARE(whoAmI.path, QStringLiteral("/users/me"));
+    QVERIFY(whoAmI.body.isEmpty());
+
+    // Hanya halaman, yang terakhir diubah lebih dulu; tanpa kata cari tidak ada "query"
+    const NotionExport::Request all = NotionExport::searchRequest(QStringLiteral("   "));
+    QCOMPARE(all.method, QByteArray("POST"));
+    QCOMPARE(all.path, QStringLiteral("/search"));
+    QCOMPARE(all.body.value("filter").toObject().value("property").toString(), QStringLiteral("object"));
+    QCOMPARE(all.body.value("filter").toObject().value("value").toString(), QStringLiteral("page"));
+    QCOMPARE(all.body.value("sort").toObject().value("timestamp").toString(), QStringLiteral("last_edited_time"));
+    QCOMPARE(all.body.value("sort").toObject().value("direction").toString(), QStringLiteral("descending"));
+    QVERIFY(!all.body.contains("query"));
+    QCOMPARE(NotionExport::searchRequest(QStringLiteral("  rapat ")).body.value("query").toString(),
+             QStringLiteral("rapat"));
+
+    // Halaman baru di bawah induknya: judul sebagai properti, isinya Markdown (bukan blok)
+    const QString markdown = QStringLiteral("# Spek\n\n- satu");
+    const NotionExport::Request create =
+        NotionExport::createPageRequest(QStringLiteral("page-1"), QStringLiteral("Spek login"), markdown);
+    QCOMPARE(create.method, QByteArray("POST"));
+    QCOMPARE(create.path, QStringLiteral("/pages"));
+    QCOMPARE(create.body.value("parent").toObject().value("page_id").toString(), QStringLiteral("page-1"));
+    QCOMPARE(create.body.value("properties").toObject().value("title").toObject().value("title").toArray().at(0)
+                 .toObject().value("text").toObject().value("content").toString(),
+             QStringLiteral("Spek login"));
+    QCOMPARE(create.body.value("markdown").toString(), markdown);
+    QVERIFY(!create.body.contains("children"));
+
+    QCOMPARE(NotionExport::pageTitle(QStringLiteral("  Apa\n risikonya?  ")), QStringLiteral("Apa risikonya?"));
+    const QString longTitle = NotionExport::pageTitle(QString(300, QLatin1Char('a')));
+    QCOMPARE(longTitle.size(), 120);
+    QVERIFY(longTitle.endsWith(QChar(0x2026)));
+}
+
+void TestSwarm::notionRepliesAreRead() {
+    const QJsonObject account = QJsonDocument::fromJson(R"({
+        "object": "user", "name": "Lassomoir", "type": "bot",
+        "bot": {"workspace_name": "Tim Produk"}
+    })").object();
+    QCOMPARE(NotionExport::parseAccount(account).name, QStringLiteral("Lassomoir"));
+    QCOMPARE(NotionExport::parseAccount(account).workspace, QStringLiteral("Tim Produk"));
+
+    // Judul ada di properti bertipe "title": bernama "title" di bawah halaman, bebas di data source.
+    // Hasil parsial, data source, halaman di tempat sampah, dan yang tanpa judul ditangani.
+    const QJsonObject list = QJsonDocument::fromJson(R"({
+        "object": "list",
+        "results": [
+            {"object": "page", "id": "p1", "url": "https://www.notion.so/p1", "in_trash": false,
+             "icon": {"type": "emoji", "emoji": "📌"},
+             "properties": {"title": {"type": "title", "title": [{"plain_text": "Catatan "}, {"plain_text": "Proyek"}]}}},
+            {"object": "page", "id": "p2", "url": "https://www.notion.so/p2",
+             "properties": {"Status": {"type": "select"},
+                            "Nama": {"type": "title", "title": [{"plain_text": "Baris database"}]}}},
+            {"object": "page", "id": "p3"},
+            {"object": "data_source", "id": "d1", "properties": {}},
+            {"object": "page", "id": "p4", "in_trash": true,
+             "properties": {"title": {"type": "title", "title": [{"plain_text": "Dibuang"}]}}},
+            {"object": "page", "id": "p5", "properties": {"title": {"type": "title", "title": []}}}
+        ]
+    })").object();
+    const QList<NotionExport::Page> pages = NotionExport::parsePages(list);
+    QCOMPARE(pages.size(), 3);
+    QCOMPARE(pages.at(0).id, QStringLiteral("p1"));
+    QCOMPARE(pages.at(0).title, QStringLiteral("Catatan Proyek"));
+    QCOMPARE(pages.at(0).icon, QStringLiteral("📌"));
+    QCOMPARE(pages.at(0).url, QStringLiteral("https://www.notion.so/p1"));
+    QCOMPARE(pages.at(1).title, QStringLiteral("Baris database"));
+    QVERIFY(pages.at(1).icon.isEmpty());
+    QCOMPARE(pages.at(2).id, QStringLiteral("p5"));
+    QCOMPARE(pages.at(2).title, QStringLiteral("Tanpa judul"));
+
+    // Alasan gagal menyebut yang harus dilakukan pengguna, bukan kode HTTP-nya saja
+    const QJsonObject none;
+    QVERIFY(NotionExport::errorMessage(401, none, QString()).contains(QStringLiteral("File > Integrations")));
+    QVERIFY(NotionExport::errorMessage(403, none, QString()).contains(QStringLiteral("Insert content")));
+    QVERIFY(NotionExport::errorMessage(404, none, QString()).contains(QStringLiteral("Connections")));
+    QVERIFY(NotionExport::errorMessage(429, none, QString()).contains(QStringLiteral("Coba lagi")));
+    QVERIFY(NotionExport::errorMessage(503, none, QString()).contains(QStringLiteral("503")));
+    QVERIFY(NotionExport::errorMessage(0, none, QStringLiteral("Host not found")).contains(QStringLiteral("Host not found")));
+    const QJsonObject invalid{{QStringLiteral("code"), QStringLiteral("validation_error")},
+                              {QStringLiteral("message"), QStringLiteral("markdown too large")}};
+    QCOMPARE(NotionExport::errorMessage(400, invalid, QString()),
+             QStringLiteral("Notion menolak isinya: markdown too large"));
+}
+
+void TestSwarm::notionMarkdownFollowsNotionDialect() {
+    // Tabel pipa -> <table>: kepala tabel jadi baris kepala, baris pemisahnya hilang, sel yang kurang
+    // dikosongkan dan yang berlebih dibuang
+    const QString table = NotionExport::toNotionMarkdown(QStringLiteral(
+        "Sebelum\n"
+        "\n"
+        "| Risiko | Dampak |\n"
+        "|:-------|-------:|\n"
+        "| Token bocor | **Tinggi** |\n"
+        "| a \\| b |\n"
+        "| x | y | z |\n"
+        "\n"
+        "Sesudah"));
+    QCOMPARE(table, QStringLiteral(
+        "Sebelum\n"
+        "\n"
+        "<table header-row=\"true\">\n"
+        "\t<tr>\n"
+        "\t\t<td>Risiko</td>\n"
+        "\t\t<td>Dampak</td>\n"
+        "\t</tr>\n"
+        "\t<tr>\n"
+        "\t\t<td>Token bocor</td>\n"
+        "\t\t<td>**Tinggi**</td>\n"
+        "\t</tr>\n"
+        "\t<tr>\n"
+        "\t\t<td>a \\| b</td>\n"
+        "\t\t<td></td>\n"
+        "\t</tr>\n"
+        "\t<tr>\n"
+        "\t\t<td>x</td>\n"
+        "\t\t<td>y</td>\n"
+        "\t</tr>\n"
+        "</table>\n"
+        "\n"
+        "Sesudah"));
+
+    // Kalimat berisi "|" tanpa baris pemisah bukan tabel
+    QCOMPARE(NotionExport::toNotionMarkdown(QStringLiteral("a | b\nc | d")), QStringLiteral("a | b\nc | d"));
+
+    // Daftar bersarang: indentasi spasi (2, 3, atau 4) menjadi satu tab per tingkat; paragraf dan
+    // blok kode di bawah butir menjadi anaknya
+    const QString list = NotionExport::toNotionMarkdown(QStringLiteral(
+        "- satu\n"
+        "  - dua\n"
+        "      - tiga\n"
+        "  - dua lagi\n"
+        "\n"
+        "1. pertama\n"
+        "   lanjutan butir\n"
+        "   ```cpp\n"
+        "   int a = 1;\n"
+        "     int b = 2;\n"
+        "   ```\n"
+        "2. kedua\n"
+        "\n"
+        "Paragraf biasa\n"
+        "- [ ] daftar baru"));
+    QCOMPARE(list, QStringLiteral(
+        "- satu\n"
+        "\t- dua\n"
+        "\t\t- tiga\n"
+        "\t- dua lagi\n"
+        "\n"
+        "1. pertama\n"
+        "\tlanjutan butir\n"
+        "\t```cpp\n"
+        "\tint a = 1;\n"
+        "\t  int b = 2;\n"
+        "\t```\n"
+        "2. kedua\n"
+        "\n"
+        "Paragraf biasa\n"
+        "- [ ] daftar baru"));
+
+    // Blok kode tidak diubah, juga isinya yang mirip tabel, daftar, atau kutipan; garis pemisah
+    // bukan butir daftar
+    const QString code = QStringLiteral(
+        "```mermaid\n"
+        "graph TD\n"
+        "  A --> B\n"
+        "```\n"
+        "\n"
+        "~~~\n"
+        "| a | b |\n"
+        "|---|---|\n"
+        "  - bukan daftar\n"
+        "> bukan kutipan\n"
+        "~~~\n"
+        "\n"
+        "---\n"
+        "* * *");
+    QCOMPARE(NotionExport::toNotionMarkdown(code), code);
+
+    // Kutipan beberapa baris menjadi satu blok; baris kosong memisahkan dua kutipan
+    QCOMPARE(NotionExport::toNotionMarkdown(QStringLiteral("> satu\n> dua\n>\n> tiga\n\n> lain\nteks")),
+             QStringLiteral("> satu<br>dua<br><br>tiga\n\n> lain\nteks"));
+
+    // Akhir baris Windows tidak ikut terkirim
+    QCOMPARE(NotionExport::toNotionMarkdown(QStringLiteral("a\r\nb\r\n")), QStringLiteral("a\nb\n"));
 }
 
 void TestSwarm::claudeSessionAuthenticatesPerAccessMethod() {

@@ -271,6 +271,7 @@ CanvasPage *CanvasWorkspace::page(const QString &projectId) {
         createProposedTasks(projectId, stepId);
     });
     connect(page, &CanvasPage::openTaskRequested, this, &CanvasWorkspace::openTaskRequested);
+    connect(page, &CanvasPage::notionExportRequested, this, &CanvasWorkspace::notionExportRequested);
     connect(page, &CanvasPage::viewStored, this, [this, projectId]() { save(projectId); });
     connect(page, &CanvasPage::chatAskRequested, this,
             [this, projectId](const QString &question, const QStringList &contextIds, const QString &model) {
