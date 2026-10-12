@@ -19,12 +19,15 @@ class CanvasNodeItem;
 struct CanvasRoute;
 class QGraphicsPathItem;
 class QLabel;
+class QScrollBar;
 
 // Kanvas tak terbatas: grid titik tanpa tepi, geser (spasi + seret, tombol tengah, scroll touchpad),
 // zoom di titik kursor (Ctrl + scroll, pinch, tombol), seleksi kotak, dan garis sambungan yang ditarik
 // dari titik di tepi kartu. Garis menempel di sisi kartu yang menghadap kartu tujuannya dan ditata
 // ulang setiap kali ada kartu yang berpindah. Tampilan mengikuti CanvasModel lewat sinyalnya; setiap
 // perubahan dari pengguna dikirim sebagai intent ke model, termasuk posisi kartu setelah selesai digeser.
+// Selama ada kartu yang terpotong tepi tampilan, scrollbar tipis muncul di tepi itu; seretan yang
+// sampai ke tepi tampilan menggulung kanvas ke arah itu.
 class CanvasView : public QGraphicsView {
     Q_OBJECT
 
@@ -98,6 +101,8 @@ protected:
     void dragMoveEvent(QDragMoveEvent *event) override;
     void dropEvent(QDropEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
+    void scrollContentsBy(int dx, int dy) override;
 
 private:
     void rebuild();
@@ -113,6 +118,15 @@ private:
     void setZoomLevel(qreal zoom);
     void applyZoom(qreal zoom, const QPoint &anchor);
     void scrollBy(const QPointF &delta);
+    // Scrollbar mengambang: jangkauannya kartu-kartu di kanvas ditambah tampilan sekarang, dan hanya
+    // tampil di sumbu yang kartunya terpotong tepi tampilan atau berada di luarnya
+    void syncScrollBars();
+    // Seretan tombol kiri (kotak seleksi, kartu, ukuran kartu, garis baru) yang sampai ke tepi tampilan
+    // menggulung kanvas ke arah tepi itu selama kursor bertahan di sana
+    void trackEdgeDrag(const QPoint &viewportPos);
+    QPointF edgeScrollSpeed() const;   // px/detik per sumbu
+    void edgeScrollStep();
+    void stopEdgeScroll();
     bool isEditingText() const;
     CanvasNodeItem *nodeAt(const QPoint &viewportPos) const;
     CanvasEdgeItem *edgeAt(const QPoint &viewportPos) const;
@@ -137,12 +151,23 @@ private:
     ThumbnailProvider m_thumbnails;
     QLabel *m_emptyHint;
     QHash<QWidget *, Qt::Corner> m_overlays;
+    QScrollBar *m_hBar;
+    QScrollBar *m_vBar;
     qreal m_zoom = 1.0;
 
     enum class Drag { None, Pan, Connect };
     Drag m_drag = Drag::None;
     QPoint m_lastPos;
     bool m_spaceHeld = false;
+
+    // Seretan tombol kiri yang sedang berjalan, posisi dalam koordinat viewport
+    bool m_edgeDrag = false;
+    QPoint m_edgePos;
+    QPoint m_edgeLow;               // posisi kursor paling kiri/atas dan
+    QPoint m_edgeHigh;              // paling kanan/bawah sejak tombol ditekan
+    QPointF m_edgeCarry;            // pecahan piksel yang belum digulirkan
+    QTimer m_edgeTimer;
+    QElapsedTimer m_edgeClock;
     CanvasNodeItem *m_connectFrom = nullptr;
     QGraphicsPathItem *m_connectLine = nullptr;
     bool m_routingPending = false;

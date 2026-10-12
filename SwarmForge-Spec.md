@@ -221,6 +221,8 @@ Aturan:
    Kartu referensi dan langkah AI berpita warna jenisnya di puncak kartu; pita itu memuat nama jenis dan status selama masih ada tempat untuk dua baris judul, selain itu tinggal garis warna. Judul yang tetap tidak muat memakai huruf kecil (8 px di layar) sebelum dipotong. Catatan di bawah 72% dilukis sebagai ringkasan: baris pertamanya (bila tidak lebih dari 90 karakter) menjadi judul tebal dan sisanya pratinjau tanpa tanda Markdown; pada zoom biasa teksnya apa adanya, sama seperti di editornya.
    Titik sambung, pegangan ubah ukuran, mata panah, dan daerah klik garis berukuran px layar, jadi tetap terlihat dan bisa dikenai saat diperkecil; pada kartu yang kecil di layar daerahnya ikut mengecil supaya kartunya masih bisa digeser.
 9. **Pratinjau Markdown.** Tombol **Pratinjau** di kepala panel Detail, atau klik kanan catatan › **Pratinjau Markdown**, membuka drawer (`CanvasPreviewDrawer`) berisi isi kartu terpilih dalam bentuk jadi: catatan (mengikuti ketikan di editor, juga yang belum tersimpan), dokumen artefak, atau hasil langkah AI. Drawer meluncur dari tepi kanan kanvas dan menimpanya tanpa menggeser tata letak; lebarnya 55% ruang di kiri panel kanan (420–720 px), atau seluruh ruang itu bila sempit, sehingga Pustaka ikut tertutup. Tombol perluas menutupi seluruh halaman di bawah toolbar; ✕, `Esc` di dalam drawer, atau tombol Pratinjau menutupnya.
+10. **Menggulir.** Kanvasnya tetap tanpa tepi, tetapi selama ada kartu yang terpotong tepi tampilan atau berada di luarnya, scrollbar ramping muncul di tepi bawah (mendatar) dan kanan (tegak) kanvas (`CanvasView::syncScrollBars`). Jangkauannya kartu-kartu di kanvas ditambah tampilan sekarang, bukan seluruh scene, jadi menariknya sampai ujung memperlihatkan kartu terluar dengan sisa ruang 48 px. Scrollbar itu mengambang seperti tombol kanvas lain: tidak mengurangi luas kanvas, dan hilang lagi begitu semua kartu terlihat utuh di sumbunya.
+    Seretan tombol kiri yang sampai ke tepi tampilan (kotak seleksi, kartu, pegangan ubah ukuran, garis baru) menggulung kanvas ke arah tepi itu selama kursor bertahan di sana. Jalurnya 32 px di sisi dalam tiap tepi; lajunya naik dari nol di batas dalam jalur ke 900 px/detik tepat di tepi, sampai dua kalinya saat kursor sudah di luar kanvas. Satu sumbu baru bergulir setelah kursor menempuh jarak seret ke arah tepinya sejak tombol ditekan, jadi klik di dekat tepi dan kartu terpotong yang ditarik masuk ke tampilan tidak menggulung. Geser dengan `Spasi` + seret atau tombol tengah tidak ikut aturan ini.
 
 #### Chat tanya jawab
 
@@ -240,7 +242,8 @@ Panel kanan bergantian antara **Detail** dan **Chat** (tombol di toolbar; tombol
 | `Ctrl+Enter` · `Ctrl+Shift+Enter` | Jalankan langkah AI terpilih · beserta hulunya |
 | `Del` · `Ctrl+D` · `Ctrl+A` | Hapus · duplikat · pilih semua |
 | Panah (`Shift` = 50 px) | Geser kartu terpilih |
-| `Spasi` + seret · tombol tengah | Geser kanvas |
+| `Spasi` + seret · tombol tengah · scroll (`Shift` + scroll = mendatar) · scrollbar di tepi kanvas | Geser kanvas |
+| Seret kartu, kotak seleksi, atau garis baru ke tepi tampilan | Kanvas bergulir ke arah itu |
 | `Ctrl` + scroll · `+` / `−` · `Ctrl+0` · `Ctrl+1` | Zoom di kursor · zoom · tampilkan semua · 100% |
 | `C` | Buka chat dengan kartu terpilih (atau seluruh kanvas) sebagai bahan |
 | `Esc` | Batalkan sambungan / kosongkan pilihan; di editor catatan: simpan |

@@ -316,6 +316,12 @@ private slots:
     // Kartu menampilkan teks yang masih terbaca di zoom berapa pun: yang tidak muat berakhir elipsis,
     // dan titik sambung serta daerah klik garis tidak ikut mengecil
     void canvasCardsShowWhatFitsAtAnyZoom();
+    // Kartu yang terpotong tepi tampilan memunculkan scrollbar di tepi itu, yang menggulung kanvas sampai
+    // kartunya terlihat utuh; Shift + scroll menggeser mendatar
+    void canvasScrollBarsReachCutOffCards();
+    // Kotak seleksi, kartu, ukuran kartu, dan garis baru yang diseret ke tepi tampilan menggulung kanvas
+    // ke arah itu; klik di dekat tepi, kartu yang ditarik masuk, dan geser dengan spasi tidak
+    void canvasScrollsWhenDragReachesEdge();
 
     // Notice Claude Code: belum terpasang / perlu update / belum login, dengan tombol buka link atau batal
     void runtimeCheckShowsNotice_data();
@@ -3871,6 +3877,21 @@ void TestGui::canvasFloatsCreateAndZoomButtons() {
     QTest::mouseDClick(level, Qt::LeftButton);
     QTest::mouseDClick(level->parentWidget(), Qt::LeftButton, {}, QPoint(2, 2));
     QCOMPARE(view->scene()->items().size(), items);
+
+    // Scrollbar kanvas, yang muncul selama ada kartu di luar tampilan, menempel di tepi bawah dan kanan:
+    // ramping, lewat di bawah pil zoom tanpa menimpanya
+    auto *across = view->findChild<QScrollBar *>(QStringLiteral("canvasScrollH"));
+    auto *upright = view->findChild<QScrollBar *>(QStringLiteral("canvasScrollV"));
+    QVERIFY(across && upright);
+    QVERIFY(!across->isVisible() && !upright->isVisible());
+    view->restoreView(view->mapToScene(view->viewport()->rect().center()) + QPointF(view->width(), view->height()), 1.0);
+    QVERIFY(across->isVisible() && upright->isVisible());
+    QVERIFY2(across->height() <= 12 && upright->width() <= 12,
+             qPrintable(QStringLiteral("%1 / %2").arg(across->height()).arg(upright->width())));
+    QVERIFY2(inView(across).top() > inView(level->parentWidget()).bottom(),
+             qPrintable(describe(inView(across)) + QStringLiteral(" | ") + describe(inView(level->parentWidget()))));
+    QVERIFY(!inView(across).intersects(inView(upright)));
+    QVERIFY(inView(upright).left() > inView(note).right());
 }
 
 void TestGui::canvasFitsBesidePinnedLieutenant() {
@@ -4495,6 +4516,297 @@ void TestGui::canvasConnectsFromAnySide() {
     QTest::mouseRelease(canvas, Qt::LeftButton, {}, body + QPoint(30, 10));
     QCOMPARE(model.board().edges.size(), 2);
     QCOMPARE(model.node(a)->pos, QPointF(-80, -65));
+}
+
+void TestGui::canvasScrollBarsReachCutOffCards() {
+    CanvasModel model(QStringLiteral("Demo"));
+    CanvasView view(model);
+    view.resize(900, 600);
+    view.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&view));
+    view.restoreView(QPointF(0, 0), 1.0);
+    QWidget *canvas = view.viewport();
+    auto *across = view.findChild<QScrollBar *>(QStringLiteral("canvasScrollH"));
+    auto *upright = view.findChild<QScrollBar *>(QStringLiteral("canvasScrollV"));
+    QVERIFY(across && upright);
+    const QString color = CanvasPalette::defaultNoteColor();
+    auto onScreen = [&view](const CanvasNodeItem *card) {
+        return view.mapFromScene(card->sceneCardRect()).boundingRect();
+    };
+    auto describe = [](const QRect &rect) {
+        return QStringLiteral("%1..%2 x %3..%4").arg(rect.left()).arg(rect.right()).arg(rect.top()).arg(rect.bottom());
+    };
+
+    // Kanvas kosong, lalu satu kartu yang terlihat utuh: tidak ada yang perlu digulir
+    QVERIFY(!across->isVisible() && !upright->isVisible());
+    const QString whole = model.addNote(QPointF(-110, -75), QStringLiteral("utuh"), color);
+    QTest::qWait(50);
+    QVERIFY(!across->isVisible() && !upright->isVisible());
+
+    // Kartu yang terpotong tepi kanan: scrollbar mendatar muncul di tepi bawah kanvas, yang tegak tidak
+    const QRectF shown = view.mapToScene(canvas->rect()).boundingRect();
+    const QString cut = model.addNote(QPointF(shown.right() - 60, -75), QStringLiteral("terpotong"), color);
+    CanvasNodeItem *card = canvasNode(view, cut);
+    QVERIFY(card);
+    QVERIFY(onScreen(card).right() > canvas->rect().right());
+    QTRY_VERIFY(across->isVisible());
+    QVERIFY(!upright->isVisible());
+    QCOMPARE(across->geometry().bottom(), canvas->geometry().bottom());
+    QCOMPARE(across->geometry().left(), canvas->geometry().left());
+    QVERIFY2(across->width() > canvas->width() - 40, qPrintable(QString::number(across->width())));
+    // Jangkauannya kartu-kartu itu, bukan scene yang tak terbatas: pegangannya cukup besar untuk diseret
+    QVERIFY2(across->maximum() - across->minimum() < canvas->width(),
+             qPrintable(QStringLiteral("%1..%2").arg(across->minimum()).arg(across->maximum())));
+
+    // Klik di jalur scrollbar, di kanan pegangannya: kanvas bergulir sampai kartu itu terlihat utuh.
+    // Kliknya tidak sampai ke kanvas: pilihan kartu tidak berubah
+    view.selectNodes({whole});
+    QTest::mouseClick(across, Qt::LeftButton, {}, QPoint(across->width() - 30, across->height() / 2));
+    QVERIFY2(canvas->rect().contains(onScreen(card)), qPrintable(describe(onScreen(card))));
+    QVERIFY2(canvas->rect().contains(onScreen(canvasNode(view, whole))), qPrintable(describe(onScreen(canvasNode(view, whole)))));
+    QCOMPARE(view.selectedNodeIds(), QStringList{whole});
+    // Tidak ada lagi yang terpotong: scrollbarnya hilang
+    QTRY_VERIFY(!across->isVisible());
+    QVERIFY(!upright->isVisible());
+
+    // Kartu jauh di bawah tampilan: scrollbar tegak di tepi kanan, digulir sampai ujung bawahnya
+    const QString below = model.addNote(QPointF(card->pos().x(), 1400), QStringLiteral("di bawah"), color);
+    CanvasNodeItem *low = canvasNode(view, below);
+    QVERIFY(low);
+    QTRY_VERIFY(upright->isVisible());
+    QVERIFY(!across->isVisible());
+    QCOMPARE(upright->geometry().right(), canvas->geometry().right());
+    QCOMPARE(upright->geometry().top(), canvas->geometry().top());
+    QVERIFY(!canvas->rect().intersects(onScreen(low)));
+    upright->setValue(upright->maximum());
+    QVERIFY2(canvas->rect().contains(onScreen(low)), qPrintable(describe(onScreen(low))));
+    // Kartu di atas sekarang yang berada di luar tampilan: scrollbarnya tetap ada untuk kembali
+    QVERIFY(upright->isVisible());
+    upright->setValue(upright->minimum());
+    QVERIFY2(canvas->rect().contains(onScreen(card)), qPrintable(describe(onScreen(card))));
+
+    // Scrollbar mengikuti kanvas yang digeser dengan cara lain, dan kartu yang dipindahkan
+    const int before = upright->value();
+    QWheelEvent wheel(QPointF(300, 300), QPointF(canvas->mapToGlobal(QPoint(300, 300))), QPoint(), QPoint(0, -120),
+                      Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+    QApplication::sendEvent(canvas, &wheel);
+    QVERIFY(view.verticalScrollBar()->value() > before);
+    QCOMPARE(upright->value(), view.verticalScrollBar()->value());
+    model.moveNodes({{below, QPointF(card->pos().x(), 100)}});
+    view.restoreView(view.mapToScene(canvas->rect().center()) - QPointF(0, 60), 1.0);
+    QTRY_VERIFY(!upright->isVisible());
+
+    // Shift + scroll menggeser mendatar; kartu yang jadi terpotong memunculkan scrollbarnya lagi
+    const int column = view.horizontalScrollBar()->value();
+    const int row = view.verticalScrollBar()->value();
+    for (int notch = 0; notch < 6; ++notch) {
+        QWheelEvent sideways(QPointF(300, 300), QPointF(canvas->mapToGlobal(QPoint(300, 300))), QPoint(), QPoint(0, -120),
+                             Qt::NoButton, Qt::ShiftModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(canvas, &sideways);
+    }
+    QVERIFY(view.horizontalScrollBar()->value() > column + 200);
+    QCOMPARE(view.verticalScrollBar()->value(), row);
+    QVERIFY(onScreen(canvasNode(view, whole)).left() < 0);
+    QVERIFY(across->isVisible());
+    QCOMPARE(across->value(), view.horizontalScrollBar()->value());
+
+    // Diperkecil sampai semuanya muat: tidak ada scrollbar
+    view.fitAll();
+    QVERIFY(!across->isVisible() && !upright->isVisible());
+}
+
+void TestGui::canvasScrollsWhenDragReachesEdge() {
+    CanvasModel model(QStringLiteral("Demo"));
+    CanvasView view(model);
+    view.resize(900, 600);
+    view.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&view));
+    view.restoreView(QPointF(0, 0), 1.0);
+    QWidget *canvas = view.viewport();
+    const QString color = CanvasPalette::defaultNoteColor();
+    const QString a = model.addNote(QPointF(-110, -75), QStringLiteral("asal"), color);
+    const QString far = model.addNote(QPointF(700, -75), QStringLiteral("di luar tampilan"), color);
+    CanvasNodeItem *origin = canvasNode(view, a);
+    CanvasNodeItem *distant = canvasNode(view, far);
+    QVERIFY(origin && distant);
+    const QScrollBar *across = view.horizontalScrollBar();
+    const QScrollBar *upright = view.verticalScrollBar();
+    const int right = canvas->rect().right();
+    const int bottom = canvas->rect().bottom();
+    auto scrolled = [across, upright]() { return QPoint(across->value(), upright->value()); };
+    // Kanvas diam: posisinya tidak berubah selama beberapa langkah timer gulir
+    auto still = [&scrolled]() {
+        const QPoint at = scrolled();
+        QTest::qWait(160);
+        return scrolled() == at;
+    };
+    // Gerakan mouse dengan tombol kiri tertekan, dikirim langsung ke kanvas: posisinya boleh di luar
+    // kanvas, seperti kursor yang diseret keluar selagi tombolnya ditahan
+    auto moveTo = [canvas](const QPoint &to) {
+        QMouseEvent move(QEvent::MouseMove, QPointF(to), QPointF(canvas->mapToGlobal(to)), Qt::NoButton, Qt::LeftButton,
+                         Qt::NoModifier);
+        QApplication::sendEvent(canvas, &move);
+    };
+    auto drag = [&moveTo](const QPoint &from, const QPoint &to) {
+        for (int step = 1; step <= 4; ++step) {
+            moveTo(from + (to - from) * step / 4);
+        }
+    };
+
+    // Kotak seleksi dari ruang kosong ke tepi kanan: kanvas bergulir ke kanan selama kursor diam di sana,
+    // dan kotaknya, yang berpangkal di titik kanvas tempat tombol ditekan, sampai ke kartu yang tadinya
+    // di luar tampilan
+    QVERIFY(view.mapFromScene(distant->sceneCardRect().topLeft()).x() > right);
+    const QPoint start(200, 450);
+    const QPointF anchor = view.mapToScene(start);
+    QPoint at(right - 5, 200);
+    QPoint from = scrolled();
+    QTest::mousePress(canvas, Qt::LeftButton, {}, start);
+    drag(start, at);
+    QTRY_VERIFY(view.selectedNodeIds().contains(far));
+    QVERIFY(view.selectedNodeIds().contains(a));
+    QVERIFY(scrolled().x() > from.x() + 200);
+    QCOMPARE(scrolled().y(), from.y());
+    QCOMPARE(view.rubberBandRect().topLeft(), QPoint(view.mapFromScene(anchor).x(), at.y()));
+    QCOMPARE(view.rubberBandRect().bottomRight(), QPoint(at.x(), start.y()));
+    // Kursor kembali ke tengah: berhenti; ke tepi lagi: lanjut; tombol dilepas: berhenti
+    moveTo(QPoint(450, 200));
+    QVERIFY(still());
+    moveTo(at);
+    from = scrolled();
+    QTRY_VERIFY(scrolled().x() > from.x() + 50);
+    QTest::mouseRelease(canvas, Qt::LeftButton, {}, at);
+    QVERIFY(still());
+    QVERIFY(view.selectedNodeIds().contains(far) && view.selectedNodeIds().contains(a));
+
+    // Kartu diseret ke tepi bawah: kanvas bergulir ke bawah dan kartunya tetap di bawah kursor, jadi
+    // terus berpindah di kanvas sampai tombol dilepas
+    view.selectNodes({});
+    view.restoreView(origin->sceneCardRect().center(), 1.0);
+    QPoint grip = view.mapFromScene(origin->sceneCardRect().center());
+    const QPointF hold = view.mapToScene(grip) - origin->pos();
+    at = QPoint(grip.x(), bottom - 4);
+    QTest::mousePress(canvas, Qt::LeftButton, {}, grip);
+    drag(grip, at);
+    from = scrolled();
+    const qreal dropped = origin->pos().y();
+    QTRY_VERIFY(scrolled().y() > from.y() + 200);
+    QCOMPARE(scrolled().x(), from.x());
+    QVERIFY(origin->pos().y() > dropped + 200);
+    QCOMPARE(origin->pos(), view.mapToScene(at) - hold);
+    // Kursor yang keluar dari jendela selagi tombolnya ditahan tidak melepaskan kartu dari kursor
+    QEvent leave(QEvent::Leave);
+    QApplication::sendEvent(canvas, &leave);
+    from = scrolled();
+    QTRY_VERIFY(scrolled().y() > from.y() + 100);
+    QCOMPARE(origin->pos(), view.mapToScene(at) - hold);
+    QTest::mouseRelease(canvas, Qt::LeftButton, {}, at);
+    QVERIFY(still());
+    QCOMPARE(model.node(a)->pos, origin->pos());
+    // Pojok kiri atas: kedua sumbu sekaligus, ke arah sebaliknya
+    view.restoreView(origin->sceneCardRect().center(), 1.0);
+    grip = view.mapFromScene(origin->sceneCardRect().center());
+    at = QPoint(6, 6);
+    QTest::mousePress(canvas, Qt::LeftButton, {}, grip);
+    drag(grip, at);
+    from = scrolled();
+    QTRY_VERIFY(scrolled().x() < from.x() - 100 && scrolled().y() < from.y() - 100);
+    // Kursor di luar tepi kiri: gulir ke kiri makin cepat, bukan berhenti. Sumbu tegaknya, yang
+    // kursornya masih di dalam jalur tepi atas, jadi pembandingnya
+    moveTo(QPoint(-40, 6));
+    from = scrolled();
+    QTRY_VERIFY(scrolled().y() < from.y() - 100);
+    const QPoint gone = from - scrolled();
+    QVERIFY2(gone.x() > gone.y() * 3 / 2, qPrintable(QStringLiteral("%1 x %2").arg(gone.x()).arg(gone.y())));
+    QTest::mouseRelease(canvas, Qt::LeftButton, {}, QPoint(-40, 6));
+    QVERIFY(still());
+    QCOMPARE(model.node(a)->pos, origin->pos());
+
+    // Kartu yang terpotong tepi kanan ditekan di jalur tepi itu lalu ditarik masuk: kanvas tidak
+    // bergulir, kartunya saja yang berpindah
+    view.selectNodes({});
+    view.restoreView(origin->sceneCardRect().center() - QPointF(right / 2.0 - 20, 0), 1.0);
+    grip = QPoint(right - 10, view.mapFromScene(origin->sceneCardRect().center()).y());
+    QVERIFY(origin->sceneCardRect().contains(view.mapToScene(grip)));
+    QVERIFY(view.mapFromScene(origin->sceneCardRect().bottomRight()).x() > right);
+    from = scrolled();
+    const QPointF parked = origin->pos();
+    QTest::mousePress(canvas, Qt::LeftButton, {}, grip);
+    moveTo(grip - QPoint(8, 0));
+    moveTo(grip - QPoint(18, 0));
+    QVERIFY(still());
+    moveTo(grip - QPoint(160, 0));
+    QTest::mouseRelease(canvas, Qt::LeftButton, {}, grip - QPoint(160, 0));
+    QCOMPARE(scrolled(), from);
+    QCOMPARE(model.node(a)->pos, parked - QPointF(160, 0));
+    // Klik di jalur tepi dengan kursor yang sedikit bergetar ke arah tepi: bukan seretan
+    view.restoreView(origin->sceneCardRect().center() - QPointF(right / 2.0 - 20, 0), 1.0);
+    from = scrolled();
+    QTest::mousePress(canvas, Qt::LeftButton, {}, grip);
+    moveTo(grip + QPoint(3, 1));
+    QVERIFY(still());
+    QTest::mouseRelease(canvas, Qt::LeftButton, {}, grip + QPoint(3, 1));
+    QCOMPARE(scrolled(), from);
+    // Ditekan di jalur tepi lalu diseret keluar melewati tepinya: bergulir
+    QTest::mousePress(canvas, Qt::LeftButton, {}, grip);
+    drag(grip, grip + QPoint(16, 0));
+    QTRY_VERIFY(scrolled().x() > from.x() + 100);
+    QTest::mouseRelease(canvas, Qt::LeftButton, {}, grip + QPoint(16, 0));
+    QVERIFY(still());
+
+    // Ukuran kartu: pojok kanan bawahnya diseret ke tepi kanan, kartunya terus melebar
+    view.selectNodes({});
+    view.restoreView(origin->sceneCardRect().center(), 1.0);
+    grip = view.mapFromScene(origin->sceneCardRect().bottomRight() - QPointF(4, 4));
+    at = QPoint(right - 4, grip.y());
+    const QPointF corner = origin->pos();
+    QTest::mousePress(canvas, Qt::LeftButton, {}, grip);
+    drag(grip, at);
+    from = scrolled();
+    const qreal width = origin->sceneCardRect().width();
+    QTRY_VERIFY(scrolled().x() > from.x() + 200);
+    QVERIFY(origin->sceneCardRect().width() > width + 200);
+    QTest::mouseRelease(canvas, Qt::LeftButton, {}, at);
+    QVERIFY(still());
+    QCOMPARE(origin->pos(), corner);
+    QCOMPARE(model.node(a)->size, origin->sceneCardRect().size());
+
+    // Garis baru (Alt + seret dari kartu) ke tepi kiri: ujung garisnya tetap di kursor selagi kanvas
+    // bergulir; Esc membatalkan garis dan gulirnya
+    view.restoreView(origin->sceneCardRect().center(), 1.0);
+    grip = view.mapFromScene(origin->sceneCardRect().center());
+    at = QPoint(5, grip.y());
+    QTest::mousePress(canvas, Qt::LeftButton, Qt::AltModifier, grip);
+    drag(grip, at);
+    from = scrolled();
+    QTRY_VERIFY(scrolled().x() < from.x() - 200);
+    const QGraphicsPathItem *line = nullptr;
+    const QList<QGraphicsItem *> items = view.scene()->items();
+    for (const QGraphicsItem *item : items) {
+        if (item->type() == QGraphicsPathItem::Type) {
+            line = static_cast<const QGraphicsPathItem *>(item);
+        }
+    }
+    QVERIFY(line);
+    QCOMPARE(line->path().pointAtPercent(1), view.mapToScene(at));
+    QTest::keyClick(&view, Qt::Key_Escape);
+    QVERIFY(still());
+    QTest::mouseRelease(canvas, Qt::LeftButton, {}, at);
+    QCOMPARE(model.board().edges.size(), 0);
+    QCOMPARE(model.board().nodes.size(), 2);
+
+    // Spasi + seret menggeser kanvas sejauh seretannya saja, juga saat kursor berhenti di tepi
+    view.setFocus();
+    QTest::keyPress(&view, Qt::Key_Space);
+    grip = QPoint(450, 300);
+    at = QPoint(right - 3, 300);
+    from = scrolled();
+    QTest::mousePress(canvas, Qt::LeftButton, {}, grip);
+    drag(grip, at);
+    QVERIFY(still());
+    QCOMPARE(scrolled(), from - QPoint(at.x() - grip.x(), 0));
+    QTest::mouseRelease(canvas, Qt::LeftButton, {}, at);
+    QTest::keyRelease(&view, Qt::Key_Space);
 }
 
 void TestGui::canvasCardsShowWhatFitsAtAnyZoom() {
