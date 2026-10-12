@@ -1,11 +1,16 @@
 #include "IntegrationsDialog.h"
 #include "AgentRuntime.h"
+#include "NotionAccess.h"
+#include "NotionClient.h"
 
+#include <QDesktopServices>
+#include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QUrl>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -13,6 +18,7 @@
 namespace {
 
 constexpr int kDialogWidth = 480;
+constexpr char kNotionIntegrationsUrl[] = "https://www.notion.so/profile/integrations";
 // Isi di bawah tiap pilihan sejajar dengan teks radio-nya, bukan dengan bulatannya:
 // bulatan 14px + jarak 8px (lihat styles.qss)
 constexpr int kOptionIndent = 22;
@@ -55,12 +61,25 @@ QLabel *hintLabel(const QString &text, QWidget *parent) {
     return label;
 }
 
+QPushButton *plainButton(const QString &text, const char *objectName, QWidget *parent) {
+    auto *button = new QPushButton(text, parent);
+    button->setObjectName(QLatin1String(objectName));
+    button->setCursor(Qt::PointingHandCursor);
+    button->setAutoDefault(false);
+    return button;
+}
+
+bool hasSpace(const QString &text) {
+    return std::any_of(text.cbegin(), text.cend(), [](QChar c) { return c.isSpace(); });
+}
+
 }
 
 IntegrationsDialog::IntegrationsDialog(const AgentAccess::Settings &current, AccountLogin *login, QWidget *parent)
     : QDialog(parent),
       m_current(current),
-      m_login(login) {
+      m_login(login),
+      m_savedNotionToken(NotionAccess::token()) {
     setObjectName(QStringLiteral("integrationsDialog"));
     setWindowTitle(QStringLiteral("Integrations"));
     m_login->setParent(this);
@@ -128,6 +147,50 @@ IntegrationsDialog::IntegrationsDialog(const AgentAccess::Settings &current, Acc
     keyBox->addWidget(keyHint);
     keyBox->addLayout(keyRow);
 
+    // Notion: tujuan tombol "Ke Notion", lepas dari cara agent masuk ke Claude
+    auto *separator = new QFrame(this);
+    separator->setObjectName(QStringLiteral("integrationsSeparator"));
+    separator->setFixedHeight(1);
+    auto *notionTitle = new QLabel(QStringLiteral("Notion"), this);
+    notionTitle->setObjectName(QStringLiteral("integrationsSection"));
+    QLabel *notionHint = hintLabel(
+        QStringLiteral("Tombol Ke Notion mengirim dokumen sebagai halaman baru. Buat integrasi internal di Notion, "
+                       "tempel tokennya di sini, lalu bagikan halaman tujuan ke integrasi itu (••• > Connections). "
+                       "Token disimpan di Windows Credential Manager."),
+        this);
+    m_notionToken = new QLineEdit(this);
+    m_notionToken->setObjectName(QStringLiteral("integrationsNotionToken"));
+    m_notionToken->setEchoMode(QLineEdit::Password);
+    auto *btnNotionReveal = plainButton(QStringLiteral("Tampilkan"), "btnIntegrationsNotionReveal", this);
+    btnNotionReveal->setCheckable(true);
+    m_btnNotionTest = plainButton(QStringLiteral("Tes koneksi"), "btnIntegrationsNotionTest", this);
+    m_btnNotionClear = plainButton(QStringLiteral("Hapus token"), "btnIntegrationsNotionClear", this);
+    auto *btnNotionCreate = plainButton(QStringLiteral("Buat token di Notion"), "btnIntegrationsNotionCreate", this);
+    btnNotionCreate->setToolTip(QString::fromLatin1(kNotionIntegrationsUrl));
+    m_notionStatus = new QLabel(this);
+    m_notionStatus->setObjectName(QStringLiteral("integrationsNotionStatus"));
+    // Isinya dari Notion (nama integrasi dan workspace): tampil apa adanya, bukan sebagai HTML
+    m_notionStatus->setTextFormat(Qt::PlainText);
+    m_notionStatus->setWordWrap(true);
+    m_notionStatus->hide();
+
+    auto *notionTokenRow = new QHBoxLayout();
+    notionTokenRow->setSpacing(8);
+    notionTokenRow->addWidget(m_notionToken, 1);
+    notionTokenRow->addWidget(btnNotionReveal);
+    auto *notionActions = new QHBoxLayout();
+    notionActions->setSpacing(8);
+    notionActions->addWidget(m_btnNotionTest);
+    notionActions->addWidget(m_btnNotionClear);
+    notionActions->addStretch(1);
+    notionActions->addWidget(btnNotionCreate);
+    auto *notionBox = new QVBoxLayout();
+    notionBox->setSpacing(6);
+    notionBox->addWidget(notionHint);
+    notionBox->addLayout(notionTokenRow);
+    notionBox->addLayout(notionActions);
+    notionBox->addWidget(m_notionStatus);
+
     m_error = new QLabel(this);
     m_error->setObjectName(QStringLiteral("integrationsError"));
     m_error->setTextFormat(Qt::PlainText);
@@ -160,6 +223,10 @@ IntegrationsDialog::IntegrationsDialog(const AgentAccess::Settings &current, Acc
     root->addSpacing(4);
     root->addWidget(m_useApiKey);
     root->addLayout(keyBox);
+    root->addSpacing(4);
+    root->addWidget(separator);
+    root->addWidget(notionTitle);
+    root->addLayout(notionBox);
     root->addWidget(m_error);
     root->addStretch(1);
     root->addLayout(actions);
@@ -180,6 +247,29 @@ IntegrationsDialog::IntegrationsDialog(const AgentAccess::Settings &current, Acc
         btnReveal->setText(on ? QStringLiteral("Sembunyikan") : QStringLiteral("Tampilkan"));
     });
     connect(m_btnLogin, &QPushButton::clicked, this, &IntegrationsDialog::toggleLogin);
+    connect(m_notionToken, &QLineEdit::textEdited, this, [this]() {
+        // Token baru diketik: penghapusan yang tadi diminta batal
+        m_removeNotionToken = false;
+        m_notionStatus->hide();
+        showError(QString());
+        refreshNotion();
+    });
+    connect(btnNotionReveal, &QPushButton::toggled, this, [this, btnNotionReveal](bool on) {
+        m_notionToken->setEchoMode(on ? QLineEdit::Normal : QLineEdit::Password);
+        btnNotionReveal->setText(on ? QStringLiteral("Sembunyikan") : QStringLiteral("Tampilkan"));
+    });
+    connect(m_btnNotionTest, &QPushButton::clicked, this, &IntegrationsDialog::testNotion);
+    connect(m_btnNotionClear, &QPushButton::clicked, this, [this]() {
+        m_removeNotionToken = true;
+        m_notionToken->clear();
+        m_notionStatus->setText(QStringLiteral("Token dihapus saat Simpan ditekan."));
+        m_notionStatus->show();
+        showError(QString());
+        refreshNotion();
+    });
+    connect(btnNotionCreate, &QPushButton::clicked, this, []() {
+        QDesktopServices::openUrl(QUrl(QString::fromLatin1(kNotionIntegrationsUrl)));
+    });
     connect(btnCancel, &QPushButton::clicked, this, &QDialog::reject);
     connect(btnSave, &QPushButton::clicked, this, &IntegrationsDialog::save);
 
@@ -203,8 +293,13 @@ IntegrationsDialog::IntegrationsDialog(const AgentAccess::Settings &current, Acc
     // Font dari stylesheet harus sudah terpasang sebelum tinggi teks dihitung
     ensurePolished();
     resize(kDialogWidth, 0);
+    refreshNotion();
     refreshLogin();
     m_login->refresh();
+}
+
+void IntegrationsDialog::focusNotionToken() {
+    m_notionToken->setFocus();
 }
 
 void IntegrationsDialog::fitHeight() {
@@ -244,11 +339,73 @@ void IntegrationsDialog::toggleLogin() {
     refreshLogin();
 }
 
+void IntegrationsDialog::refreshNotion() {
+    const bool saved = !m_savedNotionToken.isEmpty() && !m_removeNotionToken;
+    m_notionToken->setPlaceholderText(saved ? QStringLiteral("Tersimpan (%1) · isi untuk mengganti")
+                                                  .arg(AgentAccess::maskedKey(m_savedNotionToken))
+                                            : QStringLiteral("ntn_…"));
+    m_btnNotionClear->setEnabled(saved);
+    // Tokennya baru saja diganti atau dihapus: jawaban tes yang masih ditunggu bukan lagi tentangnya
+    delete m_notionTest;
+    m_notionTest = nullptr;
+    m_btnNotionTest->setEnabled(true);
+    fitHeight();
+}
+
+void IntegrationsDialog::testNotion() {
+    // Yang dites adalah yang akan berlaku setelah Simpan: ketikan, atau token tersimpan
+    QString token = m_notionToken->text().trimmed();
+    if (token.isEmpty() && !m_removeNotionToken) {
+        token = m_savedNotionToken;
+    }
+    m_notionStatus->hide();
+    if (token.isEmpty()) {
+        showError(QStringLiteral("Isi token Notion dulu."));
+        return;
+    }
+    if (hasSpace(token)) {
+        showError(QStringLiteral("Token Notion tidak boleh berisi spasi atau baris baru."));
+        return;
+    }
+    showError(QString());
+
+    // Jawaban tes sebelumnya tidak lagi ditunggu
+    delete m_notionTest;
+    m_notionTest = new NotionClient(token, this);
+    connect(m_notionTest, &NotionClient::verified, this, [this](const NotionExport::Account &account) {
+        QString text = account.name.isEmpty() ? QStringLiteral("Terhubung ke Notion")
+                                              : QStringLiteral("Terhubung sebagai %1").arg(account.name);
+        if (!account.workspace.isEmpty()) {
+            text += QStringLiteral(" · workspace %1").arg(account.workspace);
+        }
+        m_notionStatus->setText(text);
+        m_notionStatus->show();
+        m_btnNotionTest->setEnabled(true);
+        fitHeight();
+    });
+    connect(m_notionTest, &NotionClient::verifyFailed, this, [this](const QString &message) {
+        m_notionStatus->hide();
+        m_btnNotionTest->setEnabled(true);
+        showError(message);
+    });
+    m_notionStatus->setText(QStringLiteral("Menghubungi Notion…"));
+    m_notionStatus->show();
+    m_btnNotionTest->setEnabled(false);
+    fitHeight();
+    m_notionTest->verify();
+}
+
 void IntegrationsDialog::save() {
+    const QString notionToken = m_notionToken->text().trimmed();
+    if (hasSpace(notionToken)) {
+        showError(QStringLiteral("Token Notion tidak boleh berisi spasi atau baris baru."));
+        return;
+    }
+
     AgentAccess::Settings settings;
     if (m_useApiKey->isChecked()) {
         const QString typed = m_apiKey->text().trimmed();
-        if (std::any_of(typed.cbegin(), typed.cend(), [](QChar c) { return c.isSpace(); })) {
+        if (hasSpace(typed)) {
             showError(QStringLiteral("API key tidak boleh berisi spasi atau baris baru."));
             return;
         }
@@ -266,7 +423,22 @@ void IntegrationsDialog::save() {
         showError(QStringLiteral("API key tidak bisa disimpan: %1").arg(error));
         return;
     }
+    m_current = settings;
     emit accessSaved(settings.method);
+
+    // Kolom kosong = token Notion yang sudah tersimpan tetap dipakai
+    if (!notionToken.isEmpty() && notionToken != m_savedNotionToken) {
+        if (!NotionAccess::saveToken(notionToken, &error)) {
+            showError(QStringLiteral("Token Notion tidak bisa disimpan: %1").arg(error));
+            return;
+        }
+        // Halaman induk terakhir milik workspace token yang lama
+        NotionAccess::saveLastParent({});
+        emit notionSaved(true);
+    } else if (m_removeNotionToken && !m_savedNotionToken.isEmpty()) {
+        NotionAccess::clear();
+        emit notionSaved(false);
+    }
     accept();
 }
 

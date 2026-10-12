@@ -5,6 +5,7 @@
 #include "Theme.h"
 
 #include <QAction>
+#include <QApplication>
 #include <QContextMenuEvent>
 #include <QCursor>
 #include <QDragEnterEvent>
@@ -41,12 +42,34 @@ constexpr int kPulsePeriodMs = 1200;
 constexpr qreal kZoomSteps[] = {0.1, 0.25, 0.33, 0.5, 0.67, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0};
 // Jarak widget mengambang dari tepi kanvas
 constexpr int kOverlayInset = 12;
+// Ruang yang tersisa di luar kartu terluar saat scrollbar ditarik sampai ujungnya
+constexpr int kScrollPad = 48;
+// Seretan ke tepi tampilan: jalur selebar ini di sisi dalam tiap tepi menggulung kanvas. Lajunya naik
+// dari nol di batas dalam jalur ke kEdgeSpeed tepat di tepi, lalu sampai dua kalinya di luar tampilan.
+constexpr int kEdgeZone = 32;
+constexpr qreal kEdgeSpeed = 900.0;   // px/detik
+constexpr int kEdgeTickMs = 16;
 
 }
 
 CanvasView::CanvasView(CanvasModel &model, QWidget *parent)
     : QGraphicsView(parent), m_model(model), m_scene(new QGraphicsScene(this)) {
     setObjectName("canvasView");
+    // Scrollbar bawaan view menjangkau seluruh scene dan disembunyikan; dua scrollbar ini mengambang di
+    // atas kanvas dan hanya menjangkau kartu-kartunya. Dibuat paling dulu: view sudah bisa bergulir,
+    // dan menyelaraskannya, sejak scene dipasang.
+    m_hBar = new QScrollBar(Qt::Horizontal, this);
+    m_hBar->setObjectName("canvasScrollH");
+    m_vBar = new QScrollBar(Qt::Vertical, this);
+    m_vBar->setObjectName("canvasScrollV");
+    for (QScrollBar *bar : {m_hBar, m_vBar}) {
+        bar->hide();
+        bar->setContextMenuPolicy(Qt::PreventContextMenu);
+        connect(bar, &QScrollBar::sliderReleased, this, &CanvasView::syncScrollBars);
+    }
+    connect(m_hBar, &QScrollBar::valueChanged, horizontalScrollBar(), &QScrollBar::setValue);
+    connect(m_vBar, &QScrollBar::valueChanged, verticalScrollBar(), &QScrollBar::setValue);
+
     m_scene->setSceneRect(-kExtent, -kExtent, 2 * kExtent, 2 * kExtent);
     setScene(m_scene);
     setFrameShape(QFrame::NoFrame);
@@ -91,6 +114,8 @@ CanvasView::CanvasView(CanvasModel &model, QWidget *parent)
 
     m_pulseTimer.setInterval(40);
     connect(&m_pulseTimer, &QTimer::timeout, this, &CanvasView::updatePulse);
+    m_edgeTimer.setInterval(kEdgeTickMs);
+    connect(&m_edgeTimer, &QTimer::timeout, this, &CanvasView::edgeScrollStep);
 
     rebuild();
     setZoomLevel(m_zoom);
@@ -151,6 +176,7 @@ void CanvasView::rebuild() {
         }
     }
     updateEmptyHint();
+    syncScrollBars();
     emit selectionChanged();
 }
 
@@ -251,6 +277,8 @@ void CanvasView::routeEdges() {
     for (CanvasEdgeItem *edge : std::as_const(m_edges)) {
         edge->updatePath();
     }
+    // Kartu yang berpindah, bertambah, atau hilang juga mengubah jangkauan scrollbar
+    syncScrollBars();
 }
 
 void CanvasView::updateEmptyHint() {
@@ -289,6 +317,12 @@ void CanvasView::layoutOverlays() {
     if (!m_overlays.isEmpty() && minimumSize() != needed) {
         setMinimumSize(needed);
     }
+    // Scrollbar menempel di tepi bawah dan kanan; pojok kanan bawah dikosongkan supaya keduanya tidak bertemu
+    const QRect edge = viewport()->geometry();
+    const int tall = m_hBar->sizeHint().height();
+    const int wide = m_vBar->sizeHint().width();
+    m_hBar->setGeometry(edge.left(), edge.bottom() + 1 - tall, edge.width() - wide, tall);
+    m_vBar->setGeometry(edge.right() + 1 - wide, edge.top(), wide, edge.height() - tall);
 }
 
 QStringList CanvasView::selectedNodeIds() const {
@@ -499,6 +533,7 @@ void CanvasView::setZoomLevel(qreal zoom) {
     for (CanvasEdgeItem *edge : std::as_const(m_edges)) {
         edge->setViewScale(zoom);
     }
+    syncScrollBars();
 }
 
 void CanvasView::applyZoom(qreal zoom, const QPoint &anchor) {
@@ -512,6 +547,103 @@ void CanvasView::applyZoom(qreal zoom, const QPoint &anchor) {
 void CanvasView::scrollBy(const QPointF &delta) {
     horizontalScrollBar()->setValue(horizontalScrollBar()->value() + qRound(delta.x()));
     verticalScrollBar()->setValue(verticalScrollBar()->value() + qRound(delta.y()));
+}
+
+void CanvasView::scrollContentsBy(int dx, int dy) {
+    QGraphicsView::scrollContentsBy(dx, dy);
+    syncScrollBars();
+}
+
+void CanvasView::syncScrollBars() {
+    QRectF cards;
+    for (const CanvasNodeItem *item : std::as_const(m_nodes)) {
+        cards |= item->sceneCardRect();
+    }
+    const bool any = !m_nodes.isEmpty();
+    // Satuannya piksel layar, sama dengan scrollbar bawaan view: nilainya tepi kiri/atas tampilan
+    auto sync = [this, any](QScrollBar *bar, const QScrollBar *scroll, qreal first, qreal last, int page) {
+        const int value = scroll->value();
+        const int low = qFloor(first * m_zoom);
+        const int high = qCeil(last * m_zoom);
+        const QSignalBlocker blocker(bar);
+        // Selama pegangannya diseret jangkauannya tetap, supaya pegangan tidak lari dari kursor
+        if (!bar->isSliderDown()) {
+            bar->setRange(qMin(low - kScrollPad, value), qMax(high + kScrollPad, value + page) - page);
+            bar->setPageStep(page);
+            // Scroll di atas scrollbar selangkah dengan scroll di atas kanvas
+            bar->setSingleStep(qMax(1, int(kScrollPixelsPerNotch) / qMax(1, QApplication::wheelScrollLines())));
+        }
+        bar->setValue(value);
+        bar->setVisible(bar->isSliderDown() || (any && (low < value || high > value + page)));
+    };
+    sync(m_hBar, horizontalScrollBar(), cards.left(), cards.right(), viewport()->width());
+    sync(m_vBar, verticalScrollBar(), cards.top(), cards.bottom(), viewport()->height());
+}
+
+void CanvasView::trackEdgeDrag(const QPoint &viewportPos) {
+    m_edgePos = viewportPos;
+    m_edgeLow = QPoint(qMin(m_edgeLow.x(), viewportPos.x()), qMin(m_edgeLow.y(), viewportPos.y()));
+    m_edgeHigh = QPoint(qMax(m_edgeHigh.x(), viewportPos.x()), qMax(m_edgeHigh.y(), viewportPos.y()));
+    if (edgeScrollSpeed().isNull()) {
+        m_edgeTimer.stop();
+        m_edgeCarry = QPointF();
+    } else if (!m_edgeTimer.isActive()) {
+        m_edgeClock.start();
+        m_edgeTimer.start();
+    }
+}
+
+QPointF CanvasView::edgeScrollSpeed() const {
+    // Satu sumbu bergulir selama kursor berada di jalur tepinya dan, sejak tombol ditekan, sudah menempuh
+    // jarak seret ke arah tepi itu. Klik biasa di jalur tepi tidak menggulung, begitu juga kartu
+    // terpotong yang ditekan di sana lalu ditarik masuk ke tampilan.
+    const int travel = QApplication::startDragDistance();
+    auto speed = [travel](int at, int low, int high, int least, int most) {
+        const int before = low + kEdgeZone - at;     // kedalaman di jalur tepi kiri/atas
+        const int after = at - (high - kEdgeZone);   // kedalaman di jalur tepi kanan/bawah
+        if (before > 0 && most - at >= travel) {
+            return -kEdgeSpeed * qMin(qreal(before) / kEdgeZone, 2.0);
+        }
+        if (after > 0 && at - least >= travel) {
+            return kEdgeSpeed * qMin(qreal(after) / kEdgeZone, 2.0);
+        }
+        return 0.0;
+    };
+    const QRect area = viewport()->rect();
+    return QPointF(speed(m_edgePos.x(), area.left(), area.right(), m_edgeLow.x(), m_edgeHigh.x()),
+                   speed(m_edgePos.y(), area.top(), area.bottom(), m_edgeLow.y(), m_edgeHigh.y()));
+}
+
+void CanvasView::edgeScrollStep() {
+    // Tombol yang dilepas di luar jendela bisa tidak sampai ke kanvas sebagai event
+    if (!(QGuiApplication::mouseButtons() & Qt::LeftButton)) {
+        stopEdgeScroll();
+        return;
+    }
+    const qreal seconds = qMin<qint64>(m_edgeClock.restart(), 50) / 1000.0;
+    const QPointF want = edgeScrollSpeed() * seconds + m_edgeCarry;
+    const QPoint step(int(want.x()), int(want.y()));
+    m_edgeCarry = want - step;
+    if (step.isNull()) {
+        return;
+    }
+    scrollBy(step);
+    if (m_drag == Drag::Connect) {
+        updateConnection(mapToScene(m_edgePos));
+        return;
+    }
+    // Kanvas bergulir di bawah kursor yang diam: kotak seleksi, kartu yang diseret, atau kartu yang
+    // sedang diubah ukurannya dihitung ulang di posisi kursor yang sama. QGraphicsView mengulang gerakan
+    // mouse terakhir setiap kali bergulir, tetapi tidak lagi setelah kursor keluar dari jendela.
+    QMouseEvent move(QEvent::MouseMove, m_edgePos, viewport()->mapToGlobal(m_edgePos), Qt::NoButton, Qt::LeftButton,
+                     QGuiApplication::keyboardModifiers());
+    QGraphicsView::mouseMoveEvent(&move);
+}
+
+void CanvasView::stopEdgeScroll() {
+    m_edgeDrag = false;
+    m_edgeCarry = QPointF();
+    m_edgeTimer.stop();
 }
 
 bool CanvasView::event(QEvent *event) {
@@ -584,6 +716,7 @@ bool CanvasView::viewportEvent(QEvent *event) {
 void CanvasView::mousePressEvent(QMouseEvent *event) {
     const QPoint pos = event->position().toPoint();
     if (event->button() == Qt::MiddleButton || (event->button() == Qt::LeftButton && m_spaceHeld)) {
+        stopEdgeScroll();
         m_drag = Drag::Pan;
         m_lastPos = pos;
         viewport()->setCursor(Qt::ClosedHandCursor);
@@ -591,6 +724,9 @@ void CanvasView::mousePressEvent(QMouseEvent *event) {
         return;
     }
     if (event->button() == Qt::LeftButton) {
+        stopEdgeScroll();
+        m_edgeDrag = true;
+        m_edgePos = m_edgeLow = m_edgeHigh = pos;
         CanvasNodeItem *node = nodeAt(pos);
         if (node && !node->isEditing()) {
             const QPointF scenePos = mapToScene(pos);
@@ -615,6 +751,13 @@ void CanvasView::mouseMoveEvent(QMouseEvent *event) {
         event->accept();
         return;
     }
+    if (m_edgeDrag) {
+        if (event->buttons() & Qt::LeftButton) {
+            trackEdgeDrag(pos);
+        } else {
+            stopEdgeScroll();
+        }
+    }
     if (m_drag == Drag::Connect) {
         updateConnection(mapToScene(pos));
         event->accept();
@@ -624,6 +767,9 @@ void CanvasView::mouseMoveEvent(QMouseEvent *event) {
 }
 
 void CanvasView::mouseReleaseEvent(QMouseEvent *event) {
+    if (event->button() == Qt::LeftButton) {
+        stopEdgeScroll();
+    }
     if (m_drag == Drag::Pan && (event->button() == Qt::MiddleButton || event->button() == Qt::LeftButton)) {
         m_drag = Drag::None;
         if (m_spaceHeld) {
@@ -725,6 +871,7 @@ void CanvasView::keyPressEvent(QKeyEvent *event) {
     case Qt::Key_Escape:
         if (m_drag == Drag::Connect) {
             cancelConnection();
+            stopEdgeScroll();
         } else {
             m_scene->clearSelection();
         }
@@ -871,6 +1018,7 @@ void CanvasView::focusOutEvent(QFocusEvent *event) {
     if (m_drag == Drag::None) {
         viewport()->unsetCursor();
     }
+    stopEdgeScroll();
     QGraphicsView::focusOutEvent(event);
 }
 
@@ -1002,6 +1150,12 @@ void CanvasView::resizeEvent(QResizeEvent *event) {
     QGraphicsView::resizeEvent(event);
     m_emptyHint->setGeometry(viewport()->rect().adjusted(40, 40, -40, -40));
     layoutOverlays();
+    syncScrollBars();
+}
+
+void CanvasView::hideEvent(QHideEvent *event) {
+    stopEdgeScroll();
+    QGraphicsView::hideEvent(event);
 }
 
 CanvasNodeItem *CanvasView::nodeAt(const QPoint &viewportPos) const {

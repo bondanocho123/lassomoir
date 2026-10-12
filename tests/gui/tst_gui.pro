@@ -1,4 +1,4 @@
-QT += widgets svg testlib concurrent core-private
+QT += widgets svg testlib concurrent network core-private
 CONFIG += no_private_qt_headers_warning
 
 CONFIG += console c++17 testcase
@@ -57,6 +57,10 @@ SOURCES += \
     ../../MarkdownView.cpp \
     ../../MermaidRenderer.cpp \
     ../../NewTaskDialog.cpp \
+    ../../NotionAccess.cpp \
+    ../../NotionClient.cpp \
+    ../../NotionExport.cpp \
+    ../../NotionExportDialog.cpp \
     ../../PromptComposer.cpp \
     ../../PromptEditor.cpp \
     ../../ResponseDrawer.cpp \
@@ -132,6 +136,10 @@ HEADERS += \
     ../../MarkdownView.h \
     ../../MermaidRenderer.h \
     ../../NewTaskDialog.h \
+    ../../NotionAccess.h \
+    ../../NotionClient.h \
+    ../../NotionExport.h \
+    ../../NotionExportDialog.h \
     ../../PromptComposer.h \
     ../../PromptEditor.h \
     ../../ResponseDrawer.h \

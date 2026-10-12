@@ -75,6 +75,19 @@ QFrame *separator(QWidget *parent) {
     return line;
 }
 
+// Jawaban chat sebagai dokumen utuh: pertanyaannya (dipendekkan) menjadi kutipan di atas jawabannya
+QString chatDocument(const CanvasChatMessage *question, const CanvasChatMessage &answer) {
+    const QString text = answer.text.trimmed();
+    if (!question) {
+        return text;
+    }
+    QString asked = question->text.simplified();
+    if (asked.size() > 200) {
+        asked = asked.left(199).trimmed() + QChar(0x2026);
+    }
+    return QStringLiteral("> %1\n\n%2").arg(asked, text);
+}
+
 }
 
 CanvasPage::CanvasPage(CanvasModel &model, CanvasAutomation &automation, CanvasChat &chat, MermaidRenderer *renderer,
@@ -347,6 +360,9 @@ CanvasPage::CanvasPage(CanvasModel &model, CanvasAutomation &automation, CanvasC
     connect(m_chatPanel, &CanvasChatPanel::askRequested, this, &CanvasPage::chatAskRequested);
     connect(m_chatPanel, &CanvasChatPanel::noteRequested, this, &CanvasPage::noteFromChat);
     connect(m_chatPanel, &CanvasChatPanel::expandRequested, this, &CanvasPage::openChatPreview);
+    // Ke Notion: dari gelembung jawaban, atau dari drawer pratinjau (jawaban maupun kartu)
+    connect(m_chatPanel, &CanvasChatPanel::exportRequested, this, &CanvasPage::exportChatAnswer);
+    connect(m_preview, &CanvasPreviewDrawer::exportRequested, this, &CanvasPage::exportPreview);
     // Percakapan dimulai ulang: jawaban yang sedang tampil di drawer ikut hilang
     connect(&m_chat, &CanvasChat::messagesReset, this, &CanvasPage::refreshPreview);
     connect(m_chatPanel, &CanvasChatPanel::contextActivated, this, [this](const QStringList &ids) {
@@ -592,15 +608,10 @@ void CanvasPage::noteFromChat(const QString &answerId) {
         return;
     }
     const CanvasChatMessage *question = m_chat.message(answer->replyTo);
-    QString text = answer->text.trimmed();
+    // Pertanyaannya jadi baris pertama: judul catatan di kanvas
+    const QString text = chatDocument(question, *answer);
     QStringList sources;
     if (question) {
-        // Pertanyaannya jadi baris pertama: judul catatan di kanvas
-        QString asked = question->text.simplified();
-        if (asked.size() > 200) {
-            asked = asked.left(199).trimmed() + QChar(0x2026);
-        }
-        text = QStringLiteral("> %1\n\n%2").arg(asked, text);
         for (const QString &id : question->contextIds) {
             if (m_model.node(id)) {
                 sources.append(id);
@@ -633,4 +644,26 @@ void CanvasPage::noteFromChat(const QString &answerId) {
     m_view->selectNodes({note});
     m_view->centerOnNode(note);
     showMessage(QStringLiteral("Jawaban chat disalin ke catatan baru di kanvas"));
+}
+
+void CanvasPage::exportChatAnswer(const QString &answerId) {
+    const CanvasChatMessage *answer = m_chat.message(answerId);
+    if (!answer || answer->text.trimmed().isEmpty()) {
+        return;
+    }
+    const CanvasChatMessage *question = m_chat.message(answer->replyTo);
+    emit notionExportRequested(question ? question->text : QStringLiteral("Jawaban agent"),
+                               chatDocument(question, *answer));
+}
+
+void CanvasPage::exportPreview() {
+    if (!m_previewAnswerId.isEmpty()) {
+        exportChatAnswer(m_previewAnswerId);
+        return;
+    }
+    if (m_inspector->nodeId().isEmpty()) {
+        return;
+    }
+    const QString title = m_inspector->previewTitle();
+    emit notionExportRequested(title.isEmpty() ? m_inspector->previewKind() : title, m_preview->markdown());
 }

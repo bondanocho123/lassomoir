@@ -26,6 +26,9 @@
 #include "MaintainabilityView.h"
 #include "MarkdownView.h"
 #include "MermaidRenderer.h"
+#include "NotionAccess.h"
+#include "NotionClient.h"
+#include "NotionExport.h"
 #include "PromptComposer.h"
 #include "PromptEditor.h"
 #include "ResponseDrawer.h"
@@ -313,6 +316,12 @@ private slots:
     // Kartu menampilkan teks yang masih terbaca di zoom berapa pun: yang tidak muat berakhir elipsis,
     // dan titik sambung serta daerah klik garis tidak ikut mengecil
     void canvasCardsShowWhatFitsAtAnyZoom();
+    // Kartu yang terpotong tepi tampilan memunculkan scrollbar di tepi itu, yang menggulung kanvas sampai
+    // kartunya terlihat utuh; Shift + scroll menggeser mendatar
+    void canvasScrollBarsReachCutOffCards();
+    // Kotak seleksi, kartu, ukuran kartu, dan garis baru yang diseret ke tepi tampilan menggulung kanvas
+    // ke arah itu; klik di dekat tepi, kartu yang ditarik masuk, dan geser dengan spasi tidak
+    void canvasScrollsWhenDragReachesEdge();
 
     // Notice Claude Code: belum terpasang / perlu update / belum login, dengan tombol buka link atau batal
     void runtimeCheckShowsNotice_data();
@@ -326,6 +335,12 @@ private slots:
     // File > Integrations: akses agent lewat login Claude Code atau API key Anthropic
     void integrationsSavesApiKeyAndReturnsToLogin();
     void integrationsRunsAccountLogin();
+
+    // Ekspor ke Notion: token di File > Integrations, tombol "Ke Notion" di jawaban chat, drawer
+    // pratinjau kanvas, dan drawer hasil agent; dialognya memilih halaman induk lalu mengirim
+    void integrationsStoresNotionToken();
+    void canvasOffersNotionExport();
+    void notionExportSendsPageUnderChosenParent();
 
     // Kartu yang stage-nya selesai diberi penanda "✓ Selesai"
     void finishedStageMarksCardDone();
@@ -3862,6 +3877,21 @@ void TestGui::canvasFloatsCreateAndZoomButtons() {
     QTest::mouseDClick(level, Qt::LeftButton);
     QTest::mouseDClick(level->parentWidget(), Qt::LeftButton, {}, QPoint(2, 2));
     QCOMPARE(view->scene()->items().size(), items);
+
+    // Scrollbar kanvas, yang muncul selama ada kartu di luar tampilan, menempel di tepi bawah dan kanan:
+    // ramping, lewat di bawah pil zoom tanpa menimpanya
+    auto *across = view->findChild<QScrollBar *>(QStringLiteral("canvasScrollH"));
+    auto *upright = view->findChild<QScrollBar *>(QStringLiteral("canvasScrollV"));
+    QVERIFY(across && upright);
+    QVERIFY(!across->isVisible() && !upright->isVisible());
+    view->restoreView(view->mapToScene(view->viewport()->rect().center()) + QPointF(view->width(), view->height()), 1.0);
+    QVERIFY(across->isVisible() && upright->isVisible());
+    QVERIFY2(across->height() <= 12 && upright->width() <= 12,
+             qPrintable(QStringLiteral("%1 / %2").arg(across->height()).arg(upright->width())));
+    QVERIFY2(inView(across).top() > inView(level->parentWidget()).bottom(),
+             qPrintable(describe(inView(across)) + QStringLiteral(" | ") + describe(inView(level->parentWidget()))));
+    QVERIFY(!inView(across).intersects(inView(upright)));
+    QVERIFY(inView(upright).left() > inView(note).right());
 }
 
 void TestGui::canvasFitsBesidePinnedLieutenant() {
@@ -4488,6 +4518,297 @@ void TestGui::canvasConnectsFromAnySide() {
     QCOMPARE(model.node(a)->pos, QPointF(-80, -65));
 }
 
+void TestGui::canvasScrollBarsReachCutOffCards() {
+    CanvasModel model(QStringLiteral("Demo"));
+    CanvasView view(model);
+    view.resize(900, 600);
+    view.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&view));
+    view.restoreView(QPointF(0, 0), 1.0);
+    QWidget *canvas = view.viewport();
+    auto *across = view.findChild<QScrollBar *>(QStringLiteral("canvasScrollH"));
+    auto *upright = view.findChild<QScrollBar *>(QStringLiteral("canvasScrollV"));
+    QVERIFY(across && upright);
+    const QString color = CanvasPalette::defaultNoteColor();
+    auto onScreen = [&view](const CanvasNodeItem *card) {
+        return view.mapFromScene(card->sceneCardRect()).boundingRect();
+    };
+    auto describe = [](const QRect &rect) {
+        return QStringLiteral("%1..%2 x %3..%4").arg(rect.left()).arg(rect.right()).arg(rect.top()).arg(rect.bottom());
+    };
+
+    // Kanvas kosong, lalu satu kartu yang terlihat utuh: tidak ada yang perlu digulir
+    QVERIFY(!across->isVisible() && !upright->isVisible());
+    const QString whole = model.addNote(QPointF(-110, -75), QStringLiteral("utuh"), color);
+    QTest::qWait(50);
+    QVERIFY(!across->isVisible() && !upright->isVisible());
+
+    // Kartu yang terpotong tepi kanan: scrollbar mendatar muncul di tepi bawah kanvas, yang tegak tidak
+    const QRectF shown = view.mapToScene(canvas->rect()).boundingRect();
+    const QString cut = model.addNote(QPointF(shown.right() - 60, -75), QStringLiteral("terpotong"), color);
+    CanvasNodeItem *card = canvasNode(view, cut);
+    QVERIFY(card);
+    QVERIFY(onScreen(card).right() > canvas->rect().right());
+    QTRY_VERIFY(across->isVisible());
+    QVERIFY(!upright->isVisible());
+    QCOMPARE(across->geometry().bottom(), canvas->geometry().bottom());
+    QCOMPARE(across->geometry().left(), canvas->geometry().left());
+    QVERIFY2(across->width() > canvas->width() - 40, qPrintable(QString::number(across->width())));
+    // Jangkauannya kartu-kartu itu, bukan scene yang tak terbatas: pegangannya cukup besar untuk diseret
+    QVERIFY2(across->maximum() - across->minimum() < canvas->width(),
+             qPrintable(QStringLiteral("%1..%2").arg(across->minimum()).arg(across->maximum())));
+
+    // Klik di jalur scrollbar, di kanan pegangannya: kanvas bergulir sampai kartu itu terlihat utuh.
+    // Kliknya tidak sampai ke kanvas: pilihan kartu tidak berubah
+    view.selectNodes({whole});
+    QTest::mouseClick(across, Qt::LeftButton, {}, QPoint(across->width() - 30, across->height() / 2));
+    QVERIFY2(canvas->rect().contains(onScreen(card)), qPrintable(describe(onScreen(card))));
+    QVERIFY2(canvas->rect().contains(onScreen(canvasNode(view, whole))), qPrintable(describe(onScreen(canvasNode(view, whole)))));
+    QCOMPARE(view.selectedNodeIds(), QStringList{whole});
+    // Tidak ada lagi yang terpotong: scrollbarnya hilang
+    QTRY_VERIFY(!across->isVisible());
+    QVERIFY(!upright->isVisible());
+
+    // Kartu jauh di bawah tampilan: scrollbar tegak di tepi kanan, digulir sampai ujung bawahnya
+    const QString below = model.addNote(QPointF(card->pos().x(), 1400), QStringLiteral("di bawah"), color);
+    CanvasNodeItem *low = canvasNode(view, below);
+    QVERIFY(low);
+    QTRY_VERIFY(upright->isVisible());
+    QVERIFY(!across->isVisible());
+    QCOMPARE(upright->geometry().right(), canvas->geometry().right());
+    QCOMPARE(upright->geometry().top(), canvas->geometry().top());
+    QVERIFY(!canvas->rect().intersects(onScreen(low)));
+    upright->setValue(upright->maximum());
+    QVERIFY2(canvas->rect().contains(onScreen(low)), qPrintable(describe(onScreen(low))));
+    // Kartu di atas sekarang yang berada di luar tampilan: scrollbarnya tetap ada untuk kembali
+    QVERIFY(upright->isVisible());
+    upright->setValue(upright->minimum());
+    QVERIFY2(canvas->rect().contains(onScreen(card)), qPrintable(describe(onScreen(card))));
+
+    // Scrollbar mengikuti kanvas yang digeser dengan cara lain, dan kartu yang dipindahkan
+    const int before = upright->value();
+    QWheelEvent wheel(QPointF(300, 300), QPointF(canvas->mapToGlobal(QPoint(300, 300))), QPoint(), QPoint(0, -120),
+                      Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+    QApplication::sendEvent(canvas, &wheel);
+    QVERIFY(view.verticalScrollBar()->value() > before);
+    QCOMPARE(upright->value(), view.verticalScrollBar()->value());
+    model.moveNodes({{below, QPointF(card->pos().x(), 100)}});
+    view.restoreView(view.mapToScene(canvas->rect().center()) - QPointF(0, 60), 1.0);
+    QTRY_VERIFY(!upright->isVisible());
+
+    // Shift + scroll menggeser mendatar; kartu yang jadi terpotong memunculkan scrollbarnya lagi
+    const int column = view.horizontalScrollBar()->value();
+    const int row = view.verticalScrollBar()->value();
+    for (int notch = 0; notch < 6; ++notch) {
+        QWheelEvent sideways(QPointF(300, 300), QPointF(canvas->mapToGlobal(QPoint(300, 300))), QPoint(), QPoint(0, -120),
+                             Qt::NoButton, Qt::ShiftModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(canvas, &sideways);
+    }
+    QVERIFY(view.horizontalScrollBar()->value() > column + 200);
+    QCOMPARE(view.verticalScrollBar()->value(), row);
+    QVERIFY(onScreen(canvasNode(view, whole)).left() < 0);
+    QVERIFY(across->isVisible());
+    QCOMPARE(across->value(), view.horizontalScrollBar()->value());
+
+    // Diperkecil sampai semuanya muat: tidak ada scrollbar
+    view.fitAll();
+    QVERIFY(!across->isVisible() && !upright->isVisible());
+}
+
+void TestGui::canvasScrollsWhenDragReachesEdge() {
+    CanvasModel model(QStringLiteral("Demo"));
+    CanvasView view(model);
+    view.resize(900, 600);
+    view.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&view));
+    view.restoreView(QPointF(0, 0), 1.0);
+    QWidget *canvas = view.viewport();
+    const QString color = CanvasPalette::defaultNoteColor();
+    const QString a = model.addNote(QPointF(-110, -75), QStringLiteral("asal"), color);
+    const QString far = model.addNote(QPointF(700, -75), QStringLiteral("di luar tampilan"), color);
+    CanvasNodeItem *origin = canvasNode(view, a);
+    CanvasNodeItem *distant = canvasNode(view, far);
+    QVERIFY(origin && distant);
+    const QScrollBar *across = view.horizontalScrollBar();
+    const QScrollBar *upright = view.verticalScrollBar();
+    const int right = canvas->rect().right();
+    const int bottom = canvas->rect().bottom();
+    auto scrolled = [across, upright]() { return QPoint(across->value(), upright->value()); };
+    // Kanvas diam: posisinya tidak berubah selama beberapa langkah timer gulir
+    auto still = [&scrolled]() {
+        const QPoint at = scrolled();
+        QTest::qWait(160);
+        return scrolled() == at;
+    };
+    // Gerakan mouse dengan tombol kiri tertekan, dikirim langsung ke kanvas: posisinya boleh di luar
+    // kanvas, seperti kursor yang diseret keluar selagi tombolnya ditahan
+    auto moveTo = [canvas](const QPoint &to) {
+        QMouseEvent move(QEvent::MouseMove, QPointF(to), QPointF(canvas->mapToGlobal(to)), Qt::NoButton, Qt::LeftButton,
+                         Qt::NoModifier);
+        QApplication::sendEvent(canvas, &move);
+    };
+    auto drag = [&moveTo](const QPoint &from, const QPoint &to) {
+        for (int step = 1; step <= 4; ++step) {
+            moveTo(from + (to - from) * step / 4);
+        }
+    };
+
+    // Kotak seleksi dari ruang kosong ke tepi kanan: kanvas bergulir ke kanan selama kursor diam di sana,
+    // dan kotaknya, yang berpangkal di titik kanvas tempat tombol ditekan, sampai ke kartu yang tadinya
+    // di luar tampilan
+    QVERIFY(view.mapFromScene(distant->sceneCardRect().topLeft()).x() > right);
+    const QPoint start(200, 450);
+    const QPointF anchor = view.mapToScene(start);
+    QPoint at(right - 5, 200);
+    QPoint from = scrolled();
+    QTest::mousePress(canvas, Qt::LeftButton, {}, start);
+    drag(start, at);
+    QTRY_VERIFY(view.selectedNodeIds().contains(far));
+    QVERIFY(view.selectedNodeIds().contains(a));
+    QVERIFY(scrolled().x() > from.x() + 200);
+    QCOMPARE(scrolled().y(), from.y());
+    QCOMPARE(view.rubberBandRect().topLeft(), QPoint(view.mapFromScene(anchor).x(), at.y()));
+    QCOMPARE(view.rubberBandRect().bottomRight(), QPoint(at.x(), start.y()));
+    // Kursor kembali ke tengah: berhenti; ke tepi lagi: lanjut; tombol dilepas: berhenti
+    moveTo(QPoint(450, 200));
+    QVERIFY(still());
+    moveTo(at);
+    from = scrolled();
+    QTRY_VERIFY(scrolled().x() > from.x() + 50);
+    QTest::mouseRelease(canvas, Qt::LeftButton, {}, at);
+    QVERIFY(still());
+    QVERIFY(view.selectedNodeIds().contains(far) && view.selectedNodeIds().contains(a));
+
+    // Kartu diseret ke tepi bawah: kanvas bergulir ke bawah dan kartunya tetap di bawah kursor, jadi
+    // terus berpindah di kanvas sampai tombol dilepas
+    view.selectNodes({});
+    view.restoreView(origin->sceneCardRect().center(), 1.0);
+    QPoint grip = view.mapFromScene(origin->sceneCardRect().center());
+    const QPointF hold = view.mapToScene(grip) - origin->pos();
+    at = QPoint(grip.x(), bottom - 4);
+    QTest::mousePress(canvas, Qt::LeftButton, {}, grip);
+    drag(grip, at);
+    from = scrolled();
+    const qreal dropped = origin->pos().y();
+    QTRY_VERIFY(scrolled().y() > from.y() + 200);
+    QCOMPARE(scrolled().x(), from.x());
+    QVERIFY(origin->pos().y() > dropped + 200);
+    QCOMPARE(origin->pos(), view.mapToScene(at) - hold);
+    // Kursor yang keluar dari jendela selagi tombolnya ditahan tidak melepaskan kartu dari kursor
+    QEvent leave(QEvent::Leave);
+    QApplication::sendEvent(canvas, &leave);
+    from = scrolled();
+    QTRY_VERIFY(scrolled().y() > from.y() + 100);
+    QCOMPARE(origin->pos(), view.mapToScene(at) - hold);
+    QTest::mouseRelease(canvas, Qt::LeftButton, {}, at);
+    QVERIFY(still());
+    QCOMPARE(model.node(a)->pos, origin->pos());
+    // Pojok kiri atas: kedua sumbu sekaligus, ke arah sebaliknya
+    view.restoreView(origin->sceneCardRect().center(), 1.0);
+    grip = view.mapFromScene(origin->sceneCardRect().center());
+    at = QPoint(6, 6);
+    QTest::mousePress(canvas, Qt::LeftButton, {}, grip);
+    drag(grip, at);
+    from = scrolled();
+    QTRY_VERIFY(scrolled().x() < from.x() - 100 && scrolled().y() < from.y() - 100);
+    // Kursor di luar tepi kiri: gulir ke kiri makin cepat, bukan berhenti. Sumbu tegaknya, yang
+    // kursornya masih di dalam jalur tepi atas, jadi pembandingnya
+    moveTo(QPoint(-40, 6));
+    from = scrolled();
+    QTRY_VERIFY(scrolled().y() < from.y() - 100);
+    const QPoint gone = from - scrolled();
+    QVERIFY2(gone.x() > gone.y() * 3 / 2, qPrintable(QStringLiteral("%1 x %2").arg(gone.x()).arg(gone.y())));
+    QTest::mouseRelease(canvas, Qt::LeftButton, {}, QPoint(-40, 6));
+    QVERIFY(still());
+    QCOMPARE(model.node(a)->pos, origin->pos());
+
+    // Kartu yang terpotong tepi kanan ditekan di jalur tepi itu lalu ditarik masuk: kanvas tidak
+    // bergulir, kartunya saja yang berpindah
+    view.selectNodes({});
+    view.restoreView(origin->sceneCardRect().center() - QPointF(right / 2.0 - 20, 0), 1.0);
+    grip = QPoint(right - 10, view.mapFromScene(origin->sceneCardRect().center()).y());
+    QVERIFY(origin->sceneCardRect().contains(view.mapToScene(grip)));
+    QVERIFY(view.mapFromScene(origin->sceneCardRect().bottomRight()).x() > right);
+    from = scrolled();
+    const QPointF parked = origin->pos();
+    QTest::mousePress(canvas, Qt::LeftButton, {}, grip);
+    moveTo(grip - QPoint(8, 0));
+    moveTo(grip - QPoint(18, 0));
+    QVERIFY(still());
+    moveTo(grip - QPoint(160, 0));
+    QTest::mouseRelease(canvas, Qt::LeftButton, {}, grip - QPoint(160, 0));
+    QCOMPARE(scrolled(), from);
+    QCOMPARE(model.node(a)->pos, parked - QPointF(160, 0));
+    // Klik di jalur tepi dengan kursor yang sedikit bergetar ke arah tepi: bukan seretan
+    view.restoreView(origin->sceneCardRect().center() - QPointF(right / 2.0 - 20, 0), 1.0);
+    from = scrolled();
+    QTest::mousePress(canvas, Qt::LeftButton, {}, grip);
+    moveTo(grip + QPoint(3, 1));
+    QVERIFY(still());
+    QTest::mouseRelease(canvas, Qt::LeftButton, {}, grip + QPoint(3, 1));
+    QCOMPARE(scrolled(), from);
+    // Ditekan di jalur tepi lalu diseret keluar melewati tepinya: bergulir
+    QTest::mousePress(canvas, Qt::LeftButton, {}, grip);
+    drag(grip, grip + QPoint(16, 0));
+    QTRY_VERIFY(scrolled().x() > from.x() + 100);
+    QTest::mouseRelease(canvas, Qt::LeftButton, {}, grip + QPoint(16, 0));
+    QVERIFY(still());
+
+    // Ukuran kartu: pojok kanan bawahnya diseret ke tepi kanan, kartunya terus melebar
+    view.selectNodes({});
+    view.restoreView(origin->sceneCardRect().center(), 1.0);
+    grip = view.mapFromScene(origin->sceneCardRect().bottomRight() - QPointF(4, 4));
+    at = QPoint(right - 4, grip.y());
+    const QPointF corner = origin->pos();
+    QTest::mousePress(canvas, Qt::LeftButton, {}, grip);
+    drag(grip, at);
+    from = scrolled();
+    const qreal width = origin->sceneCardRect().width();
+    QTRY_VERIFY(scrolled().x() > from.x() + 200);
+    QVERIFY(origin->sceneCardRect().width() > width + 200);
+    QTest::mouseRelease(canvas, Qt::LeftButton, {}, at);
+    QVERIFY(still());
+    QCOMPARE(origin->pos(), corner);
+    QCOMPARE(model.node(a)->size, origin->sceneCardRect().size());
+
+    // Garis baru (Alt + seret dari kartu) ke tepi kiri: ujung garisnya tetap di kursor selagi kanvas
+    // bergulir; Esc membatalkan garis dan gulirnya
+    view.restoreView(origin->sceneCardRect().center(), 1.0);
+    grip = view.mapFromScene(origin->sceneCardRect().center());
+    at = QPoint(5, grip.y());
+    QTest::mousePress(canvas, Qt::LeftButton, Qt::AltModifier, grip);
+    drag(grip, at);
+    from = scrolled();
+    QTRY_VERIFY(scrolled().x() < from.x() - 200);
+    const QGraphicsPathItem *line = nullptr;
+    const QList<QGraphicsItem *> items = view.scene()->items();
+    for (const QGraphicsItem *item : items) {
+        if (item->type() == QGraphicsPathItem::Type) {
+            line = static_cast<const QGraphicsPathItem *>(item);
+        }
+    }
+    QVERIFY(line);
+    QCOMPARE(line->path().pointAtPercent(1), view.mapToScene(at));
+    QTest::keyClick(&view, Qt::Key_Escape);
+    QVERIFY(still());
+    QTest::mouseRelease(canvas, Qt::LeftButton, {}, at);
+    QCOMPARE(model.board().edges.size(), 0);
+    QCOMPARE(model.board().nodes.size(), 2);
+
+    // Spasi + seret menggeser kanvas sejauh seretannya saja, juga saat kursor berhenti di tepi
+    view.setFocus();
+    QTest::keyPress(&view, Qt::Key_Space);
+    grip = QPoint(450, 300);
+    at = QPoint(right - 3, 300);
+    from = scrolled();
+    QTest::mousePress(canvas, Qt::LeftButton, {}, grip);
+    drag(grip, at);
+    QVERIFY(still());
+    QCOMPARE(scrolled(), from - QPoint(at.x() - grip.x(), 0));
+    QTest::mouseRelease(canvas, Qt::LeftButton, {}, at);
+    QTest::keyRelease(&view, Qt::Key_Space);
+}
+
 void TestGui::canvasCardsShowWhatFitsAtAnyZoom() {
     CanvasModel model(QStringLiteral("Demo"));
     CanvasView view(model);
@@ -4874,6 +5195,584 @@ void TestGui::integrationsSavesApiKeyAndReturnsToLogin() {
     QCOMPARE(AgentAccess::load().method, AgentAccess::Method::Login);
     QCOMPARE(SecretStore::read(secretName), QString());
     QVERIFY(consoleText().contains(QStringLiteral("Akses agent: login Claude Code")));
+}
+
+namespace {
+
+QJsonObject notionPage(const QString &id, const QString &title) {
+    const QJsonArray text{QJsonObject{{QStringLiteral("plain_text"), title}}};
+    return QJsonObject{
+        {QStringLiteral("object"), QStringLiteral("page")},
+        {QStringLiteral("id"), id},
+        {QStringLiteral("url"), QStringLiteral("https://www.notion.so/") + id},
+        {QStringLiteral("properties"),
+         QJsonObject{{QStringLiteral("title"),
+                      QJsonObject{{QStringLiteral("type"), QStringLiteral("title")}, {QStringLiteral("title"), text}}}}},
+    };
+}
+
+// Notion palsu: selama hidup, setiap permintaan NotionClient dicatat dan dijawab di siklus event
+// berikutnya (seperti jaringan) tanpa ada yang terkirim keluar. /search menyaring `pages` menurut
+// kata carinya; status tiap jawaban bisa diganti test.
+class FakeNotion {
+public:
+    struct Sent {
+        NotionExport::Request request;
+        QString token;
+    };
+
+    FakeNotion() {
+        NotionClient::setTransport([this](const NotionExport::Request &request, const QString &token,
+                                          NotionClient::Callback done) {
+            sent.append({request, token});
+            const NotionClient::Reply reply = answer(request);
+            QTimer::singleShot(0, qApp, [done, reply]() { done(reply); });
+        });
+    }
+    ~FakeNotion() { NotionClient::setTransport({}); }
+
+    QList<Sent> sent;
+    QJsonArray pages;          // halaman yang dibagikan ke integrasi
+    int accountStatus = 200;
+    int searchStatus = 200;
+    int createStatus = 200;
+
+private:
+    NotionClient::Reply answer(const NotionExport::Request &request) const {
+        NotionClient::Reply reply;
+        if (request.path == QLatin1String("/users/me")) {
+            reply.status = accountStatus;
+            reply.body = QJsonObject{
+                {QStringLiteral("name"), QStringLiteral("Lassomoir Ekspor")},
+                {QStringLiteral("bot"), QJsonObject{{QStringLiteral("workspace_name"), QStringLiteral("Tim Produk")}}},
+            };
+        } else if (request.path == QLatin1String("/search")) {
+            reply.status = searchStatus;
+            const QString query = request.body.value(QLatin1String("query")).toString();
+            QJsonArray results;
+            for (const QJsonValue &page : pages) {
+                if (NotionExport::parsePage(page.toObject()).title.contains(query, Qt::CaseInsensitive)) {
+                    results.append(page);
+                }
+            }
+            reply.body = QJsonObject{{QStringLiteral("object"), QStringLiteral("list")}, {QStringLiteral("results"), results}};
+        } else if (request.path == QLatin1String("/pages")) {
+            reply.status = createStatus;
+            reply.body = notionPage(QStringLiteral("new-page"), QString());
+        }
+        if (reply.status != 200) {
+            reply.body = QJsonObject{{QStringLiteral("object"), QStringLiteral("error")},
+                                     {QStringLiteral("status"), reply.status},
+                                     {QStringLiteral("message"), QStringLiteral("ditolak server palsu")}};
+        }
+        return reply;
+    }
+};
+
+}
+
+void TestGui::integrationsStoresNotionToken() {
+#ifndef Q_OS_WIN
+    QSKIP("Token Notion disimpan di Windows Credential Manager");
+#endif
+    // Token test tersimpan sebagai "LassomoirGuiTest/notion-token", terpisah dari milik aplikasi
+    const auto restore = qScopeGuard([]() { NotionAccess::clear(); });
+    NotionAccess::clear();
+    FakeNotion notion;
+
+    struct Form {
+        QLineEdit *token = nullptr;
+        QPushButton *test = nullptr;
+        QPushButton *clear = nullptr;
+        QLabel *status = nullptr;
+        QLabel *error = nullptr;
+        QPushButton *save = nullptr;
+        QPushButton *cancel = nullptr;
+        bool complete() const { return token && test && clear && status && error && save && cancel; }
+    };
+    auto formOf = [](QDialog *dialog) {
+        Form form;
+        if (dialog) {
+            form.token = dialog->findChild<QLineEdit *>(QStringLiteral("integrationsNotionToken"));
+            form.test = dialog->findChild<QPushButton *>(QStringLiteral("btnIntegrationsNotionTest"));
+            form.clear = dialog->findChild<QPushButton *>(QStringLiteral("btnIntegrationsNotionClear"));
+            form.status = dialog->findChild<QLabel *>(QStringLiteral("integrationsNotionStatus"));
+            form.error = dialog->findChild<QLabel *>(QStringLiteral("integrationsError"));
+            form.save = dialog->findChild<QPushButton *>(QStringLiteral("btnIntegrationsSave"));
+            form.cancel = dialog->findChild<QPushButton *>(QStringLiteral("btnIntegrationsCancel"));
+        }
+        return form;
+    };
+
+    QPointer<QDialog> dialog = openIntegrations();
+    Form form = formOf(dialog);
+    QVERIFY(form.complete());
+
+    // Belum ada token: kolomnya tersembunyi seperti password, tidak ada yang bisa dihapus
+    QCOMPARE(form.token->echoMode(), QLineEdit::Password);
+    QCOMPARE(form.token->placeholderText(), QStringLiteral("ntn_…"));
+    QVERIFY(!form.clear->isEnabled());
+    QVERIFY(!form.status->isVisible());
+
+    // Tes tanpa token atau dengan token salah tempel: ditolak tanpa menghubungi Notion
+    form.test->click();
+    QVERIFY2(form.error->isVisible() && form.error->text().contains(QStringLiteral("Isi token")),
+             qPrintable(form.error->text()));
+    form.token->setText(QStringLiteral("ntn salah tempel"));
+    form.test->click();
+    QVERIFY2(form.error->text().contains(QStringLiteral("spasi")), qPrintable(form.error->text()));
+    form.save->click();
+    QVERIFY(dialog && dialog->isVisible());
+    QVERIFY(notion.sent.isEmpty());
+
+    // Token yang ditolak Notion: alasannya tampil, tombolnya bisa dipakai lagi
+    notion.accountStatus = 401;
+    form.token->setText(QStringLiteral("ntn_ditolak"));
+    form.test->click();
+    QVERIFY(!form.test->isEnabled());
+    QTRY_VERIFY(form.test->isEnabled());
+    QVERIFY2(form.error->text().contains(QStringLiteral("ditolak")), qPrintable(form.error->text()));
+    QVERIFY(!form.status->isVisible());
+    QCOMPARE(notion.sent.last().request.path, QStringLiteral("/users/me"));
+    QCOMPARE(notion.sent.last().token, QStringLiteral("ntn_ditolak"));
+
+    // Token yang benar (spasi di tepi dibuang): nama integrasi dan workspace-nya tampil
+    notion.accountStatus = 200;
+    const QString token = QStringLiteral("ntn_gui_token_4321");
+    form.token->setText(QStringLiteral("  %1 ").arg(token));
+    form.test->click();
+    QTRY_VERIFY(form.status->isVisible() && form.status->text().contains(QStringLiteral("Lassomoir Ekspor")));
+    QVERIFY(form.status->text().contains(QStringLiteral("Tim Produk")));
+    QVERIFY(!form.error->isVisible());
+    QCOMPARE(notion.sent.last().token, token);
+    // Tes saja belum menyimpan apa pun
+    QVERIFY(NotionAccess::token().isEmpty());
+
+    // Simpan: token masuk Credential Manager, pilihan akses Claude tidak berubah, konsol tanpa tokennya
+    form.save->click();
+    QTRY_VERIFY(!dialog || !dialog->isVisible());
+    QCOMPARE(NotionAccess::token(), token);
+    QCOMPARE(SecretStore::read(QStringLiteral("notion-token")), token);
+    QCOMPARE(AgentAccess::load().method, AgentAccess::Method::Login);
+    QVERIFY2(consoleText().contains(QStringLiteral("Notion: token disimpan")), qPrintable(consoleText()));
+    QVERIFY(!consoleText().contains(QStringLiteral("ntn_")));
+
+    // Dibuka lagi: kolomnya kosong dan hanya ujung token yang disebut; Tes memakai token tersimpan
+    dialog = openIntegrations();
+    form = formOf(dialog);
+    QVERIFY(form.complete());
+    QVERIFY(form.token->text().isEmpty());
+    QVERIFY2(form.token->placeholderText().contains(QStringLiteral("…4321")), qPrintable(form.token->placeholderText()));
+    QVERIFY(!form.token->placeholderText().contains(QStringLiteral("gui_token")));
+    QVERIFY(form.clear->isEnabled());
+    const int sentBefore = int(notion.sent.size());
+    form.test->click();
+    QTRY_VERIFY(form.status->text().contains(QStringLiteral("Terhubung")));
+    QCOMPARE(int(notion.sent.size()), sentBefore + 1);
+    QCOMPARE(notion.sent.last().token, token);
+
+    // Hapus token baru berlaku saat Simpan: Batal mempertahankannya
+    form.clear->click();
+    QVERIFY(!form.clear->isEnabled());
+    QVERIFY2(form.status->text().contains(QStringLiteral("Simpan")), qPrintable(form.status->text()));
+    QCOMPARE(form.token->placeholderText(), QStringLiteral("ntn_…"));
+    form.cancel->click();
+    QTRY_VERIFY(!dialog || !dialog->isVisible());
+    QCOMPARE(NotionAccess::token(), token);
+
+    // Mengetik token baru setelah Hapus membatalkan penghapusan; halaman induk milik token lama dibuang
+    NotionAccess::saveLastParent({QStringLiteral("p1"), QStringLiteral("Catatan Proyek")});
+    dialog = openIntegrations();
+    form = formOf(dialog);
+    QVERIFY(form.complete());
+    form.clear->click();
+    const QString replacement = QStringLiteral("ntn_gui_baru_9999");
+    QTest::keyClicks(form.token, replacement);
+    QVERIFY(form.clear->isEnabled());
+    QVERIFY(!form.status->isVisible());
+    form.save->click();
+    QTRY_VERIFY(!dialog || !dialog->isVisible());
+    QCOMPARE(NotionAccess::token(), replacement);
+    QVERIFY(NotionAccess::lastParent().id.isEmpty());
+
+    // Simpan tanpa mengetik mempertahankan token itu
+    dialog = openIntegrations();
+    form = formOf(dialog);
+    QVERIFY(form.complete());
+    form.save->click();
+    QTRY_VERIFY(!dialog || !dialog->isVisible());
+    QCOMPARE(NotionAccess::token(), replacement);
+
+    // Hapus lalu Simpan: token hilang dari Credential Manager
+    dialog = openIntegrations();
+    form = formOf(dialog);
+    QVERIFY(form.complete());
+    form.clear->click();
+    form.save->click();
+    QTRY_VERIFY(!dialog || !dialog->isVisible());
+    QVERIFY(NotionAccess::token().isEmpty());
+    QCOMPARE(SecretStore::read(QStringLiteral("notion-token")), QString());
+    QVERIFY(consoleText().contains(QStringLiteral("Notion: token dihapus")));
+}
+
+void TestGui::canvasOffersNotionExport() {
+    CanvasModel model(QStringLiteral("proj-notion"));
+    CanvasAutomation automation(model, m_runtime, [](const QString &, QString *) { return std::nullopt; });
+    CanvasChat chat(model, m_runtime, [](const QStringList &, QString *) { return std::nullopt; });
+    CanvasPage page(model, automation, chat, &m_mermaid);
+    page.resize(1280, 720);
+    page.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&page));
+    QSignalSpy exported(&page, &CanvasPage::notionExportRequested);
+
+    auto message = [](const char *id, CanvasChatMessage::Role role, const QString &text) {
+        CanvasChatMessage result;
+        result.id = QLatin1String(id);
+        result.role = role;
+        result.text = text;
+        result.at = QDateTime::currentDateTimeUtc();
+        return result;
+    };
+    const QString markdown = QStringLiteral("## Ringkasan\n\n| Risiko | Dampak |\n|---|---|\n| Token habis | Tinggi |\n");
+    CanvasChatMessage question = message("q1", CanvasChatMessage::Role::User, QStringLiteral("Apa   risikonya?"));
+    question.contextLabel = QStringLiteral("Seluruh kanvas");
+    CanvasChatMessage answer = message("a1", CanvasChatMessage::Role::Agent, markdown);
+    answer.replyTo = question.id;
+    answer.outcome = QStringLiteral("success");
+    CanvasChatMessage failed = message("a2", CanvasChatMessage::Role::Agent, QStringLiteral("belum login"));
+    failed.replyTo = question.id;
+    failed.outcome = QStringLiteral("error");
+    chat.load({question, answer, failed});
+
+    auto *panel = page.findChild<CanvasChatPanel *>();
+    auto *inspector = page.findChild<CanvasInspector *>();
+    auto *drawer = page.findChild<CanvasPreviewDrawer *>();
+    auto *toggleChat = page.findChild<QPushButton *>(QStringLiteral("btnCanvasToggleChat"));
+    QVERIFY(panel && inspector && drawer && toggleChat);
+    auto *toggle = inspector->findChild<QPushButton *>(QStringLiteral("btnCanvasPreview"));
+    auto *rendered = drawer->findChild<MarkdownView *>();
+    auto *send = drawer->findChild<QPushButton *>(QStringLiteral("btnCanvasPreviewNotion"));
+    QVERIFY(toggle && rendered && send);
+    toggleChat->click();
+    QTRY_VERIFY(panel->isVisible());
+
+    auto actions = [panel](const QString &text) {
+        QList<QPushButton *> result;
+        const QList<QPushButton *> buttons = panel->findChildren<QPushButton *>(QStringLiteral("btnCanvasChatAction"));
+        for (QPushButton *button : buttons) {
+            if (button->text() == text) {
+                result.append(button);
+            }
+        }
+        return result;
+    };
+
+    // Hanya jawaban yang berhasil yang bisa dikirim; tombolnya muat di gelembung, di samping Perluas
+    QCOMPARE(actions(QStringLiteral("Ke Notion")).size(), 1);
+    QPushButton *toNotion = actions(QStringLiteral("Ke Notion")).first();
+    QTRY_VERIFY(toNotion->isVisible());
+    QVERIFY(!toNotion->toolTip().isEmpty());
+    const QRect panelRect(panel->mapTo(&page, QPoint(0, 0)), panel->size());
+    const QRect buttonRect(toNotion->mapTo(&page, QPoint(0, 0)), toNotion->size());
+    QVERIFY2(panelRect.contains(buttonRect),
+             qPrintable(QStringLiteral("tombol %1..%2, panel %3..%4")
+                            .arg(buttonRect.left()).arg(buttonRect.right()).arg(panelRect.left()).arg(panelRect.right())));
+
+    // Pertanyaannya jadi usulan judul dan kutipan di atas jawabannya
+    const QString document = QStringLiteral("> Apa risikonya?\n\n") + markdown.trimmed();
+    toNotion->click();
+    QCOMPARE(exported.size(), 1);
+    QCOMPARE(exported.last().at(0).toString(), question.text);
+    QCOMPARE(exported.last().at(1).toString(), document);
+
+    // Drawer pratinjau: tanpa dokumen tombolnya mati; dari jawaban yang diperluas isinya sama dengan
+    // yang dikirim dari gelembungnya
+    QVERIFY(!send->isEnabled());
+    QVERIFY(!send->toolTip().isEmpty());
+    actions(QStringLiteral("Perluas")).first()->click();
+    QVERIFY(drawer->isOpen() && send->isEnabled());
+    send->click();
+    QCOMPARE(exported.size(), 2);
+    QCOMPARE(exported.last().at(0).toString(), question.text);
+    QCOMPARE(exported.last().at(1).toString(), document);
+
+    // Panel chat sesempit-sempitnya: tombol yang tidak muat turun baris, tidak keluar dari panel
+    auto *splitter = page.findChild<QSplitter *>(QStringLiteral("canvasSplitter"));
+    auto *toggleDetail = page.findChild<QPushButton *>(QStringLiteral("btnCanvasToggleInspector"));
+    QVERIFY(splitter && toggleDetail);
+    splitter->setSizes({220, 1060, 0});
+    auto outside = [&]() -> QString {
+        const QRect area(panel->mapTo(&page, QPoint(0, 0)), panel->size());
+        const QList<QPushButton *> buttons = panel->findChildren<QPushButton *>(QStringLiteral("btnCanvasChatAction"));
+        for (QPushButton *button : buttons) {
+            const QRect rect(button->mapTo(&page, QPoint(0, 0)), button->size());
+            if (button->isVisible() && !area.contains(rect)) {
+                return QStringLiteral("%1 di %2..%3, panel %4..%5")
+                    .arg(button->text()).arg(rect.left()).arg(rect.right()).arg(area.left()).arg(area.right());
+            }
+        }
+        return QString();
+    };
+    QTRY_COMPARE(panel->width(), 260);
+    QTRY_VERIFY2(outside().isEmpty(), qPrintable(outside()));
+    QVERIFY(actions(QStringLiteral("Ke Notion")).first()->y() > actions(QStringLiteral("Jadikan catatan")).first()->y());
+
+    // Pratinjau kartu: yang dikirim isi catatan itu, dengan judul kartunya
+    toggleDetail->click();
+    CanvasView *view = page.view();
+    const QString noteId = view->addNoteAt(view->centerScenePos(), false);
+    QTRY_COMPARE(inspector->nodeId(), noteId);
+    QTRY_VERIFY(inspector->isVisible());
+    QPlainTextEdit *editor = nullptr;
+    const QList<QPlainTextEdit *> editors = inspector->findChildren<QPlainTextEdit *>(QStringLiteral("canvasInspectorText"));
+    for (QPlainTextEdit *candidate : editors) {
+        if (candidate->isVisible()) {
+            editor = candidate;
+        }
+    }
+    QVERIFY(editor);
+    const QString note = QStringLiteral("# Rencana rilis\n\n- uji\n- kirim\n");
+    editor->setPlainText(note);
+    inspector->commitText();
+    toggle->click();
+    QTRY_COMPARE(rendered->markdown(), note);
+    QVERIFY(send->isEnabled());
+    send->click();
+    QCOMPARE(exported.size(), 3);
+    QVERIFY(!exported.last().at(0).toString().isEmpty());
+    QCOMPARE(exported.last().at(0).toString(),
+             inspector->previewTitle().isEmpty() ? inspector->previewKind() : inspector->previewTitle());
+    QCOMPARE(exported.last().at(1).toString(), note);
+
+    // Tidak ada kartu terpilih: drawer tinggal petunjuk, tidak ada yang bisa dikirim
+    view->selectNodes({});
+    QTRY_VERIFY(!send->isEnabled());
+    send->click();
+    QCOMPARE(exported.size(), 3);
+}
+
+void TestGui::notionExportSendsPageUnderChosenParent() {
+#ifndef Q_OS_WIN
+    QSKIP("Token Notion disimpan di Windows Credential Manager");
+#endif
+    const auto restore = qScopeGuard([]() { NotionAccess::clear(); });
+    NotionAccess::clear();
+    FakeNotion notion;
+    notion.pages = {notionPage(QStringLiteral("p1"), QStringLiteral("Catatan Proyek")),
+                    notionPage(QStringLiteral("p2"), QStringLiteral("Rapat Mingguan"))};
+    m_openedUrls.clear();
+    QDesktopServices::setUrlHandler(QStringLiteral("https"), this, "recordOpenedUrl");
+    const auto unsetHandler = qScopeGuard([]() { QDesktopServices::unsetUrlHandler(QStringLiteral("https")); });
+
+    struct Form {
+        QLineEdit *title = nullptr;
+        QLineEdit *search = nullptr;
+        QListWidget *pages = nullptr;
+        QLabel *status = nullptr;
+        QLabel *error = nullptr;
+        QPushButton *send = nullptr;
+        QPushButton *open = nullptr;
+        QPushButton *cancel = nullptr;
+        bool complete() const { return title && search && pages && status && error && send && open && cancel; }
+    };
+    auto exportDialog = [this]() -> QDialog * {
+        const QList<QDialog *> dialogs = m_window->findChildren<QDialog *>(QStringLiteral("notionExportDialog"));
+        for (QDialog *dialog : dialogs) {
+            if (dialog->isVisible()) {
+                return dialog;
+            }
+        }
+        return nullptr;
+    };
+    auto formOf = [](QDialog *dialog) {
+        Form form;
+        if (dialog) {
+            form.title = dialog->findChild<QLineEdit *>(QStringLiteral("notionExportPageTitle"));
+            form.search = dialog->findChild<QLineEdit *>(QStringLiteral("notionExportSearch"));
+            form.pages = dialog->findChild<QListWidget *>(QStringLiteral("notionExportPages"));
+            form.status = dialog->findChild<QLabel *>(QStringLiteral("notionExportStatus"));
+            form.error = dialog->findChild<QLabel *>(QStringLiteral("notionExportError"));
+            form.send = dialog->findChild<QPushButton *>(QStringLiteral("btnNotionExportSend"));
+            form.open = dialog->findChild<QPushButton *>(QStringLiteral("btnNotionExportOpen"));
+            form.cancel = dialog->findChild<QPushButton *>(QStringLiteral("btnNotionExportCancel"));
+        }
+        return form;
+    };
+
+    // Selama run berjalan (Live) belum ada dokumen untuk dikirim; hasil yang tersimpan bisa
+    runButton(QStringLiteral("t3"))->click();
+    QTest::mouseClick(card(QStringLiteral("t3")), Qt::LeftButton);
+    ResponseDrawer *panel = drawer();
+    QVERIFY(panel && !panel->isHidden());
+    auto *toNotion = panel->findChild<QPushButton *>(QStringLiteral("btnDrawerNotion"));
+    QVERIFY(toNotion && !toNotion->toolTip().isEmpty());
+    QVERIFY(!toNotion->isEnabled());
+    const QString document = QStringLiteral("# Spek\n\n| Kriteria | Status |\n|---|---|\n| Login | Siap |\n");
+    m_runtime.sessions.last()->finishWith(successResult(document));
+    QTRY_VERIFY(toNotion->isEnabled());
+
+    // Tanpa token: yang terbuka File > Integrations, tidak ada yang dikirim
+    toNotion->click();
+    QTRY_VERIFY(integrationsDialog());
+    QVERIFY(!exportDialog());
+    QVERIFY(notion.sent.isEmpty());
+    QVERIFY2(consoleText().contains(QStringLiteral("[NOTION] Token Notion belum diisi")), qPrintable(consoleText()));
+    integrationsDialog()->reject();
+    QTRY_VERIFY(!integrationsDialog());
+
+    // Dengan token: dialog kirim berisi usulan judul dan halaman yang dibagikan ke integrasi
+    const QString token = QStringLiteral("ntn_gui_ekspor_1111");
+    QVERIFY(NotionAccess::saveToken(token));
+    toNotion->click();
+    QTRY_VERIFY(exportDialog());
+    QPointer<QDialog> dialog = exportDialog();
+    Form form = formOf(dialog);
+    QVERIFY(form.complete());
+    QCOMPARE(form.title->text(), QStringLiteral("Sederhanakan landing · SPECIFIER #1"));
+    QTRY_COMPARE(form.pages->count(), 2);
+    QCOMPARE(form.pages->item(0)->text(), QStringLiteral("Catatan Proyek"));
+    QCOMPARE(notion.sent.last().request.path, QStringLiteral("/search"));
+    QCOMPARE(notion.sent.last().token, token);
+    // Belum ada halaman induk yang dipilih, juga tidak ada yang terakhir dipakai
+    QVERIFY(!form.send->isEnabled());
+    QVERIFY(!form.open->isVisible() && !form.error->isVisible());
+
+    // Kata cari menyaring daftar; selama daftarnya belum datang tidak bisa mengirim
+    form.pages->setCurrentRow(0);
+    QVERIFY(form.send->isEnabled());
+    form.search->setText(QStringLiteral("rapat"));
+    QVERIFY(!form.send->isEnabled());
+    QTRY_COMPARE(form.pages->count(), 1);
+    QCOMPARE(form.pages->item(0)->text(), QStringLiteral("Rapat Mingguan"));
+    QCOMPARE(notion.sent.last().request.body.value(QLatin1String("query")).toString(), QStringLiteral("rapat"));
+    QVERIFY(!form.send->isEnabled());
+    form.search->setText(QStringLiteral("tidak ada"));
+    QTRY_COMPARE(form.pages->count(), 0);
+    QVERIFY2(form.status->isVisible() && form.status->text().contains(QStringLiteral("tidak ada")),
+             qPrintable(form.status->text()));
+    form.search->clear();
+    QTRY_COMPARE(form.pages->count(), 2);
+
+    // Judul wajib ada
+    form.pages->setCurrentRow(0);
+    QVERIFY(form.send->isEnabled());
+    form.title->clear();
+    QVERIFY(!form.send->isEnabled());
+    form.title->setText(QStringLiteral("  Spek   landing "));
+    QVERIFY(form.send->isEnabled());
+
+    // Ditolak Notion (halamannya tidak lagi dibagikan): alasannya tampil dan bisa dicoba lagi
+    notion.createStatus = 404;
+    form.send->click();
+    QVERIFY(!form.send->isEnabled());
+    QTRY_VERIFY(form.error->isVisible());
+    QVERIFY2(form.error->text().contains(QStringLiteral("Connections")), qPrintable(form.error->text()));
+    QVERIFY(dialog && dialog->isVisible() && form.send->isEnabled());
+    QVERIFY(NotionAccess::lastParent().id.isEmpty());
+    QVERIFY(!consoleText().contains(QStringLiteral("Terkirim")));
+
+    // Berhasil: halaman baru di bawah induk yang dipilih, tabelnya dalam bentuk Notion
+    notion.createStatus = 200;
+    form.send->click();
+    QTRY_VERIFY(form.open->isVisible());
+    const NotionExport::Request created = notion.sent.last().request;
+    QCOMPARE(created.path, QStringLiteral("/pages"));
+    QCOMPARE(created.body.value(QLatin1String("parent")).toObject().value(QLatin1String("page_id")).toString(),
+             QStringLiteral("p1"));
+    QCOMPARE(created.body.value(QLatin1String("properties")).toObject().value(QLatin1String("title")).toObject()
+                 .value(QLatin1String("title")).toArray().at(0).toObject().value(QLatin1String("text")).toObject()
+                 .value(QLatin1String("content")).toString(),
+             QStringLiteral("Spek landing"));
+    const QString sentMarkdown = created.body.value(QLatin1String("markdown")).toString();
+    QVERIFY2(sentMarkdown.startsWith(QStringLiteral("# Spek")), qPrintable(sentMarkdown));
+    QVERIFY2(sentMarkdown.contains(QStringLiteral("<table header-row=\"true\">"))
+                 && sentMarkdown.contains(QStringLiteral("<td>Login</td>"))
+                 && !sentMarkdown.contains(QStringLiteral("|---|")),
+             qPrintable(sentMarkdown));
+    QVERIFY2(form.status->isVisible() && form.status->text().contains(QStringLiteral("Catatan Proyek")),
+             qPrintable(form.status->text()));
+    QVERIFY(!form.send->isVisible() && !form.error->isVisible());
+    QVERIFY(!form.title->isEnabled() && !form.pages->isEnabled());
+    QCOMPARE(form.cancel->text(), QStringLiteral("Tutup"));
+    QCOMPARE(NotionAccess::lastParent().id, QStringLiteral("p1"));
+    QCOMPARE(NotionAccess::lastParent().title, QStringLiteral("Catatan Proyek"));
+    QVERIFY2(consoleText().contains(QStringLiteral("[NOTION] Terkirim: Spek landing → https://www.notion.so/new-page")),
+             qPrintable(consoleText()));
+    QVERIFY(!consoleText().contains(QStringLiteral("ntn_")));
+
+    form.open->click();
+    QCOMPARE(m_openedUrls.size(), 1);
+    QCOMPARE(m_openedUrls.first(), QUrl(QStringLiteral("https://www.notion.so/new-page")));
+    form.cancel->click();
+    QTRY_VERIFY(!exportDialog());
+
+    // Ekspor berikutnya: halaman induk terakhir sudah terpilih, tinggal Kirim
+    toNotion->click();
+    QTRY_VERIFY(exportDialog());
+    dialog = exportDialog();
+    form = formOf(dialog);
+    QVERIFY(form.complete());
+    QTRY_VERIFY(form.send->isEnabled());
+    QCOMPARE(form.pages->currentItem()->text(), QStringLiteral("Catatan Proyek"));
+    dialog->reject();
+    QTRY_VERIFY(!exportDialog());
+
+    // Token ditolak atau belum ada halaman yang dibagikan: dialog menjelaskan apa yang harus dilakukan
+    notion.searchStatus = 401;
+    toNotion->click();
+    QTRY_VERIFY(exportDialog());
+    dialog = exportDialog();
+    form = formOf(dialog);
+    QVERIFY(form.complete());
+    QTRY_VERIFY(form.error->isVisible());
+    QVERIFY2(form.error->text().contains(QStringLiteral("File > Integrations")), qPrintable(form.error->text()));
+    QVERIFY(!form.send->isEnabled());
+    dialog->reject();
+    QTRY_VERIFY(!exportDialog());
+
+    notion.searchStatus = 200;
+    notion.pages = QJsonArray();
+    NotionAccess::saveLastParent({});
+    toNotion->click();
+    QTRY_VERIFY(exportDialog());
+    dialog = exportDialog();
+    form = formOf(dialog);
+    QVERIFY(form.complete());
+    QTRY_VERIFY(form.status->text().contains(QStringLiteral("Connections")));
+    QCOMPARE(form.pages->count(), 0);
+    QVERIFY(!form.send->isEnabled());
+    dialog->reject();
+    QTRY_VERIFY(!exportDialog());
+
+    // Kanvas: drawer pratinjau memakai pintu yang sama
+    notion.pages = {notionPage(QStringLiteral("p1"), QStringLiteral("Catatan Proyek"))};
+    QAction *canvas = fileAction(QStringLiteral("actionCanvas"));
+    QVERIFY(canvas);
+    canvas->trigger();
+    auto *page = m_window->findChild<CanvasPage *>();
+    QVERIFY(page);
+    auto *inspector = page->findChild<CanvasInspector *>();
+    auto *preview = page->findChild<CanvasPreviewDrawer *>();
+    QVERIFY(inspector && preview);
+    auto *toggle = inspector->findChild<QPushButton *>(QStringLiteral("btnCanvasPreview"));
+    auto *send = preview->findChild<QPushButton *>(QStringLiteral("btnCanvasPreviewNotion"));
+    QVERIFY(toggle && send);
+    CanvasView *view = page->view();
+    QTRY_VERIFY(view->isVisible() && inspector->isVisible());
+    const QString noteId = view->addNoteAt(view->centerScenePos(), false);
+    QTRY_COMPARE(inspector->nodeId(), noteId);
+    QTRY_VERIFY(toggle->isVisible());
+    toggle->click();
+    QTRY_VERIFY(send->isEnabled());
+    send->click();
+    QTRY_VERIFY(exportDialog());
+    dialog = exportDialog();
+    form = formOf(dialog);
+    QVERIFY(form.complete());
+    QVERIFY(!form.title->text().isEmpty());
+    QTRY_COMPARE(form.pages->count(), 1);
+    dialog->reject();
+    QTRY_VERIFY(!exportDialog());
 }
 
 void TestGui::integrationsRunsAccountLogin() {

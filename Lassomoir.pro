@@ -1,6 +1,7 @@
 # core-private: QZipReader untuk membaca lampiran .xlsx/.docx (lihat DocumentText.cpp). API privat
 # mengikat build ke versi Qt yang dipakai; peringatan qmake soal itu tidak perlu muncul tiap build.
-QT += widgets svg concurrent core-private
+# network: ekspor ke Notion (NotionClient.cpp)
+QT += widgets svg concurrent network core-private
 CONFIG += no_private_qt_headers_warning
 
 CONFIG += c++17
@@ -58,6 +59,10 @@ SOURCES += \
     MarkdownView.cpp \
     MermaidRenderer.cpp \
     NewTaskDialog.cpp \
+    NotionAccess.cpp \
+    NotionClient.cpp \
+    NotionExport.cpp \
+    NotionExportDialog.cpp \
     PromptComposer.cpp \
     PromptEditor.cpp \
     ResponseDrawer.cpp \
@@ -133,6 +138,10 @@ HEADERS += \
     MarkdownView.h \
     MermaidRenderer.h \
     NewTaskDialog.h \
+    NotionAccess.h \
+    NotionClient.h \
+    NotionExport.h \
+    NotionExportDialog.h \
     PromptComposer.h \
     PromptEditor.h \
     ResponseDrawer.h \

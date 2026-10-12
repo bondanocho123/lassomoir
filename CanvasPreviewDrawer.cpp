@@ -39,6 +39,15 @@ CanvasPreviewDrawer::CanvasPreviewDrawer(MermaidRenderer *renderer, QWidget *par
     m_title = new ElidedLabel(QString(), m_panel);
     m_title->setObjectName("canvasPreviewTitle");
 
+    m_export = new QPushButton(QStringLiteral("Ke Notion"), m_panel);
+    m_export->setObjectName("btnCanvasPreviewNotion");
+    m_export->setCursor(Qt::PointingHandCursor);
+    m_export->setFocusPolicy(Qt::NoFocus);
+    m_export->setFixedHeight(26);
+    m_export->setToolTip(QStringLiteral("Kirim dokumen ini ke Notion sebagai halaman baru"));
+    m_export->setEnabled(false);
+    connect(m_export, &QPushButton::clicked, this, &CanvasPreviewDrawer::exportRequested);
+
     m_expand = new QPushButton(m_panel);
     m_expand->setObjectName("btnCanvasPreviewExpand");
     m_expand->setCursor(Qt::PointingHandCursor);
@@ -61,6 +70,8 @@ CanvasPreviewDrawer::CanvasPreviewDrawer(MermaidRenderer *renderer, QWidget *par
     auto *header = new QHBoxLayout();
     header->setSpacing(2);
     header->addLayout(titleBox, 1);
+    header->addWidget(m_export, 0, Qt::AlignTop);
+    header->addSpacing(4);
     header->addWidget(m_expand, 0, Qt::AlignTop);
     header->addWidget(close, 0, Qt::AlignTop);
     auto *root = new QVBoxLayout(m_panel);
@@ -84,6 +95,8 @@ void CanvasPreviewDrawer::showDocument(const QString &documentId, const QString 
     m_title->setVisible(!title.isEmpty());
     const bool otherDocument = documentId != m_documentId;
     m_documentId = documentId;
+    // Tanpa dokumen yang tampil hanya petunjuk "pilih satu kartu": tidak ada yang bisa dikirim
+    m_export->setEnabled(!documentId.isEmpty());
     if (otherDocument || m_view->markdown() != markdown) {
         m_view->showMarkdown(markdown);
     }

@@ -71,6 +71,8 @@ signals:
     void viewStored();
     // contextIds kosong = seluruh kanvas; model kosong = bawaan
     void chatAskRequested(const QString &question, const QStringList &contextIds, const QString &model);
+    // "Ke Notion": dokumen Markdown ini dikirim sebagai halaman Notion; title = usulan judulnya
+    void notionExportRequested(const QString &title, const QString &markdown);
 
 protected:
     void showEvent(QShowEvent *event) override;
@@ -95,6 +97,9 @@ private:
     // "Perluas" pada jawaban chat: drawer menampilkan jawaban itu sampai ditutup atau sebuah kartu dipratinjau
     void openChatPreview(const QString &answerId);
     void closePreview();
+    // "Ke Notion": jawaban chat bersama pertanyaannya, atau dokumen yang tampil di drawer pratinjau
+    void exportChatAnswer(const QString &answerId);
+    void exportPreview();
 
     CanvasModel &m_model;
     CanvasAutomation &m_automation;

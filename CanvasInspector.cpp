@@ -418,8 +418,8 @@ void CanvasInspector::showEmpty(const CanvasBoard &board) {
         "Seret dari <b>Pustaka</b> di kiri untuk merujuk dokumen hasil stage dan lampiran task lain<br>"
         "Tarik dari titik <b>●</b> di tepi kartu ke kartu lain untuk menyambungkan. Garis yang "
         "masuk ke langkah AI menjadi bahan agent<br>"
-        "<b>Spasi + seret</b> atau tombol tengah: geser · <b>Ctrl + scroll</b>: zoom · <b>Ctrl + 0</b>: "
-        "tampilkan semua<br>"
+        "<b>Scroll</b> (<b>Shift</b> = mendatar), <b>Spasi + seret</b>, atau tombol tengah: geser · "
+        "<b>Ctrl + scroll</b>: zoom · <b>Ctrl + 0</b>: tampilkan semua<br>"
         "<b>Ctrl + Z</b> / <b>Ctrl + Y</b>: urungkan / ulangi</p>")));
     int steps = 0;
     int references = 0;

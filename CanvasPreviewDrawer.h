@@ -43,6 +43,8 @@ public:
 signals:
     void closeRequested();   // tombol ✕ atau Esc
     void openChanged(bool open);
+    // "Ke Notion": dokumen yang sedang tampil dikirim sebagai halaman Notion
+    void exportRequested();
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
@@ -70,6 +72,7 @@ private:
     QFrame *m_panel;
     QLabel *m_kind;
     ElidedLabel *m_title;
+    QPushButton *m_export;
     QPushButton *m_expand;
     MarkdownView *m_view;
 };

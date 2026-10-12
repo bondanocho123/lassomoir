@@ -66,6 +66,8 @@ signals:
     void taskDraftRequested(const QString &projectId, const QString &fromNodeId, const QString &title,
                             const QString &brief);
     void openTaskRequested(const QString &taskId);
+    // "Ke Notion" di kanvas: MainWindow membuka dialog ekspornya
+    void notionExportRequested(const QString &title, const QString &markdown);
     void logLine(const QString &line);
     void taskLogged(const TaskItem &task, const QString &line);
     // Langkah AI atau chat gagal karena backend-nya (mis. belum login): MainWindow menampilkan notice

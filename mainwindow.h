@@ -154,6 +154,10 @@ private slots:
     // Dialog yang masih terbuka diangkat ke depan, tidak dibuat dua kali.
     void showIntegrations();
 
+    // Tombol "Ke Notion" (drawer pratinjau kanvas, jawaban chat, drawer hasil agent): dialog pilih
+    // halaman induk lalu kirim. Tanpa token Notion, yang dibuka File > Integrations.
+    void exportToNotion(const QString &title, const QString &markdown);
+
     // Tombol × di popup folder referensi swimlane
     void removeReferenceDirectory(const QString &projectId, const QString &dir);
 
@@ -215,6 +219,8 @@ private:
     QPointer<QDialog> m_runtimeNotice;
     // Dialog Integrations yang sedang terbuka (lihat showIntegrations)
     QPointer<QDialog> m_integrations;
+    // Dialog ekspor Notion yang sedang terbuka (lihat exportToNotion)
+    QPointer<QDialog> m_notionExport;
     // Lebar minimum asli sidebarPanel (dari file .ui), disimpan karena
     // animasi sempat menurunkannya ke lebar rel agar splitter bisa menciutkannya
     int m_sidebarMinWidth = 180;

@@ -125,6 +125,29 @@ ResponseDrawer::ResponseDrawer(MermaidRenderer *renderer, QWidget *parent)
         updateReviewPanel();
     });
 
+    m_export = new QPushButton(QStringLiteral("Ke Notion"), this);
+    m_export->setObjectName("btnDrawerNotion");
+    m_export->setCursor(Qt::PointingHandCursor);
+    m_export->setToolTip(QStringLiteral("Kirim hasil run ini ke Notion sebagai halaman baru"));
+    connect(m_export, &QPushButton::clicked, this, [this]() {
+        const int index = selectedRun();
+        if (index < 0 || index >= m_task.runs.size()) {
+            return;
+        }
+        // Nomor run per stage, sama dengan yang tampil di pemilih run
+        const QString stage = m_task.runs.at(index).stage;
+        int number = 0;
+        for (int i = 0; i <= index; ++i) {
+            number += m_task.runs.at(i).stage == stage ? 1 : 0;
+        }
+        emit notionExportRequested(QStringLiteral("%1 · %2 #%3").arg(m_task.title, stage).arg(number),
+                                   m_view->markdown());
+    });
+    auto *runRow = new QHBoxLayout();
+    runRow->setSpacing(6);
+    runRow->addWidget(m_runSelector, 1);
+    runRow->addWidget(m_export);
+
     m_metrics = new QLabel(this);
     m_metrics->setObjectName("drawerMetrics");
     m_metrics->setWordWrap(true);
@@ -136,7 +159,7 @@ ResponseDrawer::ResponseDrawer(MermaidRenderer *renderer, QWidget *parent)
     auto *resultLayout = new QVBoxLayout(resultPage);
     resultLayout->setContentsMargins(0, 0, 0, 0);
     resultLayout->setSpacing(8);
-    resultLayout->addWidget(m_runSelector);
+    resultLayout->addLayout(runRow);
     resultLayout->addWidget(m_metrics);
     resultLayout->addWidget(m_view, 1);
 
@@ -528,6 +551,8 @@ void ResponseDrawer::rebuildRunSelector(int selected) {
 
 void ResponseDrawer::showSelected() {
     const int index = selectedRun();
+    // Keluaran Live masih berubah dan "belum ada run" bukan dokumen: tidak dikirim ke Notion
+    m_export->setEnabled(index >= 0 && index < m_task.runs.size());
     if (index == kLive) {
         m_view->showMarkdown(m_liveMarkdown.isEmpty() ? QStringLiteral("_Menunggu output agent…_") : m_liveMarkdown);
         m_view->verticalScrollBar()->setValue(m_view->verticalScrollBar()->maximum());

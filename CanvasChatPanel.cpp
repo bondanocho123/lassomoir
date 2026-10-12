@@ -13,6 +13,7 @@
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QLayout>
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QPlainTextEdit>
@@ -96,6 +97,64 @@ private:
             setFixedHeight(wanted);
         }
     }
+};
+
+// Baris tombol aksi sebuah jawaban: tombol yang tidak muat di panel yang sempit turun ke baris
+// berikutnya, alih-alih memaksa gelembungnya lebih lebar dari panel
+class ActionRow final : public QLayout {
+public:
+    explicit ActionRow(int spacing) {
+        setContentsMargins(0, 0, 0, 0);
+        setSpacing(spacing);
+    }
+    ~ActionRow() override { qDeleteAll(m_items); }
+
+    void addItem(QLayoutItem *item) override { m_items.append(item); }
+    int count() const override { return int(m_items.size()); }
+    QLayoutItem *itemAt(int index) const override { return m_items.value(index); }
+    QLayoutItem *takeAt(int index) override {
+        return index >= 0 && index < m_items.size() ? m_items.takeAt(index) : nullptr;
+    }
+    Qt::Orientations expandingDirections() const override { return {}; }
+    bool hasHeightForWidth() const override { return true; }
+    int heightForWidth(int width) const override { return arrange(QRect(0, 0, width, 0), false); }
+    QSize sizeHint() const override { return minimumSize(); }
+    // Selebar tombol terlebarnya: sisanya boleh turun baris
+    QSize minimumSize() const override {
+        QSize size;
+        for (const QLayoutItem *item : m_items) {
+            size = size.expandedTo(item->minimumSize());
+        }
+        return size;
+    }
+    void setGeometry(const QRect &rect) override {
+        QLayout::setGeometry(rect);
+        arrange(rect, true);
+    }
+
+private:
+    // Tinggi yang terpakai untuk lebar rect; apply = tombolnya sekalian ditempatkan
+    int arrange(const QRect &rect, bool apply) const {
+        int x = rect.x();
+        int y = rect.y();
+        int rowHeight = 0;
+        for (QLayoutItem *item : m_items) {
+            const QSize size = item->sizeHint();
+            if (x > rect.x() && x + size.width() > rect.x() + rect.width()) {
+                x = rect.x();
+                y += rowHeight + spacing();
+                rowHeight = 0;
+            }
+            if (apply) {
+                item->setGeometry(QRect(QPoint(x, y), size));
+            }
+            x += size.width() + spacing();
+            rowHeight = qMax(rowHeight, size.height());
+        }
+        return y + rowHeight - rect.y();
+    }
+
+    QList<QLayoutItem *> m_items;
 };
 
 // Contoh pertanyaan yang bisa diklik; teksnya membungkus di panel yang sempit
@@ -421,8 +480,7 @@ QWidget *CanvasChatPanel::agentBubble(const CanvasChatMessage &message) {
 
     const bool cancelled = message.outcome == QLatin1String("cancelled");
     const QString answerId = message.id;
-    auto *actions = new QHBoxLayout();
-    actions->setSpacing(4);
+    auto *actions = new ActionRow(4);
     if (message.succeeded() || (cancelled && !message.text.trimmed().isEmpty())) {
         MarkdownView *view = answerView(bubble);
         view->showMarkdown(message.text);
@@ -442,9 +500,13 @@ QWidget *CanvasChatPanel::agentBubble(const CanvasChatMessage &message) {
         expand->setIconSize(QSize(11, 11));
         expand->setToolTip(QStringLiteral("Buka jawaban ini di drawer pratinjau yang lebih lebar"));
         connect(expand, &QPushButton::clicked, this, [this, answerId]() { emit expandRequested(answerId); });
+        auto *toNotion = smallButton(QStringLiteral("Ke Notion"), bubble);
+        toNotion->setToolTip(QStringLiteral("Kirim pertanyaan dan jawaban ini ke Notion sebagai halaman baru"));
+        connect(toNotion, &QPushButton::clicked, this, [this, answerId]() { emit exportRequested(answerId); });
         actions->addWidget(toNote);
         actions->addWidget(copy);
         actions->addWidget(expand);
+        actions->addWidget(toNotion);
     } else {
         const QString reason = cancelled ? QStringLiteral("Dihentikan sebelum ada jawaban.")
                                          : QStringLiteral("Gagal (%1): %2").arg(message.outcome, message.text);
@@ -463,7 +525,6 @@ QWidget *CanvasChatPanel::agentBubble(const CanvasChatMessage &message) {
         retry->setEnabled(m_chat.message(questionId) != nullptr);
         actions->addWidget(retry);
     }
-    actions->addStretch(1);
     layout->addLayout(actions);
     return bubble;
 }
