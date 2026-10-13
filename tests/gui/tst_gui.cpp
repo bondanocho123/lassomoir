@@ -19,6 +19,7 @@
 #include "ElidedLabel.h"
 #include "FakeAgentRuntime.h"
 #include "FolderLauncher.h"
+#include "GitHistory.h"
 #include "GitSandbox.h"
 #include "HoverInfoPopup.h"
 #include "KanbanCardWidget.h"
@@ -304,6 +305,9 @@ private slots:
     // Halaman kanvas muat di antara sidebar dan panel Lieutenant yang terpasang: jendela tidak dipaksa
     // lebih lebar dari ukurannya (isi yang terpotong saat jendela dimaksimalkan)
     void canvasFitsBesidePinnedLieutenant();
+    // Drawer hasil agent terbuka di samping board selagi panel Lieutenant terpasang: jendela tidak
+    // dipaksa lebih lebar dari ukurannya, jadi panel Lieutenant tetap utuh sampai tepi kanannya
+    void drawerFitsBesidePinnedLieutenant();
     // Tombol Pratinjau di panel detail: isi kartu terpilih sebagai Markdown jadi di drawer yang
     // menimpa kanvas dari tepi kanannya, mengikuti ketikan dan pilihan kartu
     void canvasPreviewsMarkdownInDrawer();
@@ -3979,6 +3983,137 @@ void TestGui::canvasFitsBesidePinnedLieutenant() {
     pin->click();
     QVERIFY(console->isPinned());
     QTRY_VERIFY(rail->maximumWidth() == QWIDGETSIZE_MAX);
+    QTest::qWait(100);
+    QVERIFY2(overflow().isEmpty(), qPrintable(overflow()));
+}
+
+void TestGui::drawerFitsBesidePinnedLieutenant() {
+    // Lebar tombol header swimlane bergantung pada styles.qss, yang biasanya tidak dimuat test
+    QFile qss(QStringLiteral(":/styles.qss"));
+    QVERIFY(qss.open(QIODevice::ReadOnly));
+    qApp->setStyleSheet(QString::fromUtf8(qss.readAll()));
+    const auto resetStyle = qScopeGuard([]() { qApp->setStyleSheet(QString()); });
+
+    // Jendela selebar layar 1920 px pada skala 150% (1280 px logis), seperti saat dimaksimalkan di sana
+    const QSize size(1280, 720);
+    m_window.reset();
+    m_tasks.reset();
+    createWindow(size);
+
+    auto *splitter = m_window->findChild<QSplitter *>(QStringLiteral("mainSplitter"));
+    auto *board = m_window->findChild<QSplitter *>(QStringLiteral("boardSplitter"));
+    auto *content = m_window->findChild<QWidget *>(QStringLiteral("contentWidget"));
+    auto *swimlane = m_window->findChild<SwimlaneWidget *>();
+    QAction *canvas = fileAction(QStringLiteral("actionCanvas"));
+    ConsolePanelWidget *console = consolePanel();
+    ResponseDrawer *panel = drawer();
+    QVERIFY(splitter && board && content && swimlane && canvas && console && panel);
+    auto *title = swimlane->findChild<ElidedLabel *>(QStringLiteral("labelProjectTitle"));
+    auto *btnCanvas = swimlane->findChild<QPushButton *>(QStringLiteral("btnCanvas"));
+    auto *btnWorkingDir = swimlane->findChild<QPushButton *>(QStringLiteral("btnWorkingDir"));
+    auto *btnBranch = swimlane->findChild<QPushButton *>(QStringLiteral("btnBranch"));
+    auto *btnReference = swimlane->findChild<QPushButton *>(QStringLiteral("btnReferenceDirs"));
+    auto *btnClose = swimlane->findChild<QPushButton *>(QStringLiteral("btnClose"));
+    auto *closeDrawer = panel->findChild<QPushButton *>(QStringLiteral("btnDrawerClose"));
+    QVERIFY(title && btnCanvas && btnWorkingDir && btnBranch && btnReference && btnClose && closeDrawer);
+    QWidget *stack = board->widget(0);
+
+    QTest::qWait(50);   // ukuran splitter awal sudah diterapkan
+    QTRY_VERIFY(console->isVisible());
+    QVERIFY(console->isPinned());
+
+    // Halaman kanvas yang pernah dibuka tetap menganggur di stack board, dan lebar minimumnya
+    // melebihi board kanban
+    canvas->trigger();
+    auto *page = m_window->findChild<CanvasPage *>();
+    QVERIFY(page);
+    QTRY_VERIFY(page->isVisible());
+    canvas->trigger();
+    QTRY_VERIFY(swimlane->isVisible());
+    QVERIFY(page->minimumSizeHint().width() > swimlane->minimumSizeHint().width());
+
+    // Header seperti project sungguhan: nama project panjang dan folder kerja di repository git
+    // (lima tombol). Dipasang setelah run selesai, supaya pembacaan branch yang sebenarnya (folder
+    // kerja test bukan repository) tidak menyembunyikan tombol branch lagi.
+    const QString projectTitle = QStringLiteral("Lassomoir-Backend");
+    const QString folderName = QDir(m_workDir.path()).dirName();
+    finishSpecifierRun(QStringLiteral("# Spek"));
+    GitHead head;
+    head.repository = true;
+    head.branch = QStringLiteral("main");
+    head.commit = QStringLiteral("8ff5924");
+    swimlane->setGitHead(head);
+    swimlane->setProjectTitle(projectTitle);
+    QTRY_VERIFY(btnBranch->isVisible());
+
+    // Seluruh isi jendela di dalam jendela: panel Lieutenant sampai tepi kanannya, dan tombol header
+    // swimlane tidak ada yang terdorong keluar atau terjepit
+    auto overflow = [&]() -> QString {
+        if (m_window->size() != size) {
+            return QStringLiteral("jendela %1x%2").arg(m_window->width()).arg(m_window->height());
+        }
+        if (content->width() > m_window->width() || splitter->geometry().right() >= content->width()) {
+            return QStringLiteral("isi %1, splitter sampai %2").arg(content->width()).arg(splitter->geometry().right());
+        }
+        const QRect lieutenant = console->geometry();
+        if (!console->isVisible() || lieutenant.width() < 280 || lieutenant.right() >= content->width()) {
+            return QStringLiteral("panel %1..%2 di isi selebar %3")
+                .arg(lieutenant.left()).arg(lieutenant.right()).arg(content->width());
+        }
+        if (swimlane->width() != stack->width()) {
+            return QStringLiteral("swimlane %1 di board selebar %2").arg(swimlane->width()).arg(stack->width());
+        }
+        const QList<QPushButton *> buttons = {btnCanvas, btnWorkingDir, btnBranch, btnReference, btnClose};
+        for (const QPushButton *button : buttons) {
+            const QRect rect(button->mapTo(swimlane, QPoint(0, 0)), button->size());
+            if (!button->isVisible() || rect.left() < 0 || rect.right() >= swimlane->width()
+                || button->width() < button->sizeHint().width()) {
+                return QStringLiteral("%1 di %2..%3 (butuh %4), swimlane selebar %5")
+                    .arg(button->objectName()).arg(rect.left()).arg(rect.right())
+                    .arg(button->sizeHint().width()).arg(swimlane->width());
+            }
+        }
+        return QString();
+    };
+    QTest::qWait(300);
+    QVERIFY2(overflow().isEmpty(), qPrintable(overflow()));
+    // Tanpa drawer header muat utuh: semua tombol berteks, judul lengkap
+    QCOMPARE(btnCanvas->text(), QStringLiteral("Kanvas"));
+    QCOMPARE(btnWorkingDir->text(), folderName);
+    QCOMPARE(btnBranch->text(), QStringLiteral("main"));
+    QCOMPARE(btnReference->text(), QStringLiteral("Referensi"));
+    QCOMPARE(title->text(), projectTitle);
+
+    runButton(QStringLiteral("t3"))->click();   // membuka drawer
+    QVERIFY(!panel->isHidden());
+    QTest::qWait(500);   // animasi buka selesai
+    if (!qEnvironmentVariableIsEmpty("LASSOMOIR_SHOT")) {
+        m_window->grab().save(qEnvironmentVariable("LASSOMOIR_SHOT"));
+    }
+    QVERIFY2(overflow().isEmpty(), qPrintable(overflow()));
+    QVERIFY2(panel->width() >= 360 && panel->geometry().right() < board->width(),
+             qPrintable(QStringLiteral("drawer %1..%2 di board selebar %3")
+                            .arg(panel->geometry().left()).arg(panel->geometry().right()).arg(board->width())));
+    // Board yang mengalah: tombol berikon tinggal ikonnya (teksnya terbaca di tooltip), "Close" tetap
+    QVERIFY2(stack->width() < page->minimumSizeHint().width(), qPrintable(QString::number(stack->width())));
+    const QList<QPushButton *> iconButtons = {btnCanvas, btnWorkingDir, btnBranch, btnReference};
+    for (const QPushButton *button : iconButtons) {
+        QVERIFY2(button->text().isEmpty() && !button->icon().isNull() && !button->toolTip().isEmpty(),
+                 qPrintable(button->objectName()));
+    }
+    QCOMPARE(btnClose->text(), QStringLiteral("Close"));
+    QVERIFY(btnWorkingDir->toolTip().contains(folderName) && btnBranch->toolTip().contains(QStringLiteral("main")));
+    QVERIFY(title->fullText() == projectTitle && !title->text().isEmpty());
+
+    // Drawer ditutup: board kembali selebar semula dan header-nya utuh lagi
+    closeDrawer->click();
+    QTRY_VERIFY(panel->isHidden());
+    QTRY_COMPARE(btnBranch->text(), QStringLiteral("main"));
+    QCOMPARE(btnCanvas->text(), QStringLiteral("Kanvas"));
+    QCOMPARE(btnWorkingDir->text(), folderName);
+    QCOMPARE(btnReference->text(), QStringLiteral("Referensi"));
+    QTRY_COMPARE(title->text(), projectTitle);
+    QCOMPARE(stack->minimumWidth(), 0);
     QTest::qWait(100);
     QVERIFY2(overflow().isEmpty(), qPrintable(overflow()));
 }

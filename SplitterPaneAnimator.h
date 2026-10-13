@@ -30,6 +30,8 @@ public:
 
 signals:
     void expandedChanged(bool expanded);
+    // Animasi tutup selesai: pane sudah tersembunyi
+    void closed();
 
 private:
     void animate(int from, int to);

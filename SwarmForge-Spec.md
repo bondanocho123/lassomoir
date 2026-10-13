@@ -1017,6 +1017,7 @@ Umum: radius 4px, padding 4px 10px, 11px bold, tinggi min. 24px, kursor tangan, 
 
 - Header: `labelProjectTitle` (`font-lane-title`, `text-default`) · spacer · *New Task* (`primary`) · *Close* (`secondary`).
 - *Close* menutup tampilan proyek; data tetap ada di file sesi (setelah M2). Sebelum M2, minta konfirmasi bila swimlane berisi kartu.
+- ✅ Header memadat saat barisnya tidak muat utuh: judul project dipendekkan ("…", lengkapnya di tooltip) sampai 60 px, lalu tombol berikon (Kanvas, folder kerja, branch, Referensi) tinggal ikonnya dengan teks di tooltip; *Close* tetap berteks. Selama drawer hasil agent terbuka, lebar minimum area board dipatok 280 px (tidak mengikuti isinya, termasuk halaman kanvas yang menganggur di stack), jadi board yang mengalah dan panel Lieutenant yang terpasang tetap utuh di jendela selebar 1280 px.
 - Latar `surface-lane`, garis `border-column`, radius 8px, padding 8px.
 
 #### Konsol

@@ -107,6 +107,9 @@ void SplitterPaneAnimator::animate(int from, int to) {
         }
         pane->setMaximumWidth(QWIDGETSIZE_MAX);
         pane->setMinimumWidth(m_minimumWidth);
+        if (!m_open) {
+            emit closed();
+        }
     });
 
     m_animation = animation;

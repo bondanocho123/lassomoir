@@ -11,6 +11,10 @@ ElidedLabel::ElidedLabel(const QString &text, QWidget *parent, Qt::TextElideMode
     refresh();
 }
 
+ElidedLabel::ElidedLabel(QWidget *parent)
+    : ElidedLabel(QString(), parent) {
+}
+
 void ElidedLabel::setFullText(const QString &text) {
     m_fullText = text;
     refresh();

@@ -102,6 +102,9 @@ QString failureDetail(const TaskItem &task) {
 constexpr int kSidebarRailWidth = 38;
 // Selang pemeriksaan kursor selama sidebar tampil sementara
 constexpr int kSidebarPeekPollMs = 120;
+// Lebar minimum area board selama drawer hasil agent terbuka di sampingnya: header swimlane yang
+// sudah memadat masih muat utuh
+constexpr int kBoardMinWidthBesideDrawer = 280;
 
 }
 
@@ -169,6 +172,10 @@ MainWindow::MainWindow(const StageCatalog &catalog, TaskManager &tasks, SwarmCoo
     // dari luar) mengembalikan ikon tombol
     connect(m_drawer, &ResponseDrawer::expandToggled, m_drawerAnimator, &SplitterPaneAnimator::setExpanded);
     connect(m_drawerAnimator, &SplitterPaneAnimator::expandedChanged, m_drawer, &ResponseDrawer::setExpanded);
+    // Drawer sudah tertutup: lebar minimum area board kembali mengikuti isinya (lihat openDrawer)
+    connect(m_drawerAnimator, &SplitterPaneAnimator::closed, this, [this]() {
+        ui->boardStack->setMinimumWidth(0);
+    });
     connect(m_drawer, &ResponseDrawer::approveRequested, this, &MainWindow::handleApproveRequested);
     connect(m_drawer, &ResponseDrawer::revisionRequested, this, &MainWindow::handleRevisionRequested);
     connect(m_drawer, &ResponseDrawer::sendBackRequested, this, &MainWindow::handleSendBackRequested);
@@ -1201,6 +1208,10 @@ void MainWindow::openDrawer(const QString &taskId) {
     }
 
     m_drawer->showTask(*task, runState, m_tasks.nextStage(task->stage), m_tasks.sendBackTargets(task->stage));
+    // Selama drawer terbuka area board yang mengalah: lebar minimumnya dipatok, tidak lagi mengikuti
+    // isinya. Tanpa ini board + drawer + panel Lieutenant bisa menuntut lebih lebar daripada
+    // jendelanya, dan panel Lieutenant di tepi kanan terpotong saat jendela dimaksimalkan.
+    ui->boardStack->setMinimumWidth(kBoardMinWidthBesideDrawer);
     const int boardWidth = m_boardSplitter->width();
     m_drawerAnimator->open(qBound(420, boardWidth * 45 / 100, 720));
 }
