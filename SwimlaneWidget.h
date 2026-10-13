@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <QHash>
 #include <QMap>
 #include <QPointer>
 #include <QString>
@@ -16,6 +17,7 @@ class SwimlaneWidget;
 class KanbanColumnWidget;
 class KanbanCardWidget;
 class QFrame;
+class QPushButton;
 class StageCatalog;
 struct GitHead;
 
@@ -73,6 +75,11 @@ signals:
                    const QString &targetStage,
                    int targetIndex);
 
+protected:
+    // Lebar swimlane, font, atau stylesheet berubah: bentuk header dihitung ulang
+    void resizeEvent(QResizeEvent *event) override;
+    void changeEvent(QEvent *event) override;
+
 private slots:
     void onCloseClicked();
     void handleCardDropped(KanbanCardWidget *card, const QString &targetStage, int targetIndex);
@@ -82,6 +89,22 @@ private:
     QString m_projectId;
     QStringList m_referenceDirs;
     QPointer<QFrame> m_referencePopup;
+
+    // Teks tombol header yang berikon (Kanvas, folder kerja, branch, Referensi). Selama baris
+    // header tidak muat utuh, tombol-tombol itu tinggal ikon (teksnya tetap ada di tooltip) dan
+    // judul project dipendekkan: board bisa menyempit, mis. di samping drawer hasil agent, tanpa
+    // ada tombol yang terdorong keluar.
+    QHash<QPushButton *, QString> m_headerTexts;
+    // Lebar baris header dalam bentuk utuhnya; -1 = harus diukur ulang
+    int m_fullHeaderWidth = -1;
+    // Lebar minimum tombol header dari file .ui; hanya berlaku selama tombolnya berteks
+    int m_headerButtonMinWidth = 0;
+
+    void setHeaderText(QPushButton *button, const QString &text);
+    // Ukur ulang bentuk utuh header (teks atau jumlah tombolnya berubah), lalu pilih bentuknya
+    void remeasureHeader();
+    void updateHeaderMode();
+    void setHeaderCompact(bool compact);
 
     // Mapping nama stage ke pointer kolom
     QMap<QString, KanbanColumnWidget *> m_columns;

@@ -50,7 +50,7 @@
       <number>8</number>
      </property>
      <item>
-      <widget class="QLabel" name="labelProjectTitle">
+      <widget class="ElidedLabel" name="labelProjectTitle">
        <property name="font">
         <font>
          <pointsize>11</pointsize>
@@ -215,6 +215,13 @@
    </item>
   </layout>
  </widget>
+ <customwidgets>
+  <customwidget>
+   <class>ElidedLabel</class>
+   <extends>QLabel</extends>
+   <header>ElidedLabel.h</header>
+  </customwidget>
+ </customwidgets>
  <resources/>
  <connections/>
 </ui>

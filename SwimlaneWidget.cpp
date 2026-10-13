@@ -8,6 +8,7 @@
 #include "Theme.h"
 
 #include <QDir>
+#include <QEvent>
 #include <QFrame>
 #include <QGuiApplication>
 #include <QIcon>
@@ -22,6 +23,8 @@
 namespace {
 // Lebar tetap tiap kolom stage (px logis)
 constexpr int kColumnWidth = 300;
+// Judul project boleh dipendekkan sampai selebar ini sebelum tombol header tinggal ikon
+constexpr int kTitleMinWidth = 60;
 }
 
 SwimlaneWidget::SwimlaneWidget(const QString &projectId, const StageCatalog &catalog, QWidget *parent)
@@ -56,6 +59,11 @@ SwimlaneWidget::SwimlaneWidget(const QString &projectId, const StageCatalog &cat
         emit canvasRequested(m_projectId);
     });
 
+    // Judul menyempit (terpotong "…") lebih dulu daripada mendorong tombol keluar dari header
+    ui->labelProjectTitle->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
+    m_headerButtonMinWidth = ui->btnClose->minimumWidth();
+    setHeaderText(ui->btnCanvas, ui->btnCanvas->text());
+
     initializeColumns(catalog);
     setProjectTitle(m_projectId);
     setWorkingDirectory(QString());
@@ -69,21 +77,21 @@ SwimlaneWidget::~SwimlaneWidget() {
 
 void SwimlaneWidget::setProjectTitle(const QString &title) {
     if (ui->labelProjectTitle) {
-        ui->labelProjectTitle->setText(title);
+        ui->labelProjectTitle->setFullText(title);
     }
 }
 
 void SwimlaneWidget::setWorkingDirectory(const QString &path) {
     if (path.isEmpty()) {
         ui->btnWorkingDir->setIcon(Theme::icon(":/icons/folder-add.svg"));
-        ui->btnWorkingDir->setText("Select");
+        setHeaderText(ui->btnWorkingDir, "Select");
         ui->btnWorkingDir->setToolTip("Folder tempat agent Claude Code bekerja untuk project ini");
         return;
     }
 
     const QString name = QDir(path).dirName();
     ui->btnWorkingDir->setIcon(Theme::icon(":/icons/folder.svg"));
-    ui->btnWorkingDir->setText(name.isEmpty() ? path : name);
+    setHeaderText(ui->btnWorkingDir, name.isEmpty() ? path : name);
     ui->btnWorkingDir->setToolTip(QString("Folder kerja agent: %1\nKlik untuk mengganti")
                                       .arg(QDir::toNativeSeparators(path)));
 }
@@ -91,6 +99,7 @@ void SwimlaneWidget::setWorkingDirectory(const QString &path) {
 void SwimlaneWidget::setGitHead(const GitHead &head) {
     ui->btnBranch->setVisible(head.repository);
     if (!head.repository) {
+        remeasureHeader();
         return;
     }
 
@@ -107,14 +116,14 @@ void SwimlaneWidget::setGitHead(const GitHead &head) {
     // Nama branch task bisa panjang: dipendekkan di tengah, lengkapnya di tooltip. "&" digandakan
     // supaya tidak dibaca sebagai penanda shortcut.
     text = ui->btnBranch->fontMetrics().elidedText(text, Qt::ElideMiddle, 180);
-    ui->btnBranch->setText(text.replace(QLatin1Char('&'), QStringLiteral("&&")));
+    setHeaderText(ui->btnBranch, text.replace(QLatin1Char('&'), QStringLiteral("&&")));
     ui->btnBranch->setToolTip(tip + QStringLiteral("\nKlik untuk melihat branch, daftar commit, dan membandingkan perubahan"));
 }
 
 void SwimlaneWidget::setReferenceDirectories(const QStringList &dirs) {
     m_referenceDirs = dirs;
-    ui->btnReferenceDirs->setText(dirs.isEmpty() ? QStringLiteral("Referensi")
-                                                 : QStringLiteral("Referensi · %1").arg(dirs.size()));
+    setHeaderText(ui->btnReferenceDirs, dirs.isEmpty() ? QStringLiteral("Referensi")
+                                                       : QStringLiteral("Referensi · %1").arg(dirs.size()));
     QStringList tip = {QStringLiteral("Folder referensi: dibaca agent sebagai acuan, isinya tidak diubah")};
     for (const QString &dir : dirs) {
         tip.append(QStringLiteral("• %1").arg(QDir::toNativeSeparators(dir)));
@@ -129,6 +138,62 @@ void SwimlaneWidget::setReferenceDirectories(const QStringList &dirs) {
     if (m_referencePopup && m_referencePopup->isVisible()) {
         fillReferencePopup(m_referencePopup);
         placeReferencePopup(m_referencePopup);
+    }
+}
+
+void SwimlaneWidget::setHeaderText(QPushButton *button, const QString &text) {
+    m_headerTexts.insert(button, text);
+    remeasureHeader();
+}
+
+void SwimlaneWidget::remeasureHeader() {
+    m_fullHeaderWidth = -1;
+    updateHeaderMode();
+}
+
+void SwimlaneWidget::updateHeaderMode() {
+    // Stylesheet dari file .ui terpasang sebelum tombol-tombolnya dibuat (lihat changeEvent)
+    if (m_headerTexts.isEmpty()) {
+        return;
+    }
+    if (m_fullHeaderWidth < 0) {
+        // Diukur dengan teks tombolnya terpasang: judul sependek-pendeknya, lalu tiap tombol yang
+        // tampil beserta jaraknya dari isi di kirinya
+        setHeaderCompact(false);
+        const int spacing = ui->headerLayout->spacing();
+        int width = kTitleMinWidth + spacing;
+        const QList<QPushButton *> buttons = {ui->btnCanvas, ui->btnWorkingDir, ui->btnBranch, ui->btnReferenceDirs,
+                                              ui->btnClose};
+        for (const QPushButton *button : buttons) {
+            if (!button->isHidden()) {
+                width += spacing + qMax(button->sizeHint().width(), button->minimumWidth());
+            }
+        }
+        m_fullHeaderWidth = width;
+    }
+    const QMargins margins = ui->verticalLayout->contentsMargins();
+    setHeaderCompact(width() - margins.left() - margins.right() < m_fullHeaderWidth);
+}
+
+void SwimlaneWidget::setHeaderCompact(bool compact) {
+    for (auto it = m_headerTexts.cbegin(); it != m_headerTexts.cend(); ++it) {
+        it.key()->setText(compact ? QString() : it.value());
+        it.key()->setMinimumWidth(compact ? 0 : m_headerButtonMinWidth);
+    }
+    // "Close" tidak berikon: teksnya tetap, tombolnya saja yang boleh selebar teks itu
+    ui->btnClose->setMinimumWidth(compact ? 0 : m_headerButtonMinWidth);
+}
+
+void SwimlaneWidget::resizeEvent(QResizeEvent *event) {
+    QWidget::resizeEvent(event);
+    updateHeaderMode();
+}
+
+void SwimlaneWidget::changeEvent(QEvent *event) {
+    QWidget::changeEvent(event);
+    // Font tombol berasal dari stylesheet; lebar bentuk utuh header ikut berubah
+    if (event->type() == QEvent::FontChange || event->type() == QEvent::StyleChange) {
+        remeasureHeader();
     }
 }
 

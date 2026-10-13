@@ -17,6 +17,8 @@ class ElidedLabel : public QLabel {
 public:
     explicit ElidedLabel(const QString &text = QString(), QWidget *parent = nullptr,
                          Qt::TextElideMode mode = Qt::ElideRight);
+    // Untuk file .ui (promoted widget): uic hanya memberi parent, teksnya lewat setFullText()
+    explicit ElidedLabel(QWidget *parent);
 
     void setFullText(const QString &text);
     QString fullText() const { return m_fullText; }
