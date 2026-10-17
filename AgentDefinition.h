@@ -23,7 +23,7 @@ struct AgentDefinition {
     QString model;                     // kosong = model bawaan CLI -> --model
     QString effort;                    // "low" ... "max" -> --effort
     int maxConcurrent = 1;             // ukuran gerombolan: run paralel maksimal di stage ini
-    int timeoutMs = 20 * 60 * 1000;    // batas waktu satu run
+    int timeoutMs = 0;                 // batas waktu satu run; 0 = tanpa batas
 
     // Pilihan pengguna per task menimpa bawaan stage; field yang kosong dibiarkan
     void applyTuning(const AgentTuning &tuning) {

@@ -200,7 +200,9 @@ void ClaudeCodeSession::start() {
     connect(m_process, &QProcess::finished, this, &ClaudeCodeSession::onProcessFinished);
     connect(m_process, &QProcess::errorOccurred, this, &ClaudeCodeSession::onProcessError);
 
-    m_timeout.start(m_launch.agent.timeoutMs);
+    if (m_launch.agent.timeoutMs > 0) {
+        m_timeout.start(m_launch.agent.timeoutMs);
+    }
     m_process->start();
 }
 

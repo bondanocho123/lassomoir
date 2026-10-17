@@ -17,8 +17,6 @@ namespace {
 
 const QString kDefaultModel = QStringLiteral("sonnet");
 const QString kDefaultEffort = QStringLiteral("medium");
-constexpr int kTimeoutMs = 15 * 60 * 1000;
-constexpr int kChatTimeoutMs = 10 * 60 * 1000;
 // Bahan chat seluruh kanvas: jatah per kartu dibagi rata supaya kartu di bawah tetap kebagian
 constexpr qsizetype kChatMinInputChars = 6000;
 
@@ -256,7 +254,6 @@ AgentDefinition CanvasWorkflow::brainstormAgent(const QString &model, const QStr
     agent.tools = {QStringLiteral("Read"), QStringLiteral("Grep"), QStringLiteral("Glob")};
     agent.model = kDefaultModel;
     agent.effort = kDefaultEffort;
-    agent.timeoutMs = kTimeoutMs;
     agent.applyTuning({model, effort});
     return agent;
 }
@@ -267,7 +264,6 @@ AgentDefinition CanvasWorkflow::chatAgent(const QString &model) {
     if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         agent.rolePrompt = QString::fromUtf8(file.readAll()).trimmed();
     }
-    agent.timeoutMs = kChatTimeoutMs;
     return agent;
 }
 
