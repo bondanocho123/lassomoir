@@ -5836,6 +5836,27 @@ void TestSwarm::canvasChatKeepsSessions() {
     QCOMPARE(reopened.sessions().last().id, second);
     QCOMPARE(reopened.sessions().last().messages.size(), 2);
 
+    // Judul dari pengguna menggantikan pertanyaan pertamanya, untuk sesi yang dibuka maupun di riwayat;
+    // keduanya ikut tersimpan ("chatTitle" dan "title"), dan judul kosong kembali ke pertanyaannya
+    const qsizetype saves = changed.count();
+    QVERIFY(!chat.renameSession(QStringLiteral("tidak-ada"), QStringLiteral("X")));
+    QVERIFY(chat.renameSession(first, QStringLiteral("  Rencana\n rilis ")));
+    QVERIFY(chat.renameSession(second, QStringLiteral("Pengguna")));
+    QCOMPARE(changed.count(), saves + 2);
+    QVERIFY(chat.renameSession(second, QStringLiteral("Pengguna")));   // sama: tidak perlu disimpan
+    QCOMPARE(changed.count(), saves + 2);
+    QCOMPARE(chat.currentName(), QStringLiteral("Rencana rilis"));
+    QCOMPARE(chat.sessions().at(0).title(), QStringLiteral("Rencana rilis"));
+    QCOMPARE(chat.sessions().at(1).title(), QStringLiteral("Pengguna"));
+    QCOMPARE(chat.historyToJson().first().toObject().value(QStringLiteral("title")).toString(), QStringLiteral("Pengguna"));
+    reopened.load(chat.toJson(), chat.historyToJson(), chat.currentName());
+    QCOMPARE(reopened.sessions().at(0).title(), QStringLiteral("Rencana rilis"));
+    QCOMPARE(reopened.sessions().at(1).title(), QStringLiteral("Pengguna"));
+    QVERIFY(chat.renameSession(second, QString()));
+    QCOMPARE(chat.sessions().at(1).title(), QStringLiteral("Siapa penggunanya?"));
+    QVERIFY(!chat.historyToJson().first().toObject().contains(QStringLiteral("title")));
+    QVERIFY(chat.renameSession(first, QString()));
+
     // Sesi baru yang masih kosong: "chat" kosong, kedua sesi lama ada di riwayat
     QVERIFY(chat.newSession());
     QVERIFY(chat.toJson().isEmpty());

@@ -2532,7 +2532,7 @@ QPushButton#btnCanvasChatHistory:disabled {
     border: 1px solid #efe6d8;
 }
 
-/* Satu sesi di riwayat chat; yang sedang dibuka berlatar seperti gelembung pertanyaan */
+/* Satu sesi di riwayat chat; yang sedang dibuka berlatar coklat muda */
 QFrame#canvasChatSession {
     background-color: #ffffff;
     border: 1px solid #e2d5c1;
@@ -2540,13 +2540,43 @@ QFrame#canvasChatSession {
 }
 
 QFrame#canvasChatSession[current="true"] {
-    background-color: #e3ebf6;
-    border: 1px solid #ccd9ea;
+    background-color: #f2e3d1;
+    border: 1px solid #d9c6ac;
 }
 
 QFrame#canvasChatSession:hover {
-    background-color: #eef2f8;
-    border: 1px solid #33517a;
+    background-color: #f8f1e6;
+    border: 1px solid #a9743f;
+}
+
+QFrame#canvasChatSession[current="true"]:hover {
+    background-color: #f2e3d1;
+    border: 1px solid #a9743f;
+}
+
+/* Tombol pensil: ubah judul sesi */
+QPushButton#btnCanvasChatRename {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 2px;
+}
+
+QPushButton#btnCanvasChatRename:hover {
+    background-color: #e6d3ba;
+    border: 1px solid #d9c6ac;
+}
+
+QLineEdit#canvasChatSessionEdit {
+    background-color: #ffffff;
+    border: 1px solid #a9743f;
+    border-radius: 4px;
+    padding: 1px 4px;
+    font-size: 12px;
+    font-weight: bold;
+    color: #33517a;
+    selection-background-color: #f2e3d1;
+    selection-color: #3d3730;
 }
 
 QLabel#canvasChatSessionTitle {

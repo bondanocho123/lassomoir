@@ -15,6 +15,7 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLayout>
+#include <QLineEdit>
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QPlainTextEdit>
@@ -235,40 +236,124 @@ protected:
     }
 };
 
-// Satu sesi di riwayat: pertanyaan pertamanya, lalu waktu pesan terakhir dan jumlah pertanyaannya.
-// Klik di mana pun pada barisnya membuka sesi itu.
+// Satu sesi di riwayat: judulnya, lalu waktu pesan terakhir dan jumlah pertanyaannya.
+// Klik di mana pun pada barisnya membuka sesi itu; tombol pensil mengubah judulnya di tempat
+// (Enter atau klik di luar menyimpan, Esc batal, judul kosong = kembali ke pertanyaan pertamanya).
 class SessionRow final : public QFrame {
 public:
+    static constexpr int kMaxTitle = 120;
+
     SessionRow(const CanvasChatSession &session, bool current, QWidget *parent) : QFrame(parent) {
         setObjectName("canvasChatSession");
         setProperty("current", current);
         setCursor(Qt::PointingHandCursor);
         setAttribute(Qt::WA_Hover, true);
 
-        const QString title = session.title();
-        auto *name = new ElidedLabel(title.isEmpty() ? QStringLiteral("(tanpa pertanyaan)") : title, this);
-        name->setObjectName("canvasChatSessionTitle");
-        name->setTextFormat(Qt::PlainText);
+        CanvasChatSession unnamed = session;
+        unnamed.name.clear();
+        m_question = unnamed.title();
+        m_customName = session.name;
+
+        m_name = new ElidedLabel(QString(), this);
+        m_name->setObjectName("canvasChatSessionTitle");
+        m_name->setTextFormat(Qt::PlainText);
+        m_edit = new QLineEdit(this);
+        m_edit->setObjectName("canvasChatSessionEdit");
+        m_edit->setMaxLength(kMaxTitle);
+        m_edit->setPlaceholderText(m_question);
+        m_edit->setCursor(Qt::IBeamCursor);
+        m_edit->installEventFilter(this);
+        m_edit->hide();
+        connect(m_edit, &QLineEdit::editingFinished, this, [this]() { finishEdit(true); });
+        m_rename = headerButton(QStringLiteral(":/icons/edit.svg"), "btnCanvasChatRename",
+                                QStringLiteral("Ubah judul sesi"), this);
+        m_rename->setIconSize(QSize(12, 12));
+        connect(m_rename, &QPushButton::clicked, this, [this]() { startEdit(); });
+        showName();
+
         QStringList facts = {dayOf(session.lastAt()), QStringLiteral("%1 pertanyaan").arg(session.questionCount())};
         facts.removeAll(QString());
         if (current) {
             facts.append(QStringLiteral("sedang dibuka"));
         }
+        auto *top = new QHBoxLayout();
+        top->setContentsMargins(0, 0, 0, 0);
+        top->setSpacing(4);
+        top->addWidget(m_name, 1);
+        top->addWidget(m_edit, 1);
+        top->addWidget(m_rename);
         auto *layout = new QVBoxLayout(this);
-        layout->setContentsMargins(10, 7, 10, 7);
+        layout->setContentsMargins(10, 7, 6, 7);
         layout->setSpacing(2);
-        layout->addWidget(name);
+        layout->addLayout(top);
         layout->addWidget(label(facts.join(QStringLiteral(" · ")), "canvasChatMeta", this));
     }
     std::function<void()> clicked;
+    // Judul baru dari pengguna (kosong = kembali ke pertanyaan pertamanya)
+    std::function<void(const QString &)> renamed;
+
+    bool isEditing() const { return m_edit->isVisible(); }
+
+    void startEdit() {
+        m_edit->setText(m_customName.isEmpty() ? m_question : m_customName);
+        m_name->hide();
+        m_rename->hide();
+        m_edit->show();
+        m_edit->setFocus(Qt::OtherFocusReason);
+        m_edit->selectAll();
+    }
 
 protected:
     void mouseReleaseEvent(QMouseEvent *event) override {
-        if (event->button() == Qt::LeftButton && rect().contains(event->position().toPoint()) && clicked) {
+        if (isEditing()) {
+            finishEdit(true);   // klik di luar kotak judul menyimpan, tidak membuka sesi
+        } else if (event->button() == Qt::LeftButton && rect().contains(event->position().toPoint()) && clicked) {
             clicked();
         }
         QFrame::mouseReleaseEvent(event);
     }
+
+    bool eventFilter(QObject *watched, QEvent *event) override {
+        if (watched == m_edit && event->type() == QEvent::KeyPress
+            && static_cast<QKeyEvent *>(event)->key() == Qt::Key_Escape) {
+            finishEdit(false);
+            return true;
+        }
+        return QFrame::eventFilter(watched, event);
+    }
+
+private:
+    void showName() {
+        const QString title = m_customName.isEmpty() ? m_question : m_customName;
+        m_name->setFullText(title.isEmpty() ? QStringLiteral("(tanpa pertanyaan)") : title);
+    }
+
+    // editingFinished juga datang saat kotaknya disembunyikan: hanya yang pertama yang dipakai
+    void finishEdit(bool keep) {
+        if (!isEditing()) {
+            return;
+        }
+        QString name = m_edit->text().simplified();
+        if (name == m_question) {
+            name.clear();   // sama dengan pertanyaan pertamanya: tetap mengikuti pertanyaan itu
+        }
+        m_edit->hide();
+        m_name->show();
+        m_rename->show();
+        if (keep && name != m_customName) {
+            m_customName = name;
+            if (renamed) {
+                renamed(name);
+            }
+        }
+        showName();
+    }
+
+    QString m_question;     // pertanyaan pertamanya, judul bila pengguna belum memberi judul
+    QString m_customName;
+    ElidedLabel *m_name = nullptr;
+    QLineEdit *m_edit = nullptr;
+    QPushButton *m_rename = nullptr;
 };
 
 // Enter mengirim, Shift+Enter baris baru
@@ -555,6 +640,7 @@ void CanvasChatPanel::rebuildHistory() {
                 focusInput();
             }
         };
+        row->renamed = [this, id](const QString &name) { m_chat.renameSession(id, name); };
         m_sessions->insertWidget(m_sessions->count() - 1, row);
     }
     m_noSessions->setVisible(sessions.isEmpty());

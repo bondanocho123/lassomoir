@@ -106,6 +106,10 @@ std::optional<CanvasChatMessage> CanvasChatMessage::fromJson(const QJsonObject &
 }
 
 QString CanvasChatSession::title() const {
+    const QString named = name.simplified();
+    if (!named.isEmpty()) {
+        return named;
+    }
     for (const CanvasChatMessage &message : messages) {
         if (message.isUser()) {
             return message.text.simplified();
@@ -184,6 +188,24 @@ bool CanvasChat::openSession(const QString &id) {
     return true;
 }
 
+bool CanvasChat::renameSession(const QString &id, const QString &name) {
+    CanvasChatSession *session = id == m_current.id ? &m_current : nullptr;
+    for (CanvasChatSession &archived : m_archive) {
+        if (!session && archived.id == id) {
+            session = &archived;
+        }
+    }
+    if (!session) {
+        return false;
+    }
+    const QString named = name.simplified();
+    if (session->name != named) {
+        session->name = named;
+        emit changed();
+    }
+    return true;
+}
+
 void CanvasChat::archiveCurrent() {
     if (!m_current.messages.isEmpty()) {
         m_archive.append(m_current);
@@ -191,11 +213,11 @@ void CanvasChat::archiveCurrent() {
     trimArchive(m_archive);
 }
 
-void CanvasChat::load(const QJsonArray &messages, const QJsonArray &history) {
+void CanvasChat::load(const QJsonArray &messages, const QJsonArray &history, const QString &name) {
     if (isBusy()) {
         return;
     }
-    m_current = CanvasChatSession{newId(), messagesFromJson(messages)};
+    m_current = CanvasChatSession{newId(), messagesFromJson(messages), name.simplified()};
     m_archive.clear();
     QSet<QString> ids;
     for (const QJsonValue &value : history) {
@@ -206,6 +228,7 @@ void CanvasChat::load(const QJsonArray &messages, const QJsonArray &history) {
             session.id = newId();
         }
         session.messages = messagesFromJson(object.value(QStringLiteral("messages")).toArray());
+        session.name = object.value(QStringLiteral("title")).toString().simplified();
         if (!session.messages.isEmpty()) {
             ids.insert(session.id);
             m_archive.append(session);
@@ -222,8 +245,12 @@ QJsonArray CanvasChat::toJson() const {
 QJsonArray CanvasChat::historyToJson() const {
     QJsonArray sessions;
     for (const CanvasChatSession &session : m_archive) {
-        sessions.append(QJsonObject{{QStringLiteral("id"), session.id},
-                                    {QStringLiteral("messages"), messagesToJson(session.messages)}});
+        QJsonObject object{{QStringLiteral("id"), session.id},
+                           {QStringLiteral("messages"), messagesToJson(session.messages)}};
+        if (!session.name.isEmpty()) {
+            object[QStringLiteral("title")] = session.name;
+        }
+        sessions.append(object);
     }
     return sessions;
 }
@@ -365,6 +392,7 @@ bool CanvasChat::clear() {
         return true;
     }
     m_current.messages.clear();
+    m_current.name.clear();   // percakapan berikutnya dikenali dari pertanyaan pertamanya lagi
     emit messagesReset();
     emit changed();
     return true;

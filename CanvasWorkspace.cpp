@@ -73,6 +73,7 @@ CanvasWorkspace::Canvas *CanvasWorkspace::ensure(const QString &projectId) {
     CanvasBoard board;
     QJsonArray chatMessages;
     QJsonArray chatHistory;
+    QString chatTitle;
     if (error.isEmpty() && !stored.isEmpty()) {
         QStringList warnings;
         const std::optional<CanvasBoard> parsed = CanvasBoard::fromJson(stored, &error, &warnings);
@@ -80,6 +81,7 @@ CanvasWorkspace::Canvas *CanvasWorkspace::ensure(const QString &projectId) {
             board = *parsed;
             chatMessages = stored.value(QStringLiteral("chat")).toArray();
             chatHistory = stored.value(QStringLiteral("chatHistory")).toArray();
+            chatTitle = stored.value(QStringLiteral("chatTitle")).toString();
         }
         for (const QString &warning : std::as_const(warnings)) {
             emit logLine(QStringLiteral("[KANVAS WARN] %1: %2").arg(projectId, warning));
@@ -111,7 +113,7 @@ CanvasWorkspace::Canvas *CanvasWorkspace::ensure(const QString &projectId) {
         return environmentFor(projectId, CanvasWorkflow::chatContext(current->model->board(), contextIds), reason);
     };
     canvas->chat = new CanvasChat(*canvas->model, m_runtime, chatLaunch);
-    canvas->chat->load(chatMessages, chatHistory);
+    canvas->chat->load(chatMessages, chatHistory, chatTitle);
     wireChat(projectId, canvas);
     connect(canvas->model, &CanvasModel::changed, this, [this, projectId]() { save(projectId); });
     // Undo/redo bisa mengembalikan kartu referensi lama: isinya disegarkan dari task-nya
@@ -319,6 +321,10 @@ QJsonObject CanvasWorkspace::snapshot(const Canvas *canvas) {
     const QJsonArray chat = canvas->chat->toJson();
     if (!chat.isEmpty()) {
         root[QStringLiteral("chat")] = chat;
+    }
+    const QString chatTitle = canvas->chat->currentName();
+    if (!chat.isEmpty() && !chatTitle.isEmpty()) {
+        root[QStringLiteral("chatTitle")] = chatTitle;
     }
     const QJsonArray chatHistory = canvas->chat->historyToJson();
     if (!chatHistory.isEmpty()) {
