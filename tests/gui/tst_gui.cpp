@@ -4657,6 +4657,60 @@ void TestGui::canvasChatSessionsPersistInCanvasFile() {
     QCOMPARE(archived.size(), 1);
     QCOMPARE(firstQuestion(archived.first().toObject().value(QStringLiteral("messages"))),
              QStringLiteral("Siapa penggunanya?"));
+
+    // Ubah judul lewat tombol pensil: kotaknya berisi judul sekarang, Esc batal, Enter menyimpan;
+    // riwayat tetap terbuka dan judulnya masuk file ("title" di riwayat, "chatTitle" untuk sesi yang dibuka)
+    history->click();
+    QVERIFY(panel->isHistoryOpen());
+    auto rowFor = [panel](const QString &text) -> QFrame * {
+        const QList<QFrame *> found = panel->findChildren<QFrame *>(QStringLiteral("canvasChatSession"));
+        for (QFrame *row : found) {
+            const auto *name = row->findChild<ElidedLabel *>(QStringLiteral("canvasChatSessionTitle"));
+            if (name && name->fullText() == text) {
+                return row;
+            }
+        }
+        return nullptr;
+    };
+    QFrame *archivedRow = rowFor(QStringLiteral("Siapa penggunanya?"));
+    QVERIFY(archivedRow);
+    auto *rename = archivedRow->findChild<QPushButton *>(QStringLiteral("btnCanvasChatRename"));
+    auto *edit = archivedRow->findChild<QLineEdit *>(QStringLiteral("canvasChatSessionEdit"));
+    QVERIFY(rename && edit);
+    QTRY_VERIFY(rename->isVisible() && !edit->isVisible());
+    QVERIFY(!rename->icon().isNull() && !rename->toolTip().isEmpty());
+    rename->click();
+    QVERIFY(edit->isVisible() && !rename->isVisible());
+    QCOMPARE(edit->text(), QStringLiteral("Siapa penggunanya?"));
+    edit->setText(QStringLiteral("Batal ini"));
+    QTest::keyClick(edit, Qt::Key_Escape);
+    QVERIFY(!edit->isVisible() && rename->isVisible());
+    QVERIFY(rowFor(QStringLiteral("Siapa penggunanya?")));
+    QVERIFY(panel->isHistoryOpen());
+
+    rename->click();
+    edit->setText(QStringLiteral("  Persona pengguna "));
+    QTest::keyClick(edit, Qt::Key_Return);
+    QVERIFY(!edit->isVisible());
+    QCOMPARE(rowFor(QStringLiteral("Persona pengguna")), archivedRow);
+    QVERIFY(panel->isHistoryOpen());
+    QTRY_COMPARE(saved().value(QStringLiteral("chatHistory")).toArray().first().toObject().value(QStringLiteral("title")).toString(),
+                 QStringLiteral("Persona pengguna"));
+
+    QFrame *currentRow = rowFor(QStringLiteral("Apa risikonya?"));
+    QVERIFY(currentRow && currentRow->property("current").toBool());
+    currentRow->findChild<QPushButton *>(QStringLiteral("btnCanvasChatRename"))->click();
+    auto *currentEdit = currentRow->findChild<QLineEdit *>(QStringLiteral("canvasChatSessionEdit"));
+    currentEdit->setText(QStringLiteral("Risiko utama"));
+    QTest::keyClick(currentEdit, Qt::Key_Return);
+    QTRY_COMPARE(saved().value(QStringLiteral("chatTitle")).toString(), QStringLiteral("Risiko utama"));
+
+    // Judul dikosongkan: kembali ke pertanyaan pertamanya, dan tidak lagi tersimpan
+    rename->click();
+    edit->clear();
+    QTest::keyClick(edit, Qt::Key_Return);
+    QCOMPARE(rowFor(QStringLiteral("Siapa penggunanya?")), archivedRow);
+    QTRY_VERIFY(!saved().value(QStringLiteral("chatHistory")).toArray().first().toObject().contains(QStringLiteral("title")));
 }
 
 namespace {

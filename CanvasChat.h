@@ -47,11 +47,13 @@ struct CanvasChatMessage {
 };
 
 // Satu sesi chat kanvas: satu percakapan yang berdiri sendiri, dikenali dari pertanyaan pertamanya
+// atau dari judul yang diberikan pengguna
 struct CanvasChatSession {
     QString id;
     QList<CanvasChatMessage> messages;
+    QString name;                  // judul dari pengguna; kosong = pertanyaan pertamanya
 
-    // Pertanyaan pertamanya, satu baris
+    // Judul dari pengguna, atau pertanyaan pertamanya; satu baris
     QString title() const;
     int questionCount() const;
     // Waktu pesan terakhirnya (UTC)
@@ -88,12 +90,15 @@ public:
     bool newSession();
     // false bila agent masih menjawab atau sesinya tidak ada
     bool openSession(const QString &id);
+    // Judul sesi dari pengguna; kosong = kembali ke pertanyaan pertamanya. false bila sesinya tidak ada
+    bool renameSession(const QString &id, const QString &name);
 
     // canvas.json: "chat" = pesan sesi yang sedang dibuka (bentuknya tetap seperti sebelum ada sesi,
-    // jadi file lama terbaca apa adanya), "chatHistory" = sesi-sesi lain sebagai {id, messages}.
-    // load diabaikan selagi agent menjawab.
-    void load(const QJsonArray &messages, const QJsonArray &history = QJsonArray());
+    // jadi file lama terbaca apa adanya), "chatTitle" = judul sesi itu dari pengguna, "chatHistory" =
+    // sesi-sesi lain sebagai {id, title?, messages}. load diabaikan selagi agent menjawab.
+    void load(const QJsonArray &messages, const QJsonArray &history = QJsonArray(), const QString &name = QString());
     QJsonArray toJson() const;
+    QString currentName() const { return m_current.name; }
     QJsonArray historyToJson() const;
 
     bool isBusy() const { return !m_session.isNull(); }
