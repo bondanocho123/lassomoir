@@ -19,6 +19,7 @@
 #include "NewTaskDialog.h"
 #include "NotionAccess.h"
 #include "NotionExportDialog.h"
+#include "ProjectGuidelines.h"
 #include "ResponseDrawer.h"
 #include "RunLogFormatter.h"
 #include "RuntimeNoticeDialog.h"
@@ -61,6 +62,7 @@
 #include <QSize>
 #include <QScreen>
 #include <QSplitter>
+#include <QStandardPaths>
 #include <QStackedWidget>
 #include <QVBoxLayout>
 #include <QTimer>
@@ -410,6 +412,8 @@ void MainWindow::addSwimlane(const QString &projectId) {
     auto *swimlane = new SwimlaneWidget(projectId, m_catalog, this);
     swimlane->setWorkingDirectory(m_fileManager->workingDirectory(projectId));
     swimlane->setReferenceDirectories(m_fileManager->referenceDirectories(projectId));
+    const QString guidelineDir = m_fileManager->guidelineDirectory(projectId);
+    swimlane->setGuidelines(guidelineDir, ProjectGuidelines::list(guidelineDir));
 
     // Tangkap interaksi dari swimlane
     connect(swimlane, &SwimlaneWidget::cardMoved, this, &MainWindow::handleCardMoved);
@@ -421,6 +425,10 @@ void MainWindow::addSwimlane(const QString &projectId) {
         chooseReferenceDirectory(id);
     });
     connect(swimlane, &SwimlaneWidget::referenceDirectoryRemoveRequested, this, &MainWindow::removeReferenceDirectory);
+    connect(swimlane, &SwimlaneWidget::guidelineAddRequested, this, [this](const QString &id) {
+        chooseGuidelines(id);
+    });
+    connect(swimlane, &SwimlaneWidget::guidelineRemoveRequested, this, &MainWindow::removeGuideline);
     connect(swimlane, &SwimlaneWidget::branchViewRequested, this, [this](const QString &id) {
         showBranchViewer(id);
     });
@@ -1472,10 +1480,12 @@ void MainWindow::finishRunPreparation(const TaskItem &requested, const TaskGit::
 }
 
 bool MainWindow::startAgentRun(const TaskItem &task, const QString &workingDirectory) {
-    // Foto, isi dokumen lampiran, dan folder referensi dibaca sekarang supaya run memakai isi terbaru
-    const TaskMaterials materials = TaskAttachments::materials(
+    // Foto, isi dokumen lampiran, pedoman project, dan folder referensi dibaca sekarang supaya run
+    // memakai isi terbaru
+    TaskMaterials materials = TaskAttachments::materials(
         task, m_fileManager->attachmentDirectory(task.projectId, task.id),
         m_fileManager->referenceDirectories(task.projectId));
+    ProjectGuidelines::addTo(&materials, m_fileManager->guidelineDirectory(task.projectId));
     for (const QString &warning : materials.warnings) {
         logTask(task, RunLogFormatter::warningLine(task, warning));
     }
@@ -1684,6 +1694,53 @@ void MainWindow::removeReferenceDirectory(const QString &projectId, const QStrin
         swimlane->setReferenceDirectories(dirs);
     }
     ui->consolePanel->appendLog(QString("[SYSTEM] Folder referensi %1 − %2").arg(projectId, QDir::toNativeSeparators(dir)));
+}
+
+void MainWindow::chooseGuidelines(const QString &projectId) {
+    const QString working = m_fileManager->workingDirectory(projectId);
+    const QString start = !working.isEmpty() ? working
+                                             : QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    const QStringList paths = QFileDialog::getOpenFileNames(
+        this, QString("Pedoman project %1 (batasan & guideline untuk semua task)").arg(projectId), start,
+        ProjectGuidelines::fileFilter());
+    if (!paths.isEmpty()) {
+        addGuidelines(projectId, paths);
+    }
+}
+
+void MainWindow::addGuidelines(const QString &projectId, const QStringList &paths) {
+    const QString dir = m_fileManager->guidelineDirectory(projectId);
+    for (const QString &path : paths) {
+        const QStringList before = ProjectGuidelines::list(dir);
+        QString error;
+        const QString name = ProjectGuidelines::add(dir, path, &error);
+        if (name.isEmpty()) {
+            ui->consolePanel->appendLog(QString("[SYSTEM] Pedoman %1: %2 tidak ditambahkan: %3")
+                                            .arg(projectId, QFileInfo(path).fileName(), error));
+            continue;
+        }
+        ui->consolePanel->appendLog(before.contains(name)
+                                        ? QString("[SYSTEM] Pedoman %1 diperbarui: %2").arg(projectId, name)
+                                        : QString("[SYSTEM] Pedoman %1 + %2").arg(projectId, name));
+    }
+    refreshGuidelines(projectId);
+}
+
+void MainWindow::removeGuideline(const QString &projectId, const QString &fileName) {
+    QString error;
+    if (!ProjectGuidelines::remove(m_fileManager->guidelineDirectory(projectId), fileName, &error)) {
+        ui->consolePanel->appendLog(QString("[SYSTEM] Pedoman %1: %2").arg(projectId, error));
+        return;
+    }
+    refreshGuidelines(projectId);
+    ui->consolePanel->appendLog(QString("[SYSTEM] Pedoman %1 − %2").arg(projectId, fileName));
+}
+
+void MainWindow::refreshGuidelines(const QString &projectId) {
+    if (auto *swimlane = m_swimlanes.value(projectId, nullptr)) {
+        const QString dir = m_fileManager->guidelineDirectory(projectId);
+        swimlane->setGuidelines(dir, ProjectGuidelines::list(dir));
+    }
 }
 
 void MainWindow::handleRunQueued(const TaskItem &task) {

@@ -8,7 +8,8 @@
 
 // Isi teks dokumen lampiran untuk prompt agent. Tool Read milik agent tidak bisa membuka
 // .xlsx/.docx, jadi isinya diubah ke teks di sini:
-// - .csv / .tsv: teks apa adanya (UTF-8, atau code page Windows bila bukan UTF-8 yang sah);
+// - .csv / .tsv / .md / .markdown / .txt: teks apa adanya (UTF-8, atau code page Windows bila bukan
+//   UTF-8 yang sah);
 // - .xlsx / .xlsm: tiap sheet jadi baris CSV di bawah penanda "[Sheet: <nama>]", sel bertanggal
 //   ditulis ISO (2026-09-28), rumus diwakili hasil terakhirnya;
 // - .docx: paragraf per baris, judul diawali '#', butir daftar "- ", tabel jadi baris "| a | b |".

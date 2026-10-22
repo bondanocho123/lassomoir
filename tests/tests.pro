@@ -45,6 +45,7 @@ SOURCES += \
     ../StageSwarm.cpp \
     ../StreamJsonParser.cpp \
     ../SwarmCoordinator.cpp \
+    ../ProjectGuidelines.cpp \
     ../TaskAttachments.cpp \
     ../TaskGit.cpp \
     ../TaskManager.cpp \
@@ -89,6 +90,7 @@ HEADERS += \
     ../StageSwarm.h \
     ../StreamJsonParser.h \
     ../SwarmCoordinator.h \
+    ../ProjectGuidelines.h \
     ../TaskAttachments.h \
     ../TaskGit.h \
     ../TaskItem.h \

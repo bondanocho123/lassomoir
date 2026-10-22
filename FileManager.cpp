@@ -377,6 +377,13 @@ QString FileManager::attachmentDirectory(const QString &projectId, const QString
     return QStringLiteral("%1/projects/%2/attachments/%3").arg(m_basePath, projectId, taskId);
 }
 
+QString FileManager::guidelineDirectory(const QString &projectId) const {
+    if (projectId.isEmpty()) {
+        return QString();
+    }
+    return QStringLiteral("%1/projects/%2/guidelines").arg(m_basePath, projectId);
+}
+
 bool FileManager::deleteAttachments(const QString &projectId, const QString &taskId, QString *error) {
     // Path kosong = QDir("") = folder kerja proses: jangan pernah dihapus
     const QString path = attachmentDirectory(projectId, taskId);

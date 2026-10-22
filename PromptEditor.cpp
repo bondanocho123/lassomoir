@@ -358,7 +358,7 @@ void PromptEditor::chooseImages() {
 
 void PromptEditor::chooseDocuments() {
     const QStringList paths = QFileDialog::getOpenFileNames(
-        this, QStringLiteral("Lampirkan file Excel, Word, atau CSV"),
+        this, QStringLiteral("Lampirkan file Excel, Word, CSV, Markdown, atau teks"),
         QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation), TaskAttachments::documentFilter());
     if (!paths.isEmpty()) {
         addFiles(paths);
