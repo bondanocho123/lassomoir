@@ -19,6 +19,7 @@ class QLabel;
 class QMenu;
 class QPushButton;
 class QFrame;
+class QScrollArea;
 
 // Dialog form untuk membuat TaskItem baru. Field-nya mengikuti struct TaskItem.h;
 // tampilannya meniru palet & pola tombol yang sudah dipakai di aplikasi (lihat styles.qss).
@@ -54,11 +55,19 @@ public:
     // sudah dibuat tidak bisa ganti branch dasar, jadi tidak dibaca apa-apa.
     void loadBranches(const QString &workingDirectory);
 
+protected:
+    void showEvent(QShowEvent *event) override;
+
 private slots:
     void updateCreateButtonEnabled();
 
 private:
     QString m_projectId;
+
+    // Field form di dalam area gulir; judul dan tombol di luarnya selalu terlihat
+    QScrollArea *m_scroll;
+    QWidget *m_body;
+    bool m_fitted = false;   // tinggi awal sudah disesuaikan dengan isi & layar
 
     // Task asal saat mode edit; kosong (id kosong) saat membuat task baru
     TaskItem m_original;

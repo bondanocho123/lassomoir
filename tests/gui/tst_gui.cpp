@@ -27,6 +27,7 @@
 #include "MaintainabilityView.h"
 #include "MarkdownView.h"
 #include "MermaidRenderer.h"
+#include "NewTaskDialog.h"
 #include "NotionAccess.h"
 #include "NotionClient.h"
 #include "NotionExport.h"
@@ -275,6 +276,7 @@ private slots:
     // Kotak prompt berfoto, lampiran Excel/Word/CSV, dan folder referensi
     void promptEditorAttachesPhotosAndDocuments();
     void newTaskWithAttachmentsFeedsRun();
+    void taskDialogButtonsStayOnScreen();
     void referenceFoldersFeedRuns();
     // Pedoman project: tombol "Pedoman" di header, salinan file, isinya ikut prompt semua task
     void projectGuidelinesFeedRuns();
@@ -3141,6 +3143,41 @@ void TestGui::newTaskWithAttachmentsFeedsRun() {
     auto *subtext = mockup->findChild<QLabel *>(QStringLiteral("labelSubtext"));
     QCOMPARE(subtext->text(), QStringLiteral("satu\ndua\ntiga…"));
     QCOMPARE(subtext->toolTip(), QStringLiteral("satu\ndua\n\ntiga\nempat\nlima"));
+}
+
+void TestGui::taskDialogButtonsStayOnScreen() {
+    QTemporaryDir source;
+    QStringList files;
+    for (int i = 0; i < 12; ++i) {
+        files.append(source.filePath(QStringLiteral("data%1.csv").arg(i)));
+        QVERIFY(writeFile(files.last(), "produk,harga\n"));
+    }
+
+    // Banyak lampiran: field form bergulir, dialog tetap setinggi layar dan tombolnya terlihat
+    NewTaskDialog dialog(QStringLiteral("Demo"), m_catalog, m_window.get());
+    auto *editor = dialog.findChild<PromptEditor *>();
+    QCOMPARE(editor->addFiles(files), int(files.size()));
+    dialog.show();
+    auto closeDialog = qScopeGuard([&dialog]() { dialog.close(); });
+    QVERIFY(QTest::qWaitForWindowExposed(&dialog));
+
+    const int available = dialog.screen()->availableGeometry().height();
+    QVERIFY2(dialog.height() < available, qPrintable(QString::number(dialog.height())));
+    // Bukan batas bawaan Qt 2/3 layar: ruang layar dipakai seluruhnya
+    QVERIFY2(dialog.height() > available * 3 / 4, qPrintable(QString::number(dialog.height())));
+    auto *scroll = dialog.findChild<QScrollArea *>(QStringLiteral("taskFormScroll"));
+    QVERIFY(scroll->verticalScrollBar()->isVisible());
+    for (const char *name : {"btnTaskFormCreate", "btnTaskFormCancel"}) {
+        auto *button = dialog.findChild<QPushButton *>(QLatin1String(name));
+        QVERIFY(button->isVisible());
+        QVERIFY(dialog.rect().contains(QRect(button->mapTo(&dialog, QPoint(0, 0)), button->size())));
+    }
+
+    // Lampiran yang ditambah saat dialog terbuka tidak memanjangkan dialog
+    const int height = dialog.height();
+    QVERIFY(editor->addImage(solidImage(QSize(64, 48), Qt::red)));
+    QTest::qWait(50);
+    QCOMPARE(dialog.height(), height);
 }
 
 void TestGui::referenceFoldersFeedRuns() {
