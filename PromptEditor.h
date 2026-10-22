@@ -20,7 +20,7 @@ class QVBoxLayout;
 
 // Kotak prompt di form task (field SUBTEXT): teks multi-baris untuk agent beserta lampirannya.
 // Foto bisa ditempel (Ctrl+V), diseret ke kotak, atau dipilih lewat tombol Foto; tiap foto tampil
-// sebagai thumbnail (klik = pratinjau, × = hapus). Dokumen Excel/Word/CSV masuk lewat tombol File
+// sebagai thumbnail (klik = pratinjau, × = hapus). Dokumen Excel/Word/CSV/Markdown/teks masuk lewat tombol File
 // (atau diseret) dan tampil sebagai daftar di bawah thumbnail.
 // Tidak menulis ke disk: pemanggil menyimpan attachments() lewat TaskAttachments::save().
 class PromptEditor : public QFrame {

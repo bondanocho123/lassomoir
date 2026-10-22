@@ -22,6 +22,8 @@ public:
 // Prompt serah-terima antar stage, dirakit dari task.runs:
 // - "# Task": judul / kategori / catatan satu baris (baris kosong dilewati);
 // - "# Instruksi": catatan multi-baris dari kotak prompt form task;
+// - "# Pedoman project (wajib diikuti)": batasan & guideline project (ProjectGuidelines), isi teksnya
+//   ikut di sini kecuali PDF, yang hanya disebut path-nya untuk dibaca agent dengan Read;
 // - "# Lampiran": nama foto (fotonya sendiri ikut sebagai blok gambar) dan isi teks dokumen;
 // - "# Folder referensi (hanya dibaca)": folder di luar folder kerja yang boleh dibaca agent;
 // - "# Spesifikasi yang disetujui (<STAGE>)": dokumen gate terakhir yang disetujui + catatannya;

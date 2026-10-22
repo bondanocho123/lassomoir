@@ -44,6 +44,15 @@ QString suffixOf(const QString &fileName) {
     return QFileInfo(fileName).suffix().toLower();
 }
 
+// Dokumen yang isinya sudah teks: dibaca apa adanya, bukan dibuka sebagai arsip Office
+bool isPlainSuffix(const QString &suffix) {
+    static const QStringList plain = {
+        QStringLiteral("csv"), QStringLiteral("tsv"), QStringLiteral("md"), QStringLiteral("markdown"),
+        QStringLiteral("txt"),
+    };
+    return plain.contains(suffix);
+}
+
 QString truncatedNote() {
     return QStringLiteral("[… sisa dokumen tidak dibaca: lebih dari %1 karakter …]").arg(kMaxTextChars);
 }
@@ -737,7 +746,8 @@ QString workbookText(const OfficeArchive &archive, QString *error) {
 const QStringList &DocumentText::supportedSuffixes() {
     static const QStringList suffixes = {
         QStringLiteral("xlsx"), QStringLiteral("xlsm"), QStringLiteral("docx"),
-        QStringLiteral("csv"), QStringLiteral("tsv"),
+        QStringLiteral("csv"), QStringLiteral("tsv"), QStringLiteral("md"), QStringLiteral("markdown"),
+        QStringLiteral("txt"),
     };
     return suffixes;
 }
@@ -752,13 +762,14 @@ bool DocumentText::check(const QString &path, QString *error) {
         return fail(error, QStringLiteral("Format lama .%1 tidak didukung; simpan ulang sebagai .%1x").arg(suffix));
     }
     if (!isSupported(path)) {
-        return fail(error, QStringLiteral("Hanya file Excel (.xlsx), Word (.docx), dan CSV yang bisa dilampirkan"));
+        return fail(error, QStringLiteral("Hanya file Excel (.xlsx), Word (.docx), CSV, Markdown (.md), dan teks (.txt) "
+                                          "yang bisa dilampirkan"));
     }
     const QFileInfo info(path);
     if (!info.isFile()) {
         return fail(error, QStringLiteral("File tidak ditemukan"));
     }
-    if (suffix == QLatin1String("csv") || suffix == QLatin1String("tsv")) {
+    if (isPlainSuffix(suffix)) {
         QFile file(path);
         if (!file.open(QIODevice::ReadOnly)) {
             return fail(error, QStringLiteral("File tidak bisa dibuka: %1").arg(file.errorString()));
@@ -774,7 +785,7 @@ QString DocumentText::extract(const QString &path, QString *error) {
         return QString();
     }
     const QString suffix = suffixOf(path);
-    if (suffix == QLatin1String("csv") || suffix == QLatin1String("tsv")) {
+    if (isPlainSuffix(suffix)) {
         return plainText(path, error);
     }
     const OfficeArchive archive(path);

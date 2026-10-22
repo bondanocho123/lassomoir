@@ -276,6 +276,8 @@ private slots:
     void promptEditorAttachesPhotosAndDocuments();
     void newTaskWithAttachmentsFeedsRun();
     void referenceFoldersFeedRuns();
+    // Pedoman project: tombol "Pedoman" di header, salinan file, isinya ikut prompt semua task
+    void projectGuidelinesFeedRuns();
 
     // Nama project panjang dipotong "…" supaya tombol hapus dan "+" di barisnya tetap terlihat
     void longProjectNameKeepsRowButtonsVisible();
@@ -2953,7 +2955,7 @@ void TestGui::promptEditorAttachesPhotosAndDocuments() {
     QVERIFY(writeFile(csv, "produk,harga\nkopi,15000\n"));
     const QString xls = dir.filePath(QStringLiteral("laporan.xls"));
     QVERIFY(writeFile(xls, "lama"));
-    const QString txt = dir.filePath(QStringLiteral("catatan.txt"));
+    const QString txt = dir.filePath(QStringLiteral("arsip.zip"));
     QVERIFY(writeFile(txt, "bukan lampiran"));
 
     QMimeData onlyText;
@@ -3232,6 +3234,121 @@ void TestGui::referenceFoldersFeedRuns() {
     runButton(QStringLiteral("t3"))->click();
     QVERIFY(m_runtime.sessions.last()->launch().readableDirectories.isEmpty());
     QVERIFY(!m_runtime.sessions.last()->launch().prompt.contains(QStringLiteral("Folder referensi")));
+}
+
+void TestGui::projectGuidelinesFeedRuns() {
+    QTemporaryDir sources;
+    const QDir source(sources.path());
+    const QString markdown = source.filePath(QStringLiteral("arsitektur.md"));
+    const QString pdf = source.filePath(QStringLiteral("standar framework.pdf"));
+    const QString fake = source.filePath(QStringLiteral("palsu.pdf"));
+    for (const auto &[path, content] : {std::pair{markdown, QByteArray("# Arsitektur\nPakai MVC, tanpa ORM.\n")},
+                                        std::pair{pdf, QByteArray("%PDF-1.7\n")},
+                                        std::pair{fake, QByteArray("bukan pdf")}}) {
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(content);
+    }
+    const QString guidelineDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+                                 + QStringLiteral("/projects/Demo/guidelines");
+
+    m_openedUrls.clear();
+    QDesktopServices::setUrlHandler(QStringLiteral("file"), this, "recordOpenedUrl");
+    const auto restore = qScopeGuard([]() { QDesktopServices::unsetUrlHandler(QStringLiteral("file")); });
+
+    SwimlaneWidget *swimlane = m_window->findChild<SwimlaneWidget *>();
+    auto *button = swimlane->findChild<QPushButton *>(QStringLiteral("btnGuidelines"));
+    QVERIFY(button);
+    QCOMPARE(button->text(), QStringLiteral("Pedoman"));
+    QVERIFY(!button->icon().isNull());
+    auto shownPopup = [&swimlane]() -> QFrame * {
+        const QList<QFrame *> popups = swimlane->findChildren<QFrame *>(QStringLiteral("guidelinePopup"));
+        for (QFrame *popup : popups) {
+            if (popup->isVisible()) {
+                return popup;
+            }
+        }
+        return nullptr;
+    };
+    // Popup "Pedoman" -> "Tambah file…" -> pemilih file
+    auto addThroughPopup = [&](const QString &path) {
+        button->click();
+        QFrame *popup = shownPopup();
+        QVERIFY(popup);
+        driveNextModalDialog([path](QDialog *dialog) {
+            auto *picker = qobject_cast<QFileDialog *>(dialog);
+            QVERIFY(picker);
+            QVERIFY(picker->windowTitle().startsWith(QStringLiteral("Pedoman project Demo")));
+            QCOMPARE(picker->fileMode(), QFileDialog::ExistingFiles);
+            picker->selectFile(path);
+            dialog->accept();
+        });
+        popup->findChild<QPushButton *>(QStringLiteral("btnGuidelineAdd"))->click();
+        QTRY_VERIFY(m_dialogSeen);
+    };
+
+    button->click();
+    QFrame *popup = shownPopup();
+    QVERIFY(popup);
+    QVERIFY(popup->findChild<QLabel *>(QStringLiteral("guidelinePopupEmpty")));
+    popup->close();
+
+    addThroughPopup(markdown);
+    QTRY_COMPARE(button->text(), QStringLiteral("Pedoman · 1"));
+    QVERIFY(button->toolTip().contains(QStringLiteral("• arsitektur.md")));
+    QVERIFY(consoleText().contains(QStringLiteral("[SYSTEM] Pedoman Demo + arsitektur.md")));
+    addThroughPopup(pdf);
+    QTRY_COMPARE(button->text(), QStringLiteral("Pedoman · 2"));
+    addThroughPopup(fake);
+    QTRY_VERIFY(consoleText().contains(
+        QStringLiteral("[SYSTEM] Pedoman Demo: palsu.pdf tidak ditambahkan: Bukan file PDF yang valid")));
+    QCOMPARE(button->text(), QStringLiteral("Pedoman · 2"));
+    // Yang disimpan salinannya, bukan path asli
+    QVERIFY(QFileInfo::exists(guidelineDir + QStringLiteral("/arsitektur.md")));
+
+    // Run di stage mana pun: isi Markdown ikut prompt, PDF disebut path-nya dan foldernya boleh dibaca
+    runButton(QStringLiteral("t3"))->click();
+    FakeAgentSession *session = m_runtime.sessions.last();
+    const QString nativeDir = QDir::toNativeSeparators(QDir(guidelineDir).absolutePath());
+    QCOMPARE(session->launch().readableDirectories, QStringList({nativeDir}));
+    const QString prompt = session->launch().prompt;
+    QVERIFY(prompt.contains(QStringLiteral("# Pedoman project (wajib diikuti)\n")));
+    QVERIFY(prompt.contains(QStringLiteral("```markdown\n# Arsitektur\nPakai MVC, tanpa ORM.\n")));
+    QVERIFY(prompt.contains(QStringLiteral("- standar framework.pdf: `%1\\standar framework.pdf` (PDF: baca dengan Read")
+                                .arg(nativeDir)));
+    session->finishWith(successResult(QStringLiteral("Selesai")));
+
+    // Tersimpan di folder project: masih ada setelah aplikasi dibuka lagi
+    m_window.reset();
+    m_tasks.reset();
+    createWindow();
+    swimlane = m_window->findChild<SwimlaneWidget *>();
+    button = swimlane->findChild<QPushButton *>(QStringLiteral("btnGuidelines"));
+    QCOMPARE(button->text(), QStringLiteral("Pedoman · 2"));
+
+    // Tombol buka membuka salinannya; × menghapusnya dan popup yang sama tetap terbuka
+    button->click();
+    popup = shownPopup();
+    QVERIFY(popup);
+    QCOMPARE(shownChildren<QLabel>(popup, QStringLiteral("guidelineRowName")).first()->text(),
+             QStringLiteral("arsitektur.md"));
+    QVERIFY(shownChildren<QLabel>(popup, QStringLiteral("guidelineRowPath")).last()->text().contains(
+        QStringLiteral("dibaca agent dengan Read")));
+    shownChildren<QToolButton>(popup, QStringLiteral("btnGuidelineOpen")).first()->click();
+    QCOMPARE(m_openedUrls, QList<QUrl>{QUrl::fromLocalFile(QDir(guidelineDir).filePath(QStringLiteral("arsitektur.md")))});
+    shownChildren<QToolButton>(popup, QStringLiteral("btnGuidelineRemove")).first()->click();
+    QCOMPARE(button->text(), QStringLiteral("Pedoman · 1"));
+    QCOMPARE(shownPopup(), popup);
+    QTest::qWait(50);
+    QCOMPARE(shownPopup(), popup);
+    QCOMPARE(shownChildren<QLabel>(popup, QStringLiteral("guidelineRowName")).size(), 1);
+    popup->close();
+    QVERIFY(consoleText().contains(QStringLiteral("[SYSTEM] Pedoman Demo − arsitektur.md")));
+    QVERIFY(QFileInfo::exists(markdown));
+
+    runButton(QStringLiteral("t1"))->click();
+    QVERIFY(!m_runtime.sessions.last()->launch().prompt.contains(QStringLiteral("Pakai MVC")));
+    QVERIFY(m_runtime.sessions.last()->launch().prompt.contains(QStringLiteral("standar framework.pdf")));
 }
 
 void TestGui::longProjectNameKeepsRowButtonsVisible() {
@@ -4013,9 +4130,10 @@ void TestGui::drawerFitsBesidePinnedLieutenant() {
     auto *btnWorkingDir = swimlane->findChild<QPushButton *>(QStringLiteral("btnWorkingDir"));
     auto *btnBranch = swimlane->findChild<QPushButton *>(QStringLiteral("btnBranch"));
     auto *btnReference = swimlane->findChild<QPushButton *>(QStringLiteral("btnReferenceDirs"));
+    auto *btnGuidelines = swimlane->findChild<QPushButton *>(QStringLiteral("btnGuidelines"));
     auto *btnClose = swimlane->findChild<QPushButton *>(QStringLiteral("btnClose"));
     auto *closeDrawer = panel->findChild<QPushButton *>(QStringLiteral("btnDrawerClose"));
-    QVERIFY(title && btnCanvas && btnWorkingDir && btnBranch && btnReference && btnClose && closeDrawer);
+    QVERIFY(title && btnCanvas && btnWorkingDir && btnBranch && btnReference && btnGuidelines && btnClose && closeDrawer);
     QWidget *stack = board->widget(0);
 
     QTest::qWait(50);   // ukuran splitter awal sudah diterapkan
@@ -4033,7 +4151,7 @@ void TestGui::drawerFitsBesidePinnedLieutenant() {
     QVERIFY(page->minimumSizeHint().width() > swimlane->minimumSizeHint().width());
 
     // Header seperti project sungguhan: nama project panjang dan folder kerja di repository git
-    // (lima tombol). Dipasang setelah run selesai, supaya pembacaan branch yang sebenarnya (folder
+    // (enam tombol). Dipasang setelah run selesai, supaya pembacaan branch yang sebenarnya (folder
     // kerja test bukan repository) tidak menyembunyikan tombol branch lagi.
     const QString projectTitle = QStringLiteral("Lassomoir-Backend");
     const QString folderName = QDir(m_workDir.path()).dirName();
@@ -4063,7 +4181,8 @@ void TestGui::drawerFitsBesidePinnedLieutenant() {
         if (swimlane->width() != stack->width()) {
             return QStringLiteral("swimlane %1 di board selebar %2").arg(swimlane->width()).arg(stack->width());
         }
-        const QList<QPushButton *> buttons = {btnCanvas, btnWorkingDir, btnBranch, btnReference, btnClose};
+        const QList<QPushButton *> buttons = {btnCanvas, btnWorkingDir, btnBranch, btnReference, btnGuidelines,
+                                              btnClose};
         for (const QPushButton *button : buttons) {
             const QRect rect(button->mapTo(swimlane, QPoint(0, 0)), button->size());
             if (!button->isVisible() || rect.left() < 0 || rect.right() >= swimlane->width()
@@ -4077,12 +4196,18 @@ void TestGui::drawerFitsBesidePinnedLieutenant() {
     };
     QTest::qWait(300);
     QVERIFY2(overflow().isEmpty(), qPrintable(overflow()));
-    // Tanpa drawer header muat utuh: semua tombol berteks, judul lengkap
+    // Tanpa drawer semua tombol header berteks. Dengan enam tombol judulnya boleh dipendekkan
+    // (nama lengkap di tooltip), tapi tidak sampai di bawah lebar minimumnya.
+    auto titleShortenedAtMost = [&]() {
+        return title->text() == projectTitle
+               || (title->width() >= 60 && title->text().endsWith(QChar(0x2026)) && title->toolTip() == projectTitle);
+    };
     QCOMPARE(btnCanvas->text(), QStringLiteral("Kanvas"));
     QCOMPARE(btnWorkingDir->text(), folderName);
     QCOMPARE(btnBranch->text(), QStringLiteral("main"));
     QCOMPARE(btnReference->text(), QStringLiteral("Referensi"));
-    QCOMPARE(title->text(), projectTitle);
+    QCOMPARE(btnGuidelines->text(), QStringLiteral("Pedoman"));
+    QVERIFY2(titleShortenedAtMost(), qPrintable(title->text()));
 
     runButton(QStringLiteral("t3"))->click();   // membuka drawer
     QVERIFY(!panel->isHidden());
@@ -4096,7 +4221,7 @@ void TestGui::drawerFitsBesidePinnedLieutenant() {
                             .arg(panel->geometry().left()).arg(panel->geometry().right()).arg(board->width())));
     // Board yang mengalah: tombol berikon tinggal ikonnya (teksnya terbaca di tooltip), "Close" tetap
     QVERIFY2(stack->width() < page->minimumSizeHint().width(), qPrintable(QString::number(stack->width())));
-    const QList<QPushButton *> iconButtons = {btnCanvas, btnWorkingDir, btnBranch, btnReference};
+    const QList<QPushButton *> iconButtons = {btnCanvas, btnWorkingDir, btnBranch, btnReference, btnGuidelines};
     for (const QPushButton *button : iconButtons) {
         QVERIFY2(button->text().isEmpty() && !button->icon().isNull() && !button->toolTip().isEmpty(),
                  qPrintable(button->objectName()));
@@ -4112,7 +4237,8 @@ void TestGui::drawerFitsBesidePinnedLieutenant() {
     QCOMPARE(btnCanvas->text(), QStringLiteral("Kanvas"));
     QCOMPARE(btnWorkingDir->text(), folderName);
     QCOMPARE(btnReference->text(), QStringLiteral("Referensi"));
-    QTRY_COMPARE(title->text(), projectTitle);
+    QCOMPARE(btnGuidelines->text(), QStringLiteral("Pedoman"));
+    QTRY_VERIFY2(titleShortenedAtMost(), qPrintable(title->text()));
     QCOMPARE(stack->minimumWidth(), 0);
     QTest::qWait(100);
     QVERIFY2(overflow().isEmpty(), qPrintable(overflow()));

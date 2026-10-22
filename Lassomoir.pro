@@ -80,6 +80,7 @@ SOURCES += \
     StreamJsonParser.cpp \
     SwarmCoordinator.cpp \
     SwimlaneWidget.cpp \
+    ProjectGuidelines.cpp \
     TaskAttachments.cpp \
     TaskGit.cpp \
     TaskManager.cpp \
@@ -159,6 +160,7 @@ HEADERS += \
     StreamJsonParser.h \
     SwarmCoordinator.h \
     SwimlaneWidget.h \
+    ProjectGuidelines.h \
     TaskAttachments.h \
     TaskGit.h \
     TaskItem.h \

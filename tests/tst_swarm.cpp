@@ -19,6 +19,7 @@
 #include "MermaidRenderer.h"
 #include "NotionAccess.h"
 #include "NotionExport.h"
+#include "ProjectGuidelines.h"
 #include "PromptComposer.h"
 #include "RunLogFormatter.h"
 #include "SecretStore.h"
@@ -572,6 +573,10 @@ private slots:
     void userMessageCarriesImages();
     void claudeSessionSendsImagesAsStreamJson();
     void swarmPassesMaterialsToLaunch();
+
+    // Pedoman project (batasan & guideline untuk semua task)
+    void guidelinesAddReplaceAndRemove();
+    void guidelinesFeedPrompt();
 
     // Kanvas brainstorm: model, alur kerja langkah AI, dan persistensinya
     void canvasBoardRoundTripsJson();
@@ -4374,10 +4379,11 @@ void TestSwarm::documentTextRejectsUnsupportedFiles() {
     QVERIFY(writeFile(doc, "x"));
     QCOMPARE(problem(doc), QStringLiteral("Format lama .doc tidak didukung; simpan ulang sebagai .docx"));
 
-    const QString txt = dir.filePath(QStringLiteral("catatan.txt"));
-    QVERIFY(writeFile(txt, "x"));
-    QVERIFY(problem(txt).startsWith(QStringLiteral("Hanya file Excel")));
-    QVERIFY(!DocumentText::isSupported(txt));
+    const QString pdf = dir.filePath(QStringLiteral("standar.pdf"));
+    QVERIFY(writeFile(pdf, "%PDF-1.7"));
+    QVERIFY(problem(pdf).startsWith(QStringLiteral("Hanya file Excel")));
+    QVERIFY(!DocumentText::isSupported(pdf));
+    QVERIFY(DocumentText::isSupported(QStringLiteral("pedoman.MD")));
     QVERIFY(DocumentText::isSupported(QStringLiteral("Laporan.XLSX")));
 
     QCOMPARE(problem(dir.filePath(QStringLiteral("hilang.csv"))), QStringLiteral("File tidak ditemukan"));
@@ -4793,6 +4799,138 @@ void TestSwarm::swarmPassesMaterialsToLaunch() {
     QVERIFY(f.run(QStringLiteral("m2"), QStringLiteral("SPECIFIER")));
     QVERIFY(sessionFor(f.runtime, QStringLiteral("m2"))->launch().imagePaths.isEmpty());
     QVERIFY(sessionFor(f.runtime, QStringLiteral("m2"))->launch().readableDirectories.isEmpty());
+}
+
+void TestSwarm::guidelinesAddReplaceAndRemove() {
+    QTemporaryDir root;
+    const QDir sources(root.filePath(QStringLiteral("asli")));
+    const QString guidelines = root.filePath(QStringLiteral("projects/Demo/guidelines"));
+    QVERIFY(writeFile(sources.filePath(QStringLiteral("Arsitektur.md")), "# Arsitektur\nPakai MVC.\n"));
+    QVERIFY(writeFile(sources.filePath(QStringLiteral("standar.pdf")), "%PDF-1.7\n%isi\n"));
+    QVERIFY(writeFile(sources.filePath(QStringLiteral("palsu.pdf")), "bukan pdf"));
+    QVERIFY(writeFile(sources.filePath(QStringLiteral("lama.doc")), "x"));
+    QVERIFY(writeFile(sources.filePath(QStringLiteral("alat.exe")), "MZ"));
+
+    QVERIFY(ProjectGuidelines::list(guidelines).isEmpty());
+    QVERIFY(ProjectGuidelines::list(QString()).isEmpty());
+    QVERIFY(ProjectGuidelines::isSupported(QStringLiteral("Pedoman.PDF")));
+    QVERIFY(ProjectGuidelines::fileFilter().contains(QStringLiteral("*.pdf")));
+    QVERIFY(ProjectGuidelines::fileFilter().contains(QStringLiteral("*.md")));
+
+    QString error;
+    QCOMPARE(ProjectGuidelines::add(guidelines, sources.filePath(QStringLiteral("standar.pdf")), &error),
+             QStringLiteral("standar.pdf"));
+    QCOMPARE(ProjectGuidelines::add(guidelines, sources.filePath(QStringLiteral("Arsitektur.md")), &error),
+             QStringLiteral("Arsitektur.md"));
+    // Urut nama tanpa beda huruf besar/kecil
+    QCOMPARE(ProjectGuidelines::list(guidelines), QStringList({"Arsitektur.md", "standar.pdf"}));
+
+    QVERIFY(ProjectGuidelines::add(guidelines, sources.filePath(QStringLiteral("palsu.pdf")), &error).isEmpty());
+    QCOMPARE(error, QStringLiteral("Bukan file PDF yang valid"));
+    QVERIFY(ProjectGuidelines::add(guidelines, sources.filePath(QStringLiteral("lama.doc")), &error).isEmpty());
+    QCOMPARE(error, QStringLiteral("Format lama .doc tidak didukung; simpan ulang sebagai .docx"));
+    QVERIFY(ProjectGuidelines::add(guidelines, sources.filePath(QStringLiteral("alat.exe")), &error).isEmpty());
+    QVERIFY(error.startsWith(QStringLiteral("Hanya Markdown")));
+    QVERIFY(ProjectGuidelines::add(guidelines, sources.filePath(QStringLiteral("hilang.md")), &error).isEmpty());
+    QCOMPARE(error, QStringLiteral("File tidak ditemukan"));
+    QCOMPARE(ProjectGuidelines::list(guidelines).size(), 2);
+
+    // File bernama sama (beda huruf pun) menggantikan pedoman lama, tanpa salinan " (2)"
+    QVERIFY(writeFile(sources.filePath(QStringLiteral("baru/arsitektur.MD")), "# Arsitektur\nPakai MVVM.\n"));
+    QCOMPARE(ProjectGuidelines::add(guidelines, sources.filePath(QStringLiteral("baru/arsitektur.MD")), &error),
+             QStringLiteral("Arsitektur.md"));
+    QCOMPARE(ProjectGuidelines::list(guidelines), QStringList({"Arsitektur.md", "standar.pdf"}));
+    QFile replaced(QDir(guidelines).filePath(QStringLiteral("Arsitektur.md")));
+    QVERIFY(replaced.open(QIODevice::ReadOnly));
+    QCOMPARE(replaced.readAll(), QByteArray("# Arsitektur\nPakai MVVM.\n"));
+    replaced.close();
+    // File di folder pedoman sendiri: tidak dihapus oleh penggantian
+    QCOMPARE(ProjectGuidelines::add(guidelines, QDir(guidelines).filePath(QStringLiteral("standar.pdf")), &error),
+             QStringLiteral("standar.pdf"));
+    QVERIFY(QFileInfo::exists(QDir(guidelines).filePath(QStringLiteral("standar.pdf"))));
+
+    // Hapus hanya salinannya; folder kosong ikut hilang
+    QVERIFY(ProjectGuidelines::remove(guidelines, QStringLiteral("standar.pdf"), &error));
+    QVERIFY(QFileInfo::exists(sources.filePath(QStringLiteral("standar.pdf"))));
+    QCOMPARE(ProjectGuidelines::list(guidelines), QStringList({"Arsitektur.md"}));
+    QVERIFY(!ProjectGuidelines::remove(guidelines, QStringLiteral("../asli/Arsitektur.md"), &error));
+    QVERIFY(QFileInfo::exists(sources.filePath(QStringLiteral("Arsitektur.md"))));
+    QVERIFY(ProjectGuidelines::remove(guidelines, QStringLiteral("Arsitektur.md"), &error));
+    QVERIFY(ProjectGuidelines::remove(guidelines, QStringLiteral("Arsitektur.md"), &error));   // sudah tidak ada
+    QVERIFY(!QFileInfo::exists(guidelines));
+}
+
+void TestSwarm::guidelinesFeedPrompt() {
+    QTemporaryDir root;
+    const QDir guidelines(root.filePath(QStringLiteral("guidelines")));
+    QVERIFY(writeFile(guidelines.filePath(QStringLiteral("arsitektur.md")), "# Arsitektur\r\nPakai MVC.\r\n"));
+    QVERIFY(writeFile(guidelines.filePath(QStringLiteral("standar.pdf")), "%PDF-1.7\n"));
+    QByteArray big;
+    for (int i = 0; i < 2000; ++i) {
+        big += QByteArray("- aturan nomor ") + QByteArray::number(i).rightJustified(4, '0') + QByteArray(" wajib\n");
+    }
+    QVERIFY(writeFile(guidelines.filePath(QStringLiteral("gaya-kode.txt")), big));
+    QVERIFY(writeFile(guidelines.filePath(QStringLiteral("rusak.docx")), "bukan zip"));
+
+    TaskMaterials materials;
+    materials.referenceDirectories = QStringList({QStringLiteral("E:\\referensi")});
+    ProjectGuidelines::addTo(&materials, guidelines.path());
+    QCOMPARE(materials.guidelineDirectory, QDir::toNativeSeparators(guidelines.absolutePath()));
+    QCOMPARE(int(materials.guidelines.size()), 4);
+    QCOMPARE(materials.guidelines.at(0).fileName, QStringLiteral("arsitektur.md"));
+    QCOMPARE(materials.guidelines.at(0).text, QStringLiteral("# Arsitektur\nPakai MVC.\n"));
+    const TaskMaterials::Document &style = materials.guidelines.at(1);
+    QCOMPARE(style.fileName, QStringLiteral("gaya-kode.txt"));
+    QVERIFY(style.text.size() <= ProjectGuidelines::kDocumentPromptChars);
+    QCOMPARE(style.text.size() + style.omittedChars, qsizetype(big.size()));
+    QVERIFY(QFileInfo::exists(style.fullTextPath));
+    QCOMPARE(materials.guidelines.at(2).error, QStringLiteral("Bukan file Word yang valid"));
+    const TaskMaterials::Document &pdf = materials.guidelines.at(3);
+    QVERIFY(pdf.readByAgent);
+    QVERIFY(pdf.text.isEmpty());
+    QCOMPARE(materials.warnings, QStringList({"pedoman rusak.docx tidak bisa dibaca: Bukan file Word yang valid"}));
+    // Folder pedoman boleh dibaca agent (untuk PDF dan teks lengkap yang dipotong)
+    QCOMPARE(materials.readableDirectories(),
+             QStringList({QStringLiteral("E:\\referensi"), materials.guidelineDirectory}));
+    // Isi .teks/ (teks lengkap yang dipotong) tidak muncul sebagai pedoman
+    QCOMPARE(ProjectGuidelines::list(guidelines.path()).size(), 4);
+
+    TaskItem task = makeTask(QStringLiteral("1"), QStringLiteral("CODER"));
+    task.subtext = QStringLiteral("Tambah halaman login.\nIkuti pedoman.");
+    TaskMaterials::Document attachment;
+    attachment.fileName = QStringLiteral("data.csv");
+    attachment.path = QStringLiteral("C:\\lampiran\\data.csv");
+    attachment.text = QStringLiteral("a,b");
+    materials.documents = {attachment};
+    const QString prompt = TaskPromptComposer().compose(task, materials);
+
+    const QString pdfPath = QDir::toNativeSeparators(guidelines.filePath(QStringLiteral("standar.pdf")));
+    QVERIFY(prompt.contains(QStringLiteral("# Pedoman project (wajib diikuti)\nBatasan dan pedoman yang berlaku untuk "
+                                           "semua task di project ini")));
+    QVERIFY(prompt.contains(QStringLiteral("- standar.pdf: `%1` (PDF: baca dengan Read sebelum mulai; isinya tidak "
+                                           "disalin ke sini)").arg(pdfPath)));
+    QVERIFY(prompt.contains(QStringLiteral("## arsitektur.md\n```markdown\n# Arsitektur\nPakai MVC.\n\n```")));
+    QVERIFY(prompt.contains(QStringLiteral("## gaya-kode.txt\n(Dipotong: ")));
+    QVERIFY(prompt.contains(QStringLiteral("```text\n- aturan nomor 0000 wajib")));
+    QVERIFY(prompt.contains(QStringLiteral("## rusak.docx\n(Tidak bisa dibaca: Bukan file Word yang valid)")));
+    // PDF tidak punya blok isi
+    QVERIFY(!prompt.contains(QStringLiteral("## standar.pdf")));
+
+    // Pedoman tepat setelah instruksi task, sebelum lampiran dan referensi
+    const QStringList order = {
+        QStringLiteral("# Task"), QStringLiteral("# Instruksi"), QStringLiteral("# Pedoman project"),
+        QStringLiteral("# Lampiran"), QStringLiteral("# Folder referensi"),
+    };
+    for (qsizetype i = 1; i < order.size(); ++i) {
+        QVERIFY2(prompt.indexOf(order.at(i - 1)) < prompt.indexOf(order.at(i)), qPrintable(order.at(i)));
+    }
+
+    // Project tanpa pedoman: tidak ada bagian dan izin folder tambahan
+    TaskMaterials none;
+    ProjectGuidelines::addTo(&none, root.filePath(QStringLiteral("tidak-ada")));
+    QVERIFY(none.guidelineDirectory.isEmpty());
+    QVERIFY(none.readableDirectories().isEmpty());
+    QVERIFY(!TaskPromptComposer().compose(task, none).contains(QStringLiteral("Pedoman project")));
 }
 
 void TestSwarm::realClaudeReadsAttachmentsAndReferences() {

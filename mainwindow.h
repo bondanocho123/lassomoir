@@ -160,6 +160,8 @@ private slots:
 
     // Tombol × di popup folder referensi swimlane
     void removeReferenceDirectory(const QString &projectId, const QString &dir);
+    // Tombol × di popup pedoman swimlane: salinan pedoman dihapus dari folder pedoman project
+    void removeGuideline(const QString &projectId, const QString &fileName);
 
     // Jendela branch & commit project: dari tombol branch di header swimlane (branch aktif folder
     // kerja), atau dari "Lihat commit" di drawer task (branch task dibanding branch dasarnya)
@@ -324,6 +326,12 @@ private:
     void chooseReferenceDirectory(const QString &projectId);
     // Tolak folder di dalam folder kerja atau yang sudah tercakup referensi lain; false bila ditolak
     bool addReferenceDirectory(const QString &projectId, const QString &dir);
+    // Pemilih file pedoman project (bisa beberapa sekaligus) -> addGuidelines
+    void chooseGuidelines(const QString &projectId);
+    // Salin file ke folder pedoman project; nama yang sama menggantikan pedoman lama
+    void addGuidelines(const QString &projectId, const QStringList &paths);
+    // Tombol "Pedoman" di header swimlane mengikuti isi folder pedoman
+    void refreshGuidelines(const QString &projectId);
     // Simpan foto & dokumen dari form task ke folder lampiran task; kembalikan nama yang tersimpan
     QStringList saveAttachments(const TaskItem &task, const QList<TaskAttachments::Draft> &drafts);
     // Baca branch aktif folder kerja project (git di thread pool) untuk tombol branch di header

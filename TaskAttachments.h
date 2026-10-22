@@ -7,13 +7,14 @@
 #include "TaskMaterials.h"
 
 #include <QByteArray>
+#include <QDir>
 #include <QImage>
 #include <QList>
 #include <QSize>
 #include <QString>
 #include <QStringList>
 
-// Lampiran task (foto dan dokumen Excel/Word/CSV) di folder lampiran task,
+// Lampiran task (foto dan dokumen Excel/Word/CSV/Markdown/teks) di folder lampiran task,
 // <AppData>/projects/<project>/attachments/<taskId>/ (lihat FileManager::attachmentDirectory).
 namespace TaskAttachments {
 
@@ -69,6 +70,11 @@ QString uniqueName(const QString &fileName, const QStringList &taken);
 // draft yang gagal ditulis dilewati dan alasannya masuk *errors.
 QStringList save(const QString &directory, const QList<Draft> &drafts, const QStringList &previous,
                  QStringList *errors = nullptr);
+
+// Isi teks satu dokumen di dir untuk prompt, paling banyak limit karakter. Yang lebih panjang
+// dipotong di akhir baris dan teks lengkapnya ditulis ke dir/.teks/<nama>.txt; dokumen yang tidak
+// terbaca: text kosong + error.
+TaskMaterials::Document readDocument(const QDir &dir, const QString &name, qsizetype limit);
 
 // Bahan run: foto dan isi teks dokumen dari folder lampiran task, plus folder referensi project
 // yang masih ada. Membaca disk; panggil tepat sebelum run.

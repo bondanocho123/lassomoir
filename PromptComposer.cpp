@@ -44,31 +44,21 @@ QString codeSpan(const QString &text) {
 // Bahasa blok kode sesuai bentuk teks hasil DocumentText
 QString fenceLanguage(const QString &fileName) {
     const QString suffix = QFileInfo(fileName).suffix().toLower();
-    if (suffix == QLatin1String("docx")) {
+    if (suffix == QLatin1String("docx") || suffix == QLatin1String("md") || suffix == QLatin1String("markdown")) {
         return QStringLiteral("markdown");
+    }
+    if (suffix == QLatin1String("txt")) {
+        return QStringLiteral("text");
     }
     return suffix == QLatin1String("tsv") ? QStringLiteral("tsv") : QStringLiteral("csv");
 }
 
-QString attachmentSection(const TaskMaterials &materials) {
-    QStringList lines = {QStringLiteral("# Lampiran")};
-    if (!materials.imagePaths.isEmpty()) {
-        QStringList names;
-        for (const QString &path : materials.imagePaths) {
-            names.append(QFileInfo(path).fileName());
+// Satu "## <nama>" per dokumen: isi teksnya dalam blok kode, atau alasan tidak terbaca
+void appendDocumentTexts(QStringList &lines, const QList<TaskMaterials::Document> &documents) {
+    for (const TaskMaterials::Document &document : documents) {
+        if (document.readByAgent) {
+            continue;
         }
-        lines.append(QStringLiteral("Foto (terlampir sebagai gambar di pesan ini): %1")
-                         .arg(names.join(QStringLiteral(", "))));
-    }
-    if (materials.documents.isEmpty()) {
-        return lines.join(QLatin1Char('\n'));
-    }
-
-    lines.append(QStringLiteral("Dokumen (isi teksnya di bawah):"));
-    for (const TaskMaterials::Document &document : materials.documents) {
-        lines.append(QStringLiteral("- %1: %2").arg(document.fileName, codeSpan(document.path)));
-    }
-    for (const TaskMaterials::Document &document : materials.documents) {
         lines.append(QString());
         lines.append(QStringLiteral("## %1").arg(document.fileName));
         if (!document.error.isEmpty()) {
@@ -89,6 +79,44 @@ QString attachmentSection(const TaskMaterials &materials) {
         lines.append(document.text);
         lines.append(fence);
     }
+}
+
+QString guidelineSection(const QList<TaskMaterials::Document> &guidelines) {
+    QStringList lines = {
+        QStringLiteral("# Pedoman project (wajib diikuti)"),
+        QStringLiteral("Batasan dan pedoman yang berlaku untuk semua task di project ini, mis. framework, arsitektur, "
+                       "dan gaya kode. Ikuti selama mengerjakan task ini. Bila instruksi task bertentangan dengan "
+                       "pedoman, jangan melanggarnya diam-diam: sebutkan pertentangannya di hasilmu."),
+    };
+    for (const TaskMaterials::Document &document : guidelines) {
+        lines.append(document.readByAgent
+                         ? QStringLiteral("- %1: %2 (PDF: baca dengan Read sebelum mulai; isinya tidak disalin ke sini)")
+                               .arg(document.fileName, codeSpan(document.path))
+                         : QStringLiteral("- %1: %2").arg(document.fileName, codeSpan(document.path)));
+    }
+    appendDocumentTexts(lines, guidelines);
+    return lines.join(QLatin1Char('\n'));
+}
+
+QString attachmentSection(const TaskMaterials &materials) {
+    QStringList lines = {QStringLiteral("# Lampiran")};
+    if (!materials.imagePaths.isEmpty()) {
+        QStringList names;
+        for (const QString &path : materials.imagePaths) {
+            names.append(QFileInfo(path).fileName());
+        }
+        lines.append(QStringLiteral("Foto (terlampir sebagai gambar di pesan ini): %1")
+                         .arg(names.join(QStringLiteral(", "))));
+    }
+    if (materials.documents.isEmpty()) {
+        return lines.join(QLatin1Char('\n'));
+    }
+
+    lines.append(QStringLiteral("Dokumen (isi teksnya di bawah):"));
+    for (const TaskMaterials::Document &document : materials.documents) {
+        lines.append(QStringLiteral("- %1: %2").arg(document.fileName, codeSpan(document.path)));
+    }
+    appendDocumentTexts(lines, materials.documents);
     return lines.join(QLatin1Char('\n'));
 }
 
@@ -127,6 +155,9 @@ QString TaskPromptComposer::compose(const TaskItem &task, const TaskMaterials &m
     QStringList sections = {lines.join('\n')};
     if (longNote) {
         sections.append(QStringLiteral("# Instruksi\n\n%1").arg(note));
+    }
+    if (!materials.guidelines.isEmpty()) {
+        sections.append(guidelineSection(materials.guidelines));
     }
     if (!materials.imagePaths.isEmpty() || !materials.documents.isEmpty()) {
         sections.append(attachmentSection(materials));

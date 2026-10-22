@@ -2,23 +2,30 @@
 #include "GitHistory.h"
 #include "KanbanColumnWidget.h"
 #include "KanbanCardWidget.h"
+#include "ProjectGuidelines.h"
 #include "StageCatalog.h"
 #include "StageInfo.h"
 #include "ui_SwimlaneWidget.h"
 #include "Theme.h"
 
+#include <QDesktopServices>
 #include <QDir>
 #include <QEvent>
+#include <QFileInfo>
 #include <QFrame>
 #include <QGuiApplication>
 #include <QIcon>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLocale>
 #include <QPushButton>
 #include <QScreen>
 #include <QTimer>
+#include <QUrl>
 #include <QToolButton>
 #include <QVBoxLayout>
+
+#include <functional>
 
 namespace {
 // Lebar tetap tiap kolom stage (px logis)
@@ -47,6 +54,9 @@ SwimlaneWidget::SwimlaneWidget(const QString &projectId, const StageCatalog &cat
     ui->btnReferenceDirs->setIconSize(QSize(iconSide, iconSide));
     ui->btnReferenceDirs->setIcon(Theme::icon(":/icons/folders.svg"));
     connect(ui->btnReferenceDirs, &QPushButton::clicked, this, &SwimlaneWidget::showReferencePopup);
+    ui->btnGuidelines->setIconSize(QSize(iconSide, iconSide));
+    ui->btnGuidelines->setIcon(Theme::icon(":/icons/guidelines.svg"));
+    connect(ui->btnGuidelines, &QPushButton::clicked, this, &SwimlaneWidget::showGuidelinePopup);
     ui->btnBranch->ensurePolished();
     ui->btnBranch->setIconSize(QSize(iconSide, iconSide));
     ui->btnBranch->setIcon(Theme::icon(":/icons/branch.svg"));
@@ -69,6 +79,7 @@ SwimlaneWidget::SwimlaneWidget(const QString &projectId, const StageCatalog &cat
     setWorkingDirectory(QString());
     setGitHead(GitHead());
     setReferenceDirectories(QStringList());
+    setGuidelines(QString(), QStringList());
 }
 
 SwimlaneWidget::~SwimlaneWidget() {
@@ -132,12 +143,32 @@ void SwimlaneWidget::setReferenceDirectories(const QStringList &dirs) {
         tip.append(QStringLiteral("Klik untuk menambah folder di luar folder kerja"));
     }
     ui->btnReferenceDirs->setToolTip(tip.join(QLatin1Char('\n')));
+    refreshListPopup(ListPopup::References);
+}
 
+void SwimlaneWidget::setGuidelines(const QString &directory, const QStringList &names) {
+    m_guidelineDir = directory;
+    m_guidelines = names;
+    setHeaderText(ui->btnGuidelines, names.isEmpty() ? QStringLiteral("Pedoman")
+                                                     : QStringLiteral("Pedoman · %1").arg(names.size()));
+    QStringList tip = {QStringLiteral("Pedoman project: batasan & guideline (framework, arsitektur, gaya kode) "
+                                      "yang wajib diikuti agent di semua task")};
+    for (const QString &name : names) {
+        tip.append(QStringLiteral("• %1").arg(name));
+    }
+    if (names.isEmpty()) {
+        tip.append(QStringLiteral("Klik untuk menambah file Markdown, Word, PDF, atau teks"));
+    }
+    ui->btnGuidelines->setToolTip(tip.join(QLatin1Char('\n')));
+    refreshListPopup(ListPopup::Guidelines);
+}
+
+void SwimlaneWidget::refreshListPopup(ListPopup kind) {
     // Popup yang terbuka (mis. tombol × di dalamnya baru diklik) diisi ulang di tempat. Menutup lalu
     // membuka popup baru tidak dipakai: aktivasi ulang jendela utama ikut menutup popup baru itu.
-    if (m_referencePopup && m_referencePopup->isVisible()) {
-        fillReferencePopup(m_referencePopup);
-        placeReferencePopup(m_referencePopup);
+    if (m_listPopup && m_listPopup->isVisible() && m_listPopupKind == kind) {
+        fillListPopup(m_listPopup);
+        placeListPopup(m_listPopup);
     }
 }
 
@@ -163,7 +194,7 @@ void SwimlaneWidget::updateHeaderMode() {
         const int spacing = ui->headerLayout->spacing();
         int width = kTitleMinWidth + spacing;
         const QList<QPushButton *> buttons = {ui->btnCanvas, ui->btnWorkingDir, ui->btnBranch, ui->btnReferenceDirs,
-                                              ui->btnClose};
+                                              ui->btnGuidelines, ui->btnClose};
         for (const QPushButton *button : buttons) {
             if (!button->isHidden()) {
                 width += spacing + qMax(button->sizeHint().width(), button->minimumWidth());
@@ -178,7 +209,9 @@ void SwimlaneWidget::updateHeaderMode() {
 void SwimlaneWidget::setHeaderCompact(bool compact) {
     for (auto it = m_headerTexts.cbegin(); it != m_headerTexts.cend(); ++it) {
         it.key()->setText(compact ? QString() : it.value());
-        it.key()->setMinimumWidth(compact ? 0 : m_headerButtonMinWidth);
+        // Selama berteks, tombol tidak ikut dijepit layout saat baris header pas-pasan: yang
+        // menyempit hanya judul (sampai kTitleMinWidth, lihat updateHeaderMode)
+        it.key()->setMinimumWidth(compact ? 0 : qMax(m_headerButtonMinWidth, it.key()->sizeHint().width()));
     }
     // "Close" tidak berikon: teksnya tetap, tombolnya saja yang boleh selebar teks itu
     ui->btnClose->setMinimumWidth(compact ? 0 : m_headerButtonMinWidth);
@@ -198,30 +231,43 @@ void SwimlaneWidget::changeEvent(QEvent *event) {
 }
 
 void SwimlaneWidget::showReferencePopup() {
-    QPushButton *anchor = ui->btnReferenceDirs;
+    showListPopup(ListPopup::References);
+}
+
+void SwimlaneWidget::showGuidelinePopup() {
+    showListPopup(ListPopup::Guidelines);
+}
+
+QPushButton *SwimlaneWidget::listPopupAnchor() const {
+    return m_listPopupKind == ListPopup::Guidelines ? ui->btnGuidelines : ui->btnReferenceDirs;
+}
+
+void SwimlaneWidget::showListPopup(ListPopup kind) {
+    QPushButton *anchor = kind == ListPopup::Guidelines ? ui->btnGuidelines : ui->btnReferenceDirs;
     if (!anchor->isVisible()) {
         return;
     }
-    if (m_referencePopup) {
-        m_referencePopup->close();
+    if (m_listPopup) {
+        m_listPopup->close();
     }
 
     // Qt::Popup: tertutup sendiri saat klik di luar, seperti popup konfirmasi hapus project
     auto *popup = new QFrame(anchor, Qt::Popup);
-    popup->setObjectName("referencePopup");
+    popup->setObjectName(kind == ListPopup::Guidelines ? "guidelinePopup" : "referencePopup");
     popup->setAttribute(Qt::WA_DeleteOnClose);
     popup->setMinimumWidth(320);
     auto *layout = new QVBoxLayout(popup);
     layout->setContentsMargins(12, 10, 12, 10);
     layout->setSpacing(6);
-    m_referencePopup = popup;
+    m_listPopup = popup;
+    m_listPopupKind = kind;
 
-    fillReferencePopup(popup);
-    placeReferencePopup(popup);
+    fillListPopup(popup);
+    placeListPopup(popup);
     popup->show();
 }
 
-void SwimlaneWidget::fillReferencePopup(QFrame *popup) {
+void SwimlaneWidget::fillListPopup(QFrame *popup) {
     // Isi lama (berisi tombol × yang mungkin sedang mengirim sinyal klik) disembunyikan dan dihapus
     // belakangan. Isi baru dirakit dalam wadah yang belum tampil lalu ditampilkan sekaligus, supaya
     // ukurannya sudah benar saat popup diukur ulang.
@@ -233,72 +279,138 @@ void SwimlaneWidget::fillReferencePopup(QFrame *popup) {
         }
         delete item;
     }
+
+    // Satu baris daftar: ikon, nama tebal, keterangan kecil di bawahnya, lalu tombol-tombolnya
+    struct Row {
+        QString icon;
+        QString name;
+        QString detail;
+        QString detailTip;
+        QString openTip;     // kosong = tanpa tombol buka
+        QString removeTip;
+        std::function<void()> open;
+        std::function<void()> remove;
+    };
+    const bool guidelines = m_listPopupKind == ListPopup::Guidelines;
+    const QString prefix = guidelines ? QStringLiteral("guideline") : QStringLiteral("reference");
+    QList<Row> rows;
+    if (guidelines) {
+        const QDir dir(m_guidelineDir);
+        for (const QString &name : std::as_const(m_guidelines)) {
+            const QString path = dir.filePath(name);
+            const QString size = QLocale().formattedDataSize(QFileInfo(path).size());
+            const bool pdf = ProjectGuidelines::isPdf(name);
+            Row row;
+            row.icon = QStringLiteral(":/icons/note.svg");
+            row.name = name;
+            row.detail = pdf ? QStringLiteral("PDF · %1 · dibaca agent dengan Read").arg(size)
+                             : QStringLiteral("%1 · isinya ikut prompt").arg(size);
+            row.detailTip = QDir::toNativeSeparators(path);
+            row.openTip = QStringLiteral("Buka salinan pedoman ini");
+            row.removeTip = QStringLiteral("Hapus dari pedoman project (file aslinya tidak terhapus)");
+            row.open = [path]() { QDesktopServices::openUrl(QUrl::fromLocalFile(path)); };
+            row.remove = [this, name]() { emit guidelineRemoveRequested(m_projectId, name); };
+            rows.append(row);
+        }
+    } else {
+        for (const QString &dir : std::as_const(m_referenceDirs)) {
+            const QString name = QDir(dir).dirName();
+            Row row;
+            row.icon = QStringLiteral(":/icons/folder.svg");
+            row.name = name.isEmpty() ? QDir::toNativeSeparators(dir) : name;
+            row.detail = QDir::toNativeSeparators(dir);
+            row.detailTip = row.detail;
+            row.removeTip = QStringLiteral("Hapus dari folder referensi");
+            row.remove = [this, dir]() { emit referenceDirectoryRemoveRequested(m_projectId, dir); };
+            rows.append(row);
+        }
+    }
+
     auto *content = new QWidget(popup);
-    content->setObjectName("referencePopupContent");
+    content->setObjectName(prefix + "PopupContent");
     auto *layout = new QVBoxLayout(content);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(6);
 
-    auto *title = new QLabel(QStringLiteral("FOLDER REFERENSI"), content);
-    title->setObjectName("referencePopupTitle");
-    auto *hint = new QLabel(QStringLiteral("Folder di luar folder kerja yang boleh dibaca agent sebagai acuan. "
-                                           "Agent tidak bisa mengubah isinya."),
+    auto *title = new QLabel(guidelines ? QStringLiteral("PEDOMAN PROJECT") : QStringLiteral("FOLDER REFERENSI"), content);
+    title->setObjectName(prefix + "PopupTitle");
+    auto *hint = new QLabel(guidelines ? QStringLiteral("Batasan dan guideline (framework, arsitektur, gaya kode) yang "
+                                                        "wajib diikuti agent di semua task project ini. File disalin; "
+                                                        "tambahkan lagi file bernama sama untuk memperbaruinya.")
+                                       : QStringLiteral("Folder di luar folder kerja yang boleh dibaca agent sebagai "
+                                                        "acuan. Agent tidak bisa mengubah isinya."),
                             content);
-    hint->setObjectName("referencePopupHint");
+    hint->setObjectName(prefix + "PopupHint");
     hint->setWordWrap(true);
     layout->addWidget(title);
     layout->addWidget(hint);
 
-    if (m_referenceDirs.isEmpty()) {
-        auto *empty = new QLabel(QStringLiteral("Belum ada folder referensi."), content);
-        empty->setObjectName("referencePopupEmpty");
+    if (rows.isEmpty()) {
+        auto *empty = new QLabel(guidelines ? QStringLiteral("Belum ada pedoman.") : QStringLiteral("Belum ada folder referensi."),
+                                 content);
+        empty->setObjectName(prefix + "PopupEmpty");
         layout->addWidget(empty);
     }
-    for (const QString &dir : std::as_const(m_referenceDirs)) {
+    const QString buttonPrefix = guidelines ? QStringLiteral("btnGuideline") : QStringLiteral("btnReference");
+    for (const Row &entry : std::as_const(rows)) {
         auto *row = new QWidget(content);
-        row->setObjectName("referenceRow");
-
+        row->setObjectName(prefix + "Row");
         auto *icon = new QLabel(row);
-        icon->setPixmap(Theme::icon(":/icons/folder.svg").pixmap(QSize(14, 14)));
-        const QString name = QDir(dir).dirName();
-        auto *label = new QLabel(name.isEmpty() ? QDir::toNativeSeparators(dir) : name, row);
-        label->setObjectName("referenceRowName");
-        auto *path = new QLabel(row);
-        path->setObjectName("referenceRowPath");
-        path->ensurePolished();
-        path->setText(path->fontMetrics().elidedText(QDir::toNativeSeparators(dir), Qt::ElideMiddle, 280));
-        path->setToolTip(QDir::toNativeSeparators(dir));
-
-        auto *remove = new QToolButton(row);
-        remove->setObjectName("btnReferenceRemove");
-        remove->setIcon(Theme::icon(":/icons/close.svg"));
-        remove->setIconSize(QSize(10, 10));
-        remove->setCursor(Qt::PointingHandCursor);
-        remove->setToolTip(QStringLiteral("Hapus dari folder referensi"));
-        connect(remove, &QToolButton::clicked, this, [this, dir]() {
-            emit referenceDirectoryRemoveRequested(m_projectId, dir);
-        });
+        icon->setPixmap(Theme::icon(entry.icon).pixmap(QSize(14, 14)));
+        auto *label = new QLabel(entry.name, row);
+        label->setObjectName(prefix + "RowName");
+        auto *detail = new QLabel(row);
+        detail->setObjectName(prefix + "RowPath");
+        detail->ensurePolished();
+        detail->setText(detail->fontMetrics().elidedText(entry.detail, Qt::ElideMiddle, 280));
+        detail->setToolTip(entry.detailTip);
 
         auto *text = new QVBoxLayout();
         text->setSpacing(0);
         text->addWidget(label);
-        text->addWidget(path);
+        text->addWidget(detail);
         auto *rowLayout = new QHBoxLayout(row);
         rowLayout->setContentsMargins(0, 2, 0, 2);
         rowLayout->setSpacing(8);
         rowLayout->addWidget(icon);
         rowLayout->addLayout(text, 1);
+
+        if (entry.open) {
+            auto *open = new QToolButton(row);
+            open->setObjectName(buttonPrefix + "Open");
+            open->setIcon(Theme::icon(":/icons/preview.svg"));
+            open->setIconSize(QSize(12, 12));
+            open->setCursor(Qt::PointingHandCursor);
+            open->setToolTip(entry.openTip);
+            connect(open, &QToolButton::clicked, this, entry.open);
+            rowLayout->addWidget(open);
+        }
+        auto *remove = new QToolButton(row);
+        remove->setObjectName(buttonPrefix + "Remove");
+        remove->setIcon(Theme::icon(":/icons/close.svg"));
+        remove->setIconSize(QSize(10, 10));
+        remove->setCursor(Qt::PointingHandCursor);
+        remove->setToolTip(entry.removeTip);
+        connect(remove, &QToolButton::clicked, this, entry.remove);
         rowLayout->addWidget(remove);
         layout->addWidget(row);
     }
 
-    auto *add = new QPushButton(Theme::icon(":/icons/folder-add.svg"), QStringLiteral("Tambah folder…"), content);
-    add->setObjectName("btnReferenceAdd");
+    auto *add = guidelines
+                    ? new QPushButton(Theme::icon(":/icons/plus-navy.svg"), QStringLiteral("Tambah file…"), content)
+                    : new QPushButton(Theme::icon(":/icons/folder-add.svg"), QStringLiteral("Tambah folder…"), content);
+    add->setObjectName(buttonPrefix + "Add");
     add->setCursor(Qt::PointingHandCursor);
-    connect(add, &QPushButton::clicked, this, [this, popup]() {
+    connect(add, &QPushButton::clicked, this, [this, popup, guidelines]() {
         popup->close();
-        // Pemilih folder (dialog modal) dibuka setelah klik ini selesai diproses
-        QTimer::singleShot(0, this, [this]() { emit referenceDirectoryAddRequested(m_projectId); });
+        // Pemilih file/folder (dialog modal) dibuka setelah klik ini selesai diproses
+        QTimer::singleShot(0, this, [this, guidelines]() {
+            if (guidelines) {
+                emit guidelineAddRequested(m_projectId);
+            } else {
+                emit referenceDirectoryAddRequested(m_projectId);
+            }
+        });
     });
     auto *actions = new QHBoxLayout();
     actions->addStretch(1);
@@ -309,13 +421,13 @@ void SwimlaneWidget::fillReferencePopup(QFrame *popup) {
     content->show();
 }
 
-void SwimlaneWidget::placeReferencePopup(QFrame *popup) {
+void SwimlaneWidget::placeListPopup(QFrame *popup) {
     // Ukuran dari isi yang baru; isi lama yang menunggu deleteLater sudah keluar dari layout
     popup->layout()->activate();
     popup->resize(popup->sizeHint().expandedTo(popup->minimumSize()));
 
     // Tepi kanan popup sejajar tepi kanan tombol, menggantung di bawahnya; tetap di dalam layar
-    QPushButton *anchor = ui->btnReferenceDirs;
+    QPushButton *anchor = listPopupAnchor();
     const QPoint anchorBottomRight = anchor->mapToGlobal(QPoint(anchor->width(), anchor->height()));
     QPoint pos(anchorBottomRight.x() - popup->width(), anchorBottomRight.y() + 6);
     if (QScreen *screen = QGuiApplication::screenAt(anchorBottomRight)) {

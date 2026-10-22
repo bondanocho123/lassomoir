@@ -48,6 +48,14 @@ public:
     // Popup daftar folder referensi di bawah tombol "Referensi": hapus per folder, tambah folder
     void showReferencePopup();
 
+    // Pedoman project (nama file di folder pedoman, lihat ProjectGuidelines): jumlahnya di tombol
+    // "Pedoman", daftarnya di popup tombol itu. Popup yang sedang terbuka ikut diperbarui.
+    void setGuidelines(const QString &directory, const QStringList &names);
+    QStringList guidelines() const { return m_guidelines; }
+
+    // Popup daftar pedoman di bawah tombol "Pedoman": buka & hapus per file, tambah file
+    void showGuidelinePopup();
+
     // Manajemen kartu dalam swimlane
     void addCardToStage(const QString &stageName, KanbanCardWidget *card);
     KanbanColumnWidget *column(const QString &stageName) const;
@@ -70,6 +78,9 @@ signals:
     // Dari popup folder referensi: "Tambah folder…" dan tombol × per folder
     void referenceDirectoryAddRequested(const QString &projectId);
     void referenceDirectoryRemoveRequested(const QString &projectId, const QString &dir);
+    // Dari popup pedoman: "Tambah file…" dan tombol × per file
+    void guidelineAddRequested(const QString &projectId);
+    void guidelineRemoveRequested(const QString &projectId, const QString &fileName);
     void cardMoved(const QString &projectId,
                    KanbanCardWidget *card,
                    const QString &targetStage,
@@ -88,9 +99,15 @@ private:
     Ui::SwimlaneWidget *ui;
     QString m_projectId;
     QStringList m_referenceDirs;
-    QPointer<QFrame> m_referencePopup;
+    QString m_guidelineDir;
+    QStringList m_guidelines;
 
-    // Teks tombol header yang berikon (Kanvas, folder kerja, branch, Referensi). Selama baris
+    // Popup daftar di bawah tombol header "Referensi" atau "Pedoman"; satu yang terbuka sekaligus
+    enum class ListPopup { References, Guidelines };
+    QPointer<QFrame> m_listPopup;
+    ListPopup m_listPopupKind = ListPopup::References;
+
+    // Teks tombol header yang berikon (Kanvas, folder kerja, branch, Referensi, Pedoman). Selama baris
     // header tidak muat utuh, tombol-tombol itu tinggal ikon (teksnya tetap ada di tooltip) dan
     // judul project dipendekkan: board bisa menyempit, mis. di samping drawer hasil agent, tanpa
     // ada tombol yang terdorong keluar.
@@ -110,9 +127,13 @@ private:
     QMap<QString, KanbanColumnWidget *> m_columns;
 
     void initializeColumns(const StageCatalog &catalog);
-    // Isi popup folder referensi (judul, baris per folder, tombol tambah) dari m_referenceDirs
-    void fillReferencePopup(QFrame *popup);
-    // Ukur ulang popup, lalu gantung di bawah tombol "Referensi" dan jaga tetap di dalam layar
-    void placeReferencePopup(QFrame *popup);
+    void showListPopup(ListPopup kind);
+    QPushButton *listPopupAnchor() const;
+    // Isi popup (judul, baris per folder/file, tombol tambah) dari m_referenceDirs atau m_guidelines
+    void fillListPopup(QFrame *popup);
+    // Popup yang terbuka diisi ulang di tempat bila daftarnya yang berubah
+    void refreshListPopup(ListPopup kind);
+    // Ukur ulang popup, lalu gantung di bawah tombolnya dan jaga tetap di dalam layar
+    void placeListPopup(QFrame *popup);
 };
 #endif // SWIMLANEWIDGET_H

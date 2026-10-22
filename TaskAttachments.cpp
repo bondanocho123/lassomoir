@@ -110,7 +110,7 @@ QString TaskAttachments::documentFilter() {
     for (const QString &suffix : DocumentText::supportedSuffixes()) {
         patterns.append(QStringLiteral("*.") + suffix);
     }
-    return QStringLiteral("Excel, Word, CSV (%1)").arg(patterns.join(QLatin1Char(' ')));
+    return QStringLiteral("Excel, Word, CSV, Markdown, teks (%1)").arg(patterns.join(QLatin1Char(' ')));
 }
 
 qint64 TaskAttachments::Draft::size() const {
@@ -278,7 +278,32 @@ QStringList TaskAttachments::save(const QString &directory, const QList<Draft> &
     return saved;
 }
 
-TaskMaterials TaskAttachments::materials(const TaskItem &task, const QString &attachmentDirectory,
+TaskMaterials::Document TaskAttachments::readDocument(const QDir &dir, const QString &name, qsizetype limit) {
+    const QString path = dir.filePath(name);
+    TaskMaterials::Document document;
+    document.fileName = name;
+    document.path = QDir::toNativeSeparators(path);
+    QString error;
+    const QString text = DocumentText::extract(path, &error);
+    if (!error.isEmpty()) {
+        document.error = error;
+        return document;
+    }
+    document.text = text;
+    if (text.size() > limit) {
+        // Dipotong di akhir baris supaya baris CSV atau tabel tidak terbelah
+        const qsizetype lineEnd = text.lastIndexOf(QLatin1Char('\n'), limit);
+        document.text = text.left(lineEnd > 0 ? lineEnd : limit);
+        document.omittedChars = text.size() - document.text.size();
+        const QString fullPath = dir.filePath(QStringLiteral(".teks/%1.txt").arg(name));
+        if (writeText(fullPath, text)) {
+            document.fullTextPath = QDir::toNativeSeparators(fullPath);
+        }
+    }
+    return document;
+}
+
+TaskMaterials TaskAttachments::materials(const TaskItem &task,const QString &attachmentDirectory,
                                          const QStringList &referenceDirectories) {
     TaskMaterials result;
     for (const QString &directory : referenceDirectories) {
@@ -306,29 +331,11 @@ TaskMaterials TaskAttachments::materials(const TaskItem &task, const QString &at
             continue;
         }
 
-        TaskMaterials::Document document;
-        document.fileName = name;
-        document.path = QDir::toNativeSeparators(path);
-        QString error;
-        const QString text = DocumentText::extract(path, &error);
-        if (!error.isEmpty()) {
-            document.error = error;
-            result.warnings.append(QStringLiteral("lampiran %1 tidak bisa dibaca: %2").arg(name, error));
-        } else {
-            document.text = text;
-            const qsizetype limit = qMin(kDocumentPromptChars, budget);
-            if (text.size() > limit) {
-                // Dipotong di akhir baris supaya baris CSV atau tabel tidak terbelah
-                const qsizetype lineEnd = text.lastIndexOf(QLatin1Char('\n'), limit);
-                document.text = text.left(lineEnd > 0 ? lineEnd : limit);
-                document.omittedChars = text.size() - document.text.size();
-                const QString fullPath = dir.filePath(QStringLiteral(".teks/%1.txt").arg(name));
-                if (writeText(fullPath, text)) {
-                    document.fullTextPath = QDir::toNativeSeparators(fullPath);
-                }
-            }
-            budget -= document.text.size();
+        const TaskMaterials::Document document = readDocument(dir, name, qMin(kDocumentPromptChars, budget));
+        if (!document.error.isEmpty()) {
+            result.warnings.append(QStringLiteral("lampiran %1 tidak bisa dibaca: %2").arg(name, document.error));
         }
+        budget -= document.text.size();
         result.documents.append(document);
     }
     if (!result.imagePaths.isEmpty() || !result.documents.isEmpty()) {
