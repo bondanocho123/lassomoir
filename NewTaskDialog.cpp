@@ -18,7 +18,11 @@
 #include <QLineEdit>
 #include <QMenu>
 #include <QPushButton>
+#include <QScreen>
+#include <QScrollArea>
 #include <QShortcut>
+#include <QShowEvent>
+#include <QStyle>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -97,6 +101,21 @@ NewTaskDialog::NewTaskDialog(const QString &projectId, const StageCatalog &catal
     root->addWidget(subtitle);
     root->addWidget(buildDivider());
 
+    // Field-field form bergulir di antara judul dan tombol: lampiran yang menumpuk menambah tinggi
+    // isi, bukan tinggi dialog, jadi tombol Simpan/Batal tidak terdorong keluar layar
+    m_body = new QWidget(this);
+    m_body->setObjectName("taskFormBody");
+    auto *body = new QVBoxLayout(m_body);
+    body->setContentsMargins(0, 0, 0, 0);
+    body->setSpacing(16);
+    m_scroll = new QScrollArea(this);
+    m_scroll->setObjectName("taskFormScroll");
+    m_scroll->setFrameShape(QFrame::NoFrame);
+    m_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_scroll->setWidgetResizable(true);
+    m_scroll->setWidget(m_body);
+    root->addWidget(m_scroll, 1);
+
     // Branch dipilih paling dulu: seluruh pekerjaan task berangkat dari branch ini. Tampil sebagai
     // label + caret (menu-indicator di styles.qss), selebar namanya dan menempel kiri.
     m_branchButton = new QPushButton(this);
@@ -111,20 +130,20 @@ NewTaskDialog::NewTaskDialog(const QString &projectId, const StageCatalog &catal
     QWidget *branchField = buildField("BRANCH", m_branchButton);
     branchField->layout()->setAlignment(m_branchButton, Qt::AlignLeft);
     branchField->layout()->addWidget(m_branchHint);
-    root->addWidget(branchField);
+    body->addWidget(branchField);
     showBranchMessage("Folder kerja belum dipilih",
                       "Branch task mengikuti branch yang aktif di folder kerja saat run pertama.");
 
     m_titleInput = new QLineEdit(this);
     m_titleInput->setObjectName("taskFormInput");
     m_titleInput->setPlaceholderText("Rancang ulang halaman login");
-    root->addWidget(buildField("TASK TITLE", m_titleInput));
+    body->addWidget(buildField("TASK TITLE", m_titleInput));
 
     // Subtext = prompt untuk agent: multi-baris, bisa berisi foto dan dokumen lampiran
     m_promptInput = new PromptEditor(this);
     m_promptInput->setPlaceholderText("Instruksi untuk agent: tujuan, batasan, contoh…\n"
                                       "Foto bisa ditempel (Ctrl+V) atau diseret ke sini.");
-    root->addWidget(buildField("SUBTEXT / PROMPT", m_promptInput), 1);
+    body->addWidget(buildField("SUBTEXT / PROMPT", m_promptInput), 1);
 
     m_categoryInput = new QComboBox(this);
     m_categoryInput->setObjectName("taskFormCombo");
@@ -142,7 +161,7 @@ NewTaskDialog::NewTaskDialog(const QString &projectId, const StageCatalog &catal
     fieldRow->setSpacing(12);
     fieldRow->addWidget(buildField("CATEGORY", m_categoryInput));
     fieldRow->addWidget(buildField("STAGE", m_stageInput));
-    root->addLayout(fieldRow);
+    body->addLayout(fieldRow);
 
     // Model & effort agent per stage; hanya stage yang punya agent di katalog yang ditampilkan
     QList<QWidget *> tuningRows;
@@ -153,9 +172,9 @@ NewTaskDialog::NewTaskDialog(const QString &projectId, const StageCatalog &catal
         }
     }
     if (!tuningRows.isEmpty()) {
-        root->addWidget(buildDivider());
+        body->addWidget(buildDivider());
         for (QWidget *row : std::as_const(tuningRows)) {
-            root->addWidget(row);
+            body->addWidget(row);
         }
     }
 
@@ -218,6 +237,24 @@ NewTaskDialog::NewTaskDialog(const TaskItem &task, const QString &attachmentDire
         showBranchMessage(task.branch.base.isEmpty() ? task.branch.name : task.branch.base,
                           QString("Branch task %1 sudah dibuat dari branch ini.").arg(task.branch.name));
     }
+}
+
+void NewTaskDialog::showEvent(QShowEvent *event) {
+    // Sebelum QDialog::showEvent memusatkan dialog: tinggi mengikuti isi form, paling tinggi
+    // layar. Bawaan Qt membatasi jendela baru ke 2/3 layar, jadi form pendek pun ikut bergulir.
+    if (!event->spontaneous() && !m_fitted) {
+        m_fitted = true;
+        const int bodyWidth = width() - layout()->contentsMargins().left() - layout()->contentsMargins().right();
+        const int bodyHeight = m_body->hasHeightForWidth() ? m_body->heightForWidth(bodyWidth)
+                                                           : m_body->sizeHint().height();
+        const int wanted = layout()->sizeHint().height() - m_scroll->sizeHint().height() + bodyHeight;
+        QScreen *screen = parentWidget() ? parentWidget()->screen() : this->screen();
+        // Bingkai jendela (title bar) belum diketahui sebelum tampil: sisakan ruang untuknya
+        const int titleBar = style()->pixelMetric(QStyle::PM_TitleBarHeight, nullptr, this);
+        const int available = screen->availableGeometry().height() - titleBar - 16;
+        resize(width(), std::max(minimumHeight(), std::min(wanted, available)));
+    }
+    QDialog::showEvent(event);
 }
 
 void NewTaskDialog::prefill(const QString &title, const QString &subtext) {

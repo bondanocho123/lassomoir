@@ -840,6 +840,13 @@ QLabel#taskFormSubtitle {
     font-weight: bold;
 }
 
+/* Area gulir field form: ikut putih dialog */
+QScrollArea#taskFormScroll,
+QWidget#taskFormBody {
+    background: transparent;
+    border: none;
+}
+
 QFrame#taskFormDivider {
     background-color: #e2d5c1;
     border: none;
