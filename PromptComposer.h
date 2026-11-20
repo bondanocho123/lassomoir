@@ -24,6 +24,8 @@ public:
 // - "# Instruksi": catatan multi-baris dari kotak prompt form task;
 // - "# Pedoman project (wajib diikuti)": batasan & guideline project (ProjectGuidelines), isi teksnya
 //   ikut di sini kecuali PDF, yang hanya disebut path-nya untuk dibaca agent dengan Read;
+// - "# Konteks project (referensi)": dokumen latar belakang project (ProjectContext), dengan aturan
+//   isi teks / PDF yang sama dengan pedoman;
 // - "# Lampiran": nama foto (fotonya sendiri ikut sebagai blok gambar) dan isi teks dokumen;
 // - "# Folder referensi (hanya dibaca)": folder di luar folder kerja yang boleh dibaca agent;
 // - "# Spesifikasi yang disetujui (<STAGE>)": dokumen gate terakhir yang disetujui + catatannya;

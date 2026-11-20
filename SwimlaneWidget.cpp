@@ -20,6 +20,7 @@
 #include <QLocale>
 #include <QPushButton>
 #include <QScreen>
+#include <QStyle>
 #include <QTimer>
 #include <QUrl>
 #include <QToolButton>
@@ -32,6 +33,8 @@ namespace {
 constexpr int kColumnWidth = 300;
 // Judul project boleh dipendekkan sampai selebar ini sebelum tombol header tinggal ikon
 constexpr int kTitleMinWidth = 60;
+// Jarak antartombol header selama tombolnya tinggal ikon (lihat setHeaderCompact)
+constexpr int kCompactHeaderSpacing = 4;
 }
 
 SwimlaneWidget::SwimlaneWidget(const QString &projectId, const StageCatalog &catalog, QWidget *parent)
@@ -54,6 +57,9 @@ SwimlaneWidget::SwimlaneWidget(const QString &projectId, const StageCatalog &cat
     ui->btnReferenceDirs->setIconSize(QSize(iconSide, iconSide));
     ui->btnReferenceDirs->setIcon(Theme::icon(":/icons/folders.svg"));
     connect(ui->btnReferenceDirs, &QPushButton::clicked, this, &SwimlaneWidget::showReferencePopup);
+    ui->btnContext->setIconSize(QSize(iconSide, iconSide));
+    ui->btnContext->setIcon(Theme::icon(":/icons/context.svg"));
+    connect(ui->btnContext, &QPushButton::clicked, this, &SwimlaneWidget::showContextPopup);
     ui->btnGuidelines->setIconSize(QSize(iconSide, iconSide));
     ui->btnGuidelines->setIcon(Theme::icon(":/icons/guidelines.svg"));
     connect(ui->btnGuidelines, &QPushButton::clicked, this, &SwimlaneWidget::showGuidelinePopup);
@@ -72,6 +78,7 @@ SwimlaneWidget::SwimlaneWidget(const QString &projectId, const StageCatalog &cat
     // Judul menyempit (terpotong "…") lebih dulu daripada mendorong tombol keluar dari header
     ui->labelProjectTitle->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
     m_headerButtonMinWidth = ui->btnClose->minimumWidth();
+    m_headerSpacing = ui->headerLayout->spacing();
     setHeaderText(ui->btnCanvas, ui->btnCanvas->text());
 
     initializeColumns(catalog);
@@ -79,6 +86,7 @@ SwimlaneWidget::SwimlaneWidget(const QString &projectId, const StageCatalog &cat
     setWorkingDirectory(QString());
     setGitHead(GitHead());
     setReferenceDirectories(QStringList());
+    setContextDocuments(QString(), QStringList());
     setGuidelines(QString(), QStringList());
 }
 
@@ -163,6 +171,23 @@ void SwimlaneWidget::setGuidelines(const QString &directory, const QStringList &
     refreshListPopup(ListPopup::Guidelines);
 }
 
+void SwimlaneWidget::setContextDocuments(const QString &directory, const QStringList &names) {
+    m_contextDir = directory;
+    m_contextDocuments = names;
+    setHeaderText(ui->btnContext, names.isEmpty() ? QStringLiteral("Konteks")
+                                                  : QStringLiteral("Konteks · %1").arg(names.size()));
+    QStringList tip = {QStringLiteral("Konteks project: dokumen referensi (kebutuhan bisnis, spesifikasi, API, "
+                                      "istilah domain) yang dibaca agent di semua task")};
+    for (const QString &name : names) {
+        tip.append(QStringLiteral("• %1").arg(name));
+    }
+    if (names.isEmpty()) {
+        tip.append(QStringLiteral("Klik untuk menambah file Markdown, Word, PDF, Excel, atau teks"));
+    }
+    ui->btnContext->setToolTip(tip.join(QLatin1Char('\n')));
+    refreshListPopup(ListPopup::Context);
+}
+
 void SwimlaneWidget::refreshListPopup(ListPopup kind) {
     // Popup yang terbuka (mis. tombol × di dalamnya baru diklik) diisi ulang di tempat. Menutup lalu
     // membuka popup baru tidak dipakai: aktivasi ulang jendela utama ikut menutup popup baru itu.
@@ -194,7 +219,7 @@ void SwimlaneWidget::updateHeaderMode() {
         const int spacing = ui->headerLayout->spacing();
         int width = kTitleMinWidth + spacing;
         const QList<QPushButton *> buttons = {ui->btnCanvas, ui->btnWorkingDir, ui->btnBranch, ui->btnReferenceDirs,
-                                              ui->btnGuidelines, ui->btnClose};
+                                              ui->btnContext, ui->btnGuidelines, ui->btnClose};
         for (const QPushButton *button : buttons) {
             if (!button->isHidden()) {
                 width += spacing + qMax(button->sizeHint().width(), button->minimumWidth());
@@ -211,10 +236,20 @@ void SwimlaneWidget::setHeaderCompact(bool compact) {
         it.key()->setText(compact ? QString() : it.value());
         // Selama berteks, tombol tidak ikut dijepit layout saat baris header pas-pasan: yang
         // menyempit hanya judul (sampai kTitleMinWidth, lihat updateHeaderMode)
-        it.key()->setMinimumWidth(compact ? 0 : qMax(m_headerButtonMinWidth, it.key()->sizeHint().width()));
+        // Tinggal ikon: padding samping lebih tipis (styles.qss, [compact="true"])
+        QPushButton *button = it.key();
+        if (button->property("compact").toBool() != compact) {
+            button->setProperty("compact", compact);
+            button->style()->unpolish(button);
+            button->style()->polish(button);
+            button->updateGeometry();
+        }
+        button->setMinimumWidth(compact ? 0 : qMax(m_headerButtonMinWidth, button->sizeHint().width()));
     }
     // "Close" tidak berikon: teksnya tetap, tombolnya saja yang boleh selebar teks itu
     ui->btnClose->setMinimumWidth(compact ? 0 : m_headerButtonMinWidth);
+    // Tombol ikon saja lebih rapat: tujuh tombol tetap muat di samping drawer hasil agent
+    ui->headerLayout->setSpacing(compact ? kCompactHeaderSpacing : m_headerSpacing);
 }
 
 void SwimlaneWidget::resizeEvent(QResizeEvent *event) {
@@ -238,12 +273,24 @@ void SwimlaneWidget::showGuidelinePopup() {
     showListPopup(ListPopup::Guidelines);
 }
 
-QPushButton *SwimlaneWidget::listPopupAnchor() const {
-    return m_listPopupKind == ListPopup::Guidelines ? ui->btnGuidelines : ui->btnReferenceDirs;
+void SwimlaneWidget::showContextPopup() {
+    showListPopup(ListPopup::Context);
+}
+
+QPushButton *SwimlaneWidget::popupAnchor(ListPopup kind) const {
+    switch (kind) {
+    case ListPopup::Guidelines:
+        return ui->btnGuidelines;
+    case ListPopup::Context:
+        return ui->btnContext;
+    case ListPopup::References:
+        break;
+    }
+    return ui->btnReferenceDirs;
 }
 
 void SwimlaneWidget::showListPopup(ListPopup kind) {
-    QPushButton *anchor = kind == ListPopup::Guidelines ? ui->btnGuidelines : ui->btnReferenceDirs;
+    QPushButton *anchor = popupAnchor(kind);
     if (!anchor->isVisible()) {
         return;
     }
@@ -253,7 +300,9 @@ void SwimlaneWidget::showListPopup(ListPopup kind) {
 
     // Qt::Popup: tertutup sendiri saat klik di luar, seperti popup konfirmasi hapus project
     auto *popup = new QFrame(anchor, Qt::Popup);
-    popup->setObjectName(kind == ListPopup::Guidelines ? "guidelinePopup" : "referencePopup");
+    popup->setObjectName(kind == ListPopup::Guidelines ? "guidelinePopup"
+                         : kind == ListPopup::Context  ? "contextPopup"
+                                                       : "referencePopup");
     popup->setAttribute(Qt::WA_DeleteOnClose);
     popup->setMinimumWidth(320);
     auto *layout = new QVBoxLayout(popup);
@@ -291,12 +340,17 @@ void SwimlaneWidget::fillListPopup(QFrame *popup) {
         std::function<void()> open;
         std::function<void()> remove;
     };
-    const bool guidelines = m_listPopupKind == ListPopup::Guidelines;
-    const QString prefix = guidelines ? QStringLiteral("guideline") : QStringLiteral("reference");
+    // Pedoman dan konteks sama-sama daftar file salinan; referensi daftar folder
+    const ListPopup kind = m_listPopupKind;
+    const bool files = kind != ListPopup::References;
+    const bool guidelines = kind == ListPopup::Guidelines;
+    const QString prefix = guidelines ? QStringLiteral("guideline")
+                           : files    ? QStringLiteral("context")
+                                      : QStringLiteral("reference");
     QList<Row> rows;
-    if (guidelines) {
-        const QDir dir(m_guidelineDir);
-        for (const QString &name : std::as_const(m_guidelines)) {
+    if (files) {
+        const QDir dir(guidelines ? m_guidelineDir : m_contextDir);
+        for (const QString &name : guidelines ? std::as_const(m_guidelines) : std::as_const(m_contextDocuments)) {
             const QString path = dir.filePath(name);
             const QString size = QLocale().formattedDataSize(QFileInfo(path).size());
             const bool pdf = ProjectGuidelines::isPdf(name);
@@ -306,10 +360,16 @@ void SwimlaneWidget::fillListPopup(QFrame *popup) {
             row.detail = pdf ? QStringLiteral("PDF · %1 · dibaca agent dengan Read").arg(size)
                              : QStringLiteral("%1 · isinya ikut prompt").arg(size);
             row.detailTip = QDir::toNativeSeparators(path);
-            row.openTip = QStringLiteral("Buka salinan pedoman ini");
-            row.removeTip = QStringLiteral("Hapus dari pedoman project (file aslinya tidak terhapus)");
+            row.openTip = guidelines ? QStringLiteral("Buka salinan pedoman ini")
+                                     : QStringLiteral("Buka salinan dokumen konteks ini");
+            row.removeTip = guidelines ? QStringLiteral("Hapus dari pedoman project (file aslinya tidak terhapus)")
+                                       : QStringLiteral("Hapus dari konteks project (file aslinya tidak terhapus)");
             row.open = [path]() { QDesktopServices::openUrl(QUrl::fromLocalFile(path)); };
-            row.remove = [this, name]() { emit guidelineRemoveRequested(m_projectId, name); };
+            if (guidelines) {
+                row.remove = [this, name]() { emit guidelineRemoveRequested(m_projectId, name); };
+            } else {
+                row.remove = [this, name]() { emit contextRemoveRequested(m_projectId, name); };
+            }
             rows.append(row);
         }
     } else {
@@ -332,26 +392,47 @@ void SwimlaneWidget::fillListPopup(QFrame *popup) {
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(6);
 
-    auto *title = new QLabel(guidelines ? QStringLiteral("PEDOMAN PROJECT") : QStringLiteral("FOLDER REFERENSI"), content);
+    QString titleText;
+    QString hintText;
+    QString emptyText;
+    switch (kind) {
+    case ListPopup::Guidelines:
+        titleText = QStringLiteral("PEDOMAN PROJECT");
+        hintText = QStringLiteral("Batasan dan guideline (framework, arsitektur, gaya kode) yang wajib diikuti agent "
+                                  "di semua task project ini. File disalin; tambahkan lagi file bernama sama untuk "
+                                  "memperbaruinya.");
+        emptyText = QStringLiteral("Belum ada pedoman.");
+        break;
+    case ListPopup::Context:
+        titleText = QStringLiteral("KONTEKS PROJECT");
+        hintText = QStringLiteral("Dokumen referensi (kebutuhan bisnis, spesifikasi, API, istilah domain) yang dibaca "
+                                  "agent di semua task project ini sebagai latar belakang. File disalin; tambahkan "
+                                  "lagi file bernama sama untuk memperbaruinya.");
+        emptyText = QStringLiteral("Belum ada dokumen konteks.");
+        break;
+    case ListPopup::References:
+        titleText = QStringLiteral("FOLDER REFERENSI");
+        hintText = QStringLiteral("Folder di luar folder kerja yang boleh dibaca agent sebagai acuan. Agent tidak "
+                                  "bisa mengubah isinya.");
+        emptyText = QStringLiteral("Belum ada folder referensi.");
+        break;
+    }
+    auto *title = new QLabel(titleText, content);
     title->setObjectName(prefix + "PopupTitle");
-    auto *hint = new QLabel(guidelines ? QStringLiteral("Batasan dan guideline (framework, arsitektur, gaya kode) yang "
-                                                        "wajib diikuti agent di semua task project ini. File disalin; "
-                                                        "tambahkan lagi file bernama sama untuk memperbaruinya.")
-                                       : QStringLiteral("Folder di luar folder kerja yang boleh dibaca agent sebagai "
-                                                        "acuan. Agent tidak bisa mengubah isinya."),
-                            content);
+    auto *hint = new QLabel(hintText, content);
     hint->setObjectName(prefix + "PopupHint");
     hint->setWordWrap(true);
     layout->addWidget(title);
     layout->addWidget(hint);
 
     if (rows.isEmpty()) {
-        auto *empty = new QLabel(guidelines ? QStringLiteral("Belum ada pedoman.") : QStringLiteral("Belum ada folder referensi."),
-                                 content);
+        auto *empty = new QLabel(emptyText, content);
         empty->setObjectName(prefix + "PopupEmpty");
         layout->addWidget(empty);
     }
-    const QString buttonPrefix = guidelines ? QStringLiteral("btnGuideline") : QStringLiteral("btnReference");
+    const QString buttonPrefix = guidelines ? QStringLiteral("btnGuideline")
+                                 : files    ? QStringLiteral("btnContext")
+                                            : QStringLiteral("btnReference");
     for (const Row &entry : std::as_const(rows)) {
         auto *row = new QWidget(content);
         row->setObjectName(prefix + "Row");
@@ -396,19 +477,25 @@ void SwimlaneWidget::fillListPopup(QFrame *popup) {
         layout->addWidget(row);
     }
 
-    auto *add = guidelines
+    auto *add = files
                     ? new QPushButton(Theme::icon(":/icons/plus-navy.svg"), QStringLiteral("Tambah file…"), content)
                     : new QPushButton(Theme::icon(":/icons/folder-add.svg"), QStringLiteral("Tambah folder…"), content);
     add->setObjectName(buttonPrefix + "Add");
     add->setCursor(Qt::PointingHandCursor);
-    connect(add, &QPushButton::clicked, this, [this, popup, guidelines]() {
+    connect(add, &QPushButton::clicked, this, [this, popup, kind]() {
         popup->close();
         // Pemilih file/folder (dialog modal) dibuka setelah klik ini selesai diproses
-        QTimer::singleShot(0, this, [this, guidelines]() {
-            if (guidelines) {
+        QTimer::singleShot(0, this, [this, kind]() {
+            switch (kind) {
+            case ListPopup::Guidelines:
                 emit guidelineAddRequested(m_projectId);
-            } else {
+                break;
+            case ListPopup::Context:
+                emit contextAddRequested(m_projectId);
+                break;
+            case ListPopup::References:
                 emit referenceDirectoryAddRequested(m_projectId);
+                break;
             }
         });
     });

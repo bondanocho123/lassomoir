@@ -128,12 +128,13 @@ QToolTip {
 }
 
 /* Tombol Header Swimlane - "Close", folder kerja agent, branch aktif folder kerja, folder
-   referensi, dan pedoman project (outline navy) */
+   referensi, konteks project, dan pedoman project (outline navy) */
 QPushButton#btnClose,
 QPushButton#btnCanvas,
 QPushButton#btnWorkingDir,
 QPushButton#btnBranch,
 QPushButton#btnReferenceDirs,
+QPushButton#btnContext,
 QPushButton#btnGuidelines {
     background-color: #ffffff;
     color: #33517a;
@@ -149,6 +150,7 @@ QPushButton#btnCanvas:hover,
 QPushButton#btnWorkingDir:hover,
 QPushButton#btnBranch:hover,
 QPushButton#btnReferenceDirs:hover,
+QPushButton#btnContext:hover,
 QPushButton#btnGuidelines:hover {
     background-color: #eef2f8;
     border: 1px solid #33517a;
@@ -159,8 +161,19 @@ QPushButton#btnCanvas:pressed,
 QPushButton#btnWorkingDir:pressed,
 QPushButton#btnBranch:pressed,
 QPushButton#btnReferenceDirs:pressed,
+QPushButton#btnContext:pressed,
 QPushButton#btnGuidelines:pressed {
     background-color: #dfe7f2;
+}
+
+/* Header sempit (mis. di samping drawer hasil agent): tombol tinggal ikon, padding samping tipis */
+QPushButton#btnCanvas[compact="true"],
+QPushButton#btnWorkingDir[compact="true"],
+QPushButton#btnBranch[compact="true"],
+QPushButton#btnReferenceDirs[compact="true"],
+QPushButton#btnContext[compact="true"],
+QPushButton#btnGuidelines[compact="true"] {
+    padding: 4px 5px;
 }
 
 /* Penanda lampiran di kartu: "2 foto - 1 file" */
@@ -518,9 +531,10 @@ QPushButton#btnProjectDelete:pressed {
     background-color: #24201b;
 }
 
-/* ============ Popup folder referensi & pedoman project (header swimlane) ============ */
+/* ============ Popup folder referensi, konteks & pedoman project (header swimlane) ============ */
 
 QFrame#referencePopup,
+QFrame#contextPopup,
 QFrame#guidelinePopup {
     background-color: #ffffff;
     border: 1px solid #e2d5c1;
@@ -528,6 +542,7 @@ QFrame#guidelinePopup {
 }
 
 QLabel#referencePopupTitle,
+QLabel#contextPopupTitle,
 QLabel#guidelinePopupTitle {
     background: transparent;
     font-size: 10px;
@@ -538,7 +553,9 @@ QLabel#guidelinePopupTitle {
 
 QLabel#referencePopupHint,
 QLabel#referencePopupEmpty,
+QLabel#contextPopupHint,
 QLabel#guidelinePopupHint,
+QLabel#contextPopupEmpty,
 QLabel#guidelinePopupEmpty {
     background: transparent;
     color: #8a7f70;
@@ -547,12 +564,15 @@ QLabel#guidelinePopupEmpty {
 
 QWidget#referencePopupContent,
 QWidget#referenceRow,
+QWidget#contextPopupContent,
 QWidget#guidelinePopupContent,
+QWidget#contextRow,
 QWidget#guidelineRow {
     background: transparent;
 }
 
 QLabel#referenceRowName,
+QLabel#contextRowName,
 QLabel#guidelineRowName {
     background: transparent;
     color: #33517a;
@@ -561,6 +581,7 @@ QLabel#guidelineRowName {
 }
 
 QLabel#referenceRowPath,
+QLabel#contextRowPath,
 QLabel#guidelineRowPath {
     background: transparent;
     color: #8a7f70;
@@ -568,7 +589,9 @@ QLabel#guidelineRowPath {
 }
 
 QToolButton#btnReferenceRemove,
+QToolButton#btnContextRemove,
 QToolButton#btnGuidelineRemove,
+QToolButton#btnContextOpen,
 QToolButton#btnGuidelineOpen {
     background: transparent;
     border: none;
@@ -577,12 +600,15 @@ QToolButton#btnGuidelineOpen {
 }
 
 QToolButton#btnReferenceRemove:hover,
+QToolButton#btnContextRemove:hover,
 QToolButton#btnGuidelineRemove:hover,
+QToolButton#btnContextOpen:hover,
 QToolButton#btnGuidelineOpen:hover {
     background-color: #f2e3d1;
 }
 
 QPushButton#btnReferenceAdd,
+QPushButton#btnContextAdd,
 QPushButton#btnGuidelineAdd {
     background-color: #ffffff;
     color: #33517a;
@@ -594,6 +620,7 @@ QPushButton#btnGuidelineAdd {
 }
 
 QPushButton#btnReferenceAdd:hover,
+QPushButton#btnContextAdd:hover,
 QPushButton#btnGuidelineAdd:hover {
     background-color: #eef2f8;
     border: 1px solid #33517a;

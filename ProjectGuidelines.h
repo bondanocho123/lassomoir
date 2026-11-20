@@ -43,4 +43,23 @@ void addTo(TaskMaterials *materials, const QString &directory);
 
 }
 
+// Konteks project: dokumen referensi (kebutuhan bisnis, spesifikasi, API, istilah domain) yang
+// dibaca agent di semua task project itu sebagai latar belakang, bukan aturan seperti pedoman.
+// Salinannya ada di <AppData>/projects/<project>/context/ (lihat FileManager::contextDirectory).
+// Format, aturan salin/ganti/hapus, dan cara PDF dibaca sama dengan pedoman
+// (ProjectGuidelines::isSupported/list berlaku juga untuk folder ini); isinya masuk bagian
+// "# Konteks project (referensi)" di prompt (lihat TaskPromptComposer).
+namespace ProjectContext {
+
+constexpr qsizetype kDocumentPromptChars = 30000;
+constexpr qsizetype kTotalPromptChars = 60000;
+
+QString fileFilter();
+QString add(const QString &directory, const QString &sourcePath, QString *error = nullptr);
+bool remove(const QString &directory, const QString &fileName, QString *error = nullptr);
+// Baca dokumen konteks ke materials (contextDocuments, contextDirectory, warnings)
+void addTo(TaskMaterials *materials, const QString &directory);
+
+}
+
 #endif // PROJECTGUIDELINES_H

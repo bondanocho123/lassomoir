@@ -59,6 +59,10 @@ public:
     // <AppData>/projects/<projectId>/guidelines. Ikut terhapus bersama project di deleteProject().
     QString guidelineDirectory(const QString &projectId) const;
 
+    // Folder konteks project (dokumen referensi untuk semua task, lihat ProjectContext):
+    // <AppData>/projects/<projectId>/context. Ikut terhapus bersama project di deleteProject().
+    QString contextDirectory(const QString &projectId) const;
+
     // Hapus permanen folder lampiran satu task (saat task dihapus). Folder yang tidak ada = sukses.
     bool deleteAttachments(const QString &projectId, const QString &taskId, QString *error);
 
