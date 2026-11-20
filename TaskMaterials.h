@@ -29,13 +29,20 @@ struct TaskMaterials {
     // ProjectGuidelines::addTo(); guidelineDirectory kosong bila project tanpa pedoman
     QString guidelineDirectory;
     QList<Document> guidelines;
-    QStringList warnings;               // lampiran atau folder yang dilewati, untuk konsol
+    // Konteks project (dokumen referensi untuk semua task), dibaca ProjectContext::addTo();
+    // contextDirectory kosong bila project tanpa dokumen konteks
+    QString contextDirectory;
+    QList<Document> contextDocuments;
+    QStringList warnings;              // lampiran atau folder yang dilewati, untuk konsol
 
     // Folder di luar folder kerja yang boleh dibaca agent (izin Read, bukan Edit/Write)
     QStringList readableDirectories() const {
         QStringList directories = referenceDirectories;
         if (!guidelineDirectory.isEmpty()) {
             directories.append(guidelineDirectory);
+        }
+        if (!contextDirectory.isEmpty()) {
+            directories.append(contextDirectory);
         }
         if (!attachmentDirectory.isEmpty()) {
             directories.append(attachmentDirectory);

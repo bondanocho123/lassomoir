@@ -414,6 +414,8 @@ void MainWindow::addSwimlane(const QString &projectId) {
     swimlane->setReferenceDirectories(m_fileManager->referenceDirectories(projectId));
     const QString guidelineDir = m_fileManager->guidelineDirectory(projectId);
     swimlane->setGuidelines(guidelineDir, ProjectGuidelines::list(guidelineDir));
+    const QString contextDir = m_fileManager->contextDirectory(projectId);
+    swimlane->setContextDocuments(contextDir, ProjectGuidelines::list(contextDir));
 
     // Tangkap interaksi dari swimlane
     connect(swimlane, &SwimlaneWidget::cardMoved, this, &MainWindow::handleCardMoved);
@@ -429,6 +431,10 @@ void MainWindow::addSwimlane(const QString &projectId) {
         chooseGuidelines(id);
     });
     connect(swimlane, &SwimlaneWidget::guidelineRemoveRequested, this, &MainWindow::removeGuideline);
+    connect(swimlane, &SwimlaneWidget::contextAddRequested, this, [this](const QString &id) {
+        chooseContextDocuments(id);
+    });
+    connect(swimlane, &SwimlaneWidget::contextRemoveRequested, this, &MainWindow::removeContextDocument);
     connect(swimlane, &SwimlaneWidget::branchViewRequested, this, [this](const QString &id) {
         showBranchViewer(id);
     });
@@ -1480,12 +1486,13 @@ void MainWindow::finishRunPreparation(const TaskItem &requested, const TaskGit::
 }
 
 bool MainWindow::startAgentRun(const TaskItem &task, const QString &workingDirectory) {
-    // Foto, isi dokumen lampiran, pedoman project, dan folder referensi dibaca sekarang supaya run
-    // memakai isi terbaru
+    // Foto, isi dokumen lampiran, pedoman & konteks project, dan folder referensi dibaca sekarang
+    // supaya run memakai isi terbaru
     TaskMaterials materials = TaskAttachments::materials(
         task, m_fileManager->attachmentDirectory(task.projectId, task.id),
         m_fileManager->referenceDirectories(task.projectId));
     ProjectGuidelines::addTo(&materials, m_fileManager->guidelineDirectory(task.projectId));
+    ProjectContext::addTo(&materials, m_fileManager->contextDirectory(task.projectId));
     for (const QString &warning : materials.warnings) {
         logTask(task, RunLogFormatter::warningLine(task, warning));
     }
@@ -1740,6 +1747,53 @@ void MainWindow::refreshGuidelines(const QString &projectId) {
     if (auto *swimlane = m_swimlanes.value(projectId, nullptr)) {
         const QString dir = m_fileManager->guidelineDirectory(projectId);
         swimlane->setGuidelines(dir, ProjectGuidelines::list(dir));
+    }
+}
+
+void MainWindow::chooseContextDocuments(const QString &projectId) {
+    const QString working = m_fileManager->workingDirectory(projectId);
+    const QString start = !working.isEmpty() ? working
+                                             : QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    const QStringList paths = QFileDialog::getOpenFileNames(
+        this, QString("Konteks project %1 (dokumen referensi untuk semua task)").arg(projectId), start,
+        ProjectContext::fileFilter());
+    if (!paths.isEmpty()) {
+        addContextDocuments(projectId, paths);
+    }
+}
+
+void MainWindow::addContextDocuments(const QString &projectId, const QStringList &paths) {
+    const QString dir = m_fileManager->contextDirectory(projectId);
+    for (const QString &path : paths) {
+        const QStringList before = ProjectGuidelines::list(dir);
+        QString error;
+        const QString name = ProjectContext::add(dir, path, &error);
+        if (name.isEmpty()) {
+            ui->consolePanel->appendLog(QString("[SYSTEM] Konteks %1: %2 tidak ditambahkan: %3")
+                                            .arg(projectId, QFileInfo(path).fileName(), error));
+            continue;
+        }
+        ui->consolePanel->appendLog(before.contains(name)
+                                        ? QString("[SYSTEM] Konteks %1 diperbarui: %2").arg(projectId, name)
+                                        : QString("[SYSTEM] Konteks %1 + %2").arg(projectId, name));
+    }
+    refreshContextDocuments(projectId);
+}
+
+void MainWindow::removeContextDocument(const QString &projectId, const QString &fileName) {
+    QString error;
+    if (!ProjectContext::remove(m_fileManager->contextDirectory(projectId), fileName, &error)) {
+        ui->consolePanel->appendLog(QString("[SYSTEM] Konteks %1: %2").arg(projectId, error));
+        return;
+    }
+    refreshContextDocuments(projectId);
+    ui->consolePanel->appendLog(QString("[SYSTEM] Konteks %1 − %2").arg(projectId, fileName));
+}
+
+void MainWindow::refreshContextDocuments(const QString &projectId) {
+    if (auto *swimlane = m_swimlanes.value(projectId, nullptr)) {
+        const QString dir = m_fileManager->contextDirectory(projectId);
+        swimlane->setContextDocuments(dir, ProjectGuidelines::list(dir));
     }
 }
 

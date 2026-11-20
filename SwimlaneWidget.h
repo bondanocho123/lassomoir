@@ -56,6 +56,12 @@ public:
     // Popup daftar pedoman di bawah tombol "Pedoman": buka & hapus per file, tambah file
     void showGuidelinePopup();
 
+    // Konteks project (nama file di folder konteks, lihat ProjectContext): jumlahnya di tombol
+    // "Konteks", daftarnya di popup tombol itu (sama seperti pedoman)
+    void setContextDocuments(const QString &directory, const QStringList &names);
+    QStringList contextDocuments() const { return m_contextDocuments; }
+    void showContextPopup();
+
     // Manajemen kartu dalam swimlane
     void addCardToStage(const QString &stageName, KanbanCardWidget *card);
     KanbanColumnWidget *column(const QString &stageName) const;
@@ -81,6 +87,9 @@ signals:
     // Dari popup pedoman: "Tambah file…" dan tombol × per file
     void guidelineAddRequested(const QString &projectId);
     void guidelineRemoveRequested(const QString &projectId, const QString &fileName);
+    // Dari popup konteks: "Tambah file…" dan tombol × per file
+    void contextAddRequested(const QString &projectId);
+    void contextRemoveRequested(const QString &projectId, const QString &fileName);
     void cardMoved(const QString &projectId,
                    KanbanCardWidget *card,
                    const QString &targetStage,
@@ -101,13 +110,16 @@ private:
     QStringList m_referenceDirs;
     QString m_guidelineDir;
     QStringList m_guidelines;
+    QString m_contextDir;
+    QStringList m_contextDocuments;
 
-    // Popup daftar di bawah tombol header "Referensi" atau "Pedoman"; satu yang terbuka sekaligus
-    enum class ListPopup { References, Guidelines };
+    // Popup daftar di bawah tombol header "Referensi", "Konteks", atau "Pedoman"; satu yang terbuka
+    // sekaligus
+    enum class ListPopup { References, Context, Guidelines };
     QPointer<QFrame> m_listPopup;
     ListPopup m_listPopupKind = ListPopup::References;
 
-    // Teks tombol header yang berikon (Kanvas, folder kerja, branch, Referensi, Pedoman). Selama baris
+    // Teks tombol header yang berikon (Kanvas, folder kerja, branch, Referensi, Konteks, Pedoman). Selama baris
     // header tidak muat utuh, tombol-tombol itu tinggal ikon (teksnya tetap ada di tooltip) dan
     // judul project dipendekkan: board bisa menyempit, mis. di samping drawer hasil agent, tanpa
     // ada tombol yang terdorong keluar.
@@ -116,6 +128,8 @@ private:
     int m_fullHeaderWidth = -1;
     // Lebar minimum tombol header dari file .ui; hanya berlaku selama tombolnya berteks
     int m_headerButtonMinWidth = 0;
+    // Jarak antartombol header dari file .ui; dipakai selama tombolnya berteks
+    int m_headerSpacing = 8;
 
     void setHeaderText(QPushButton *button, const QString &text);
     // Ukur ulang bentuk utuh header (teks atau jumlah tombolnya berubah), lalu pilih bentuknya
@@ -128,8 +142,10 @@ private:
 
     void initializeColumns(const StageCatalog &catalog);
     void showListPopup(ListPopup kind);
-    QPushButton *listPopupAnchor() const;
-    // Isi popup (judul, baris per folder/file, tombol tambah) dari m_referenceDirs atau m_guidelines
+    QPushButton *popupAnchor(ListPopup kind) const;
+    QPushButton *listPopupAnchor() const { return popupAnchor(m_listPopupKind); }
+    // Isi popup (judul, baris per folder/file, tombol tambah) dari m_referenceDirs, m_contextDocuments,
+    // atau m_guidelines
     void fillListPopup(QFrame *popup);
     // Popup yang terbuka diisi ulang di tempat bila daftarnya yang berubah
     void refreshListPopup(ListPopup kind);

@@ -577,6 +577,9 @@ private slots:
     // Pedoman project (batasan & guideline untuk semua task)
     void guidelinesAddReplaceAndRemove();
     void guidelinesFeedPrompt();
+    // Konteks project (dokumen referensi untuk semua task)
+    void contextDocumentsAddAndRemove();
+    void contextDocumentsFeedPrompt();
 
     // Kanvas brainstorm: model, alur kerja langkah AI, dan persistensinya
     void canvasBoardRoundTripsJson();
@@ -4931,6 +4934,89 @@ void TestSwarm::guidelinesFeedPrompt() {
     QVERIFY(none.guidelineDirectory.isEmpty());
     QVERIFY(none.readableDirectories().isEmpty());
     QVERIFY(!TaskPromptComposer().compose(task, none).contains(QStringLiteral("Pedoman project")));
+}
+
+void TestSwarm::contextDocumentsAddAndRemove() {
+    QTemporaryDir root;
+    const QDir sources(root.filePath(QStringLiteral("asli")));
+    const QString context = root.filePath(QStringLiteral("projects/Demo/context"));
+    QVERIFY(writeFile(sources.filePath(QStringLiteral("BRD.md")), "# BRD\nPelanggan bisa daftar.\n"));
+    QVERIFY(writeFile(sources.filePath(QStringLiteral("api.pdf")), "%PDF-1.7\n"));
+    QVERIFY(writeFile(sources.filePath(QStringLiteral("alat.exe")), "MZ"));
+
+    QVERIFY(ProjectContext::fileFilter().startsWith(QStringLiteral("Dokumen konteks (")));
+    QVERIFY(ProjectContext::fileFilter().contains(QStringLiteral("*.pdf")));
+
+    QString error;
+    QCOMPARE(ProjectContext::add(context, sources.filePath(QStringLiteral("BRD.md")), &error), QStringLiteral("BRD.md"));
+    QCOMPARE(ProjectContext::add(context, sources.filePath(QStringLiteral("api.pdf")), &error), QStringLiteral("api.pdf"));
+    QCOMPARE(ProjectGuidelines::list(context), QStringList({"api.pdf", "BRD.md"}));
+    // Pesan memakai kata "konteks", bukan "pedoman"
+    QVERIFY(ProjectContext::add(context, sources.filePath(QStringLiteral("alat.exe")), &error).isEmpty());
+    QVERIFY(error.endsWith(QStringLiteral("yang bisa jadi konteks")));
+    QVERIFY(ProjectContext::add(QString(), sources.filePath(QStringLiteral("BRD.md")), &error).isEmpty());
+    QCOMPARE(error, QStringLiteral("Folder konteks tidak diketahui"));
+    QVERIFY(!ProjectContext::remove(context, QStringLiteral("../asli/BRD.md"), &error));
+    QCOMPARE(error, QStringLiteral("Nama konteks tidak valid"));
+
+    // Nama sama menggantikan dokumen lama
+    QVERIFY(writeFile(sources.filePath(QStringLiteral("baru/brd.md")), "# BRD\nRevisi 2.\n"));
+    QCOMPARE(ProjectContext::add(context, sources.filePath(QStringLiteral("baru/brd.md")), &error),
+             QStringLiteral("BRD.md"));
+    QCOMPARE(ProjectGuidelines::list(context).size(), 2);
+
+    QVERIFY(ProjectContext::remove(context, QStringLiteral("api.pdf"), &error));
+    QVERIFY(ProjectContext::remove(context, QStringLiteral("BRD.md"), &error));
+    QVERIFY(QFileInfo::exists(sources.filePath(QStringLiteral("BRD.md"))));
+    QVERIFY(!QFileInfo::exists(context));
+}
+
+void TestSwarm::contextDocumentsFeedPrompt() {
+    QTemporaryDir root;
+    const QDir guidelines(root.filePath(QStringLiteral("guidelines")));
+    const QDir context(root.filePath(QStringLiteral("context")));
+    QVERIFY(writeFile(guidelines.filePath(QStringLiteral("arsitektur.md")), "Pakai MVC.\n"));
+    QVERIFY(writeFile(context.filePath(QStringLiteral("BRD.md")), "# BRD\nPelanggan bisa daftar.\n"));
+    QVERIFY(writeFile(context.filePath(QStringLiteral("spesifikasi api.pdf")), "%PDF-1.7\n"));
+    QVERIFY(writeFile(context.filePath(QStringLiteral("rusak.xlsx")), "bukan zip"));
+
+    TaskMaterials materials;
+    ProjectGuidelines::addTo(&materials, guidelines.path());
+    ProjectContext::addTo(&materials, context.path());
+    QCOMPARE(materials.contextDirectory, QDir::toNativeSeparators(context.absolutePath()));
+    QCOMPARE(int(materials.contextDocuments.size()), 3);
+    QCOMPARE(materials.contextDocuments.at(0).text, QStringLiteral("# BRD\nPelanggan bisa daftar.\n"));
+    QVERIFY(!materials.contextDocuments.at(1).error.isEmpty());
+    QVERIFY(materials.contextDocuments.at(2).readByAgent);
+    QCOMPARE(int(materials.guidelines.size()), 1);
+    QCOMPARE(materials.warnings.size(), 1);
+    QVERIFY(materials.warnings.first().startsWith(QStringLiteral("konteks rusak.xlsx tidak bisa dibaca: ")));
+    // Folder konteks boleh dibaca agent (PDF, teks lengkap yang dipotong)
+    QCOMPARE(materials.readableDirectories(), QStringList({materials.guidelineDirectory, materials.contextDirectory}));
+
+    TaskItem task = makeTask(QStringLiteral("1"), QStringLiteral("CODER"));
+    TaskMaterials::Document attachment;
+    attachment.fileName = QStringLiteral("data.csv");
+    attachment.path = QStringLiteral("C:\\lampiran\\data.csv");
+    attachment.text = QStringLiteral("a,b");
+    materials.documents = {attachment};
+    const QString prompt = TaskPromptComposer().compose(task, materials);
+
+    const QString pdfPath = QDir::toNativeSeparators(context.filePath(QStringLiteral("spesifikasi api.pdf")));
+    QVERIFY(prompt.contains(QStringLiteral("# Konteks project (referensi)\nDokumen latar belakang project ini")));
+    QVERIFY(prompt.contains(QStringLiteral("## BRD.md\n```markdown\n# BRD\nPelanggan bisa daftar.\n\n```")));
+    QVERIFY(prompt.contains(QStringLiteral("- spesifikasi api.pdf: `%1` (PDF: baca dengan Read bila relevan").arg(pdfPath)));
+    QVERIFY(prompt.contains(QStringLiteral("## rusak.xlsx\n(Tidak bisa dibaca: ")));
+    // Konteks setelah pedoman, sebelum lampiran task
+    QVERIFY(prompt.indexOf(QStringLiteral("# Pedoman project")) < prompt.indexOf(QStringLiteral("# Konteks project")));
+    QVERIFY(prompt.indexOf(QStringLiteral("# Konteks project")) < prompt.indexOf(QStringLiteral("# Lampiran")));
+
+    // Project tanpa dokumen konteks: tidak ada bagian dan izin folder tambahan
+    TaskMaterials none;
+    ProjectContext::addTo(&none, root.filePath(QStringLiteral("tidak-ada")));
+    QVERIFY(none.contextDirectory.isEmpty());
+    QVERIFY(none.readableDirectories().isEmpty());
+    QVERIFY(!TaskPromptComposer().compose(task, none).contains(QStringLiteral("Konteks project")));
 }
 
 void TestSwarm::realClaudeReadsAttachmentsAndReferences() {

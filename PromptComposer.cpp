@@ -98,6 +98,24 @@ QString guidelineSection(const QList<TaskMaterials::Document> &guidelines) {
     return lines.join(QLatin1Char('\n'));
 }
 
+QString contextSection(const QList<TaskMaterials::Document> &documents) {
+    QStringList lines = {
+        QStringLiteral("# Konteks project (referensi)"),
+        QStringLiteral("Dokumen latar belakang project ini, mis. kebutuhan bisnis, spesifikasi, API, dan istilah "
+                       "domain. Pakai sebagai acuan untuk memahami task; yang mengikat tetap instruksi task dan "
+                       "pedoman project. Bila dokumen ini tidak sesuai dengan kode yang ada, sebutkan di hasilmu."),
+    };
+    for (const TaskMaterials::Document &document : documents) {
+        lines.append(document.readByAgent
+                         ? QStringLiteral("- %1: %2 (PDF: baca dengan Read bila relevan dengan task; isinya tidak "
+                                          "disalin ke sini)")
+                               .arg(document.fileName, codeSpan(document.path))
+                         : QStringLiteral("- %1: %2").arg(document.fileName, codeSpan(document.path)));
+    }
+    appendDocumentTexts(lines, documents);
+    return lines.join(QLatin1Char('\n'));
+}
+
 QString attachmentSection(const TaskMaterials &materials) {
     QStringList lines = {QStringLiteral("# Lampiran")};
     if (!materials.imagePaths.isEmpty()) {
@@ -158,6 +176,9 @@ QString TaskPromptComposer::compose(const TaskItem &task, const TaskMaterials &m
     }
     if (!materials.guidelines.isEmpty()) {
         sections.append(guidelineSection(materials.guidelines));
+    }
+    if (!materials.contextDocuments.isEmpty()) {
+        sections.append(contextSection(materials.contextDocuments));
     }
     if (!materials.imagePaths.isEmpty() || !materials.documents.isEmpty()) {
         sections.append(attachmentSection(materials));
